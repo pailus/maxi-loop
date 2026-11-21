@@ -446,7 +446,42 @@ pub async fn list_release_issues(
         .collect())
 }
 
-fn infer_commit_sha(version: &str) -> Option<String> {
+pub async fn resolve_release_commit_sha(
+    pool: &PgPool,
+    tenant_ctx: TenantContext,
+    project_id: i64,
+    version: &str,
+) -> Result<Option<String>, AppError> {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    let stored: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT commit_sha
+         FROM releases
+         WHERE tenant_id = $1 AND project_id = $2 AND version = $3",
+    )
+    .bind(tenant_ctx.tenant_id())
+    .bind(project_id)
+    .bind(trimmed)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("resolve release commit_sha: {err}")))?;
+
+    tx.commit().await.map_err(|err| {
+        AppError::DatabaseQuery(format!("commit resolve_release_commit_sha: {err}"))
+    })?;
+
+    if let Some(Some(sha)) = stored {
+        return Ok(Some(sha));
+    }
+
+    Ok(infer_commit_sha(trimmed))
+}
+
+pub fn infer_commit_sha(version: &str) -> Option<String> {
     let candidate = version.rsplit('@').next().unwrap_or(version).trim();
     if (7..=40).contains(&candidate.len()) && candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
         Some(candidate.to_ascii_lowercase())

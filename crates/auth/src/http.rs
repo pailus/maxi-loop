@@ -117,6 +117,7 @@ where
         .route("/auth/login", post(login_handler))
         .route("/auth/logout", post(logout_handler))
         .route("/auth/me", get(me_handler))
+        .merge(crate::mcp::router::<S>())
 }
 
 async fn login_handler(

@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use maxi_loop_auth::model::{Role, TenantSummary, WorkspaceSummary};
 use maxi_loop_platform::config::{Config, is_valid_slug};
 use maxi_loop_platform::error::AppError;
+use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
@@ -9,6 +12,61 @@ use crate::dsn::{format_ingest_endpoint, format_project_dsn, generate_dsn_public
 use crate::model::{
     CreateProjectInput, CreateWorkspaceInput, ProjectView, TenantOverview, WorkspaceView,
 };
+use crate::pii::list_pii_scrub_rules;
+
+/// Service facade owned by `maxi-loop-org` so upstream layers (like `maxi-loop-mcp`) can invoke
+/// tenant-scoped org services without importing `sqlx` directly (`D006`).
+#[derive(Clone)]
+pub struct OrgService {
+    db: PgPool,
+    config: Arc<Config>,
+}
+
+impl OrgService {
+    pub fn new(db: PgPool, config: Arc<Config>) -> Self {
+        Self { db, config }
+    }
+
+    pub async fn list_projects(
+        &self,
+        tenant_ctx: TenantContext,
+        tenant_slug: &str,
+        workspace_slug: Option<&str>,
+    ) -> Result<Vec<ProjectView>, AppError> {
+        list_projects(
+            &self.db,
+            &self.config,
+            tenant_ctx,
+            tenant_slug,
+            workspace_slug,
+        )
+        .await
+    }
+
+    pub async fn list_effective_pii_rules(
+        &self,
+        tenant_ctx: TenantContext,
+        workspace_id: Option<i64>,
+        project_id: Option<i64>,
+    ) -> Result<Vec<PiiScrubRuleEntry>, AppError> {
+        let rules = list_pii_scrub_rules(&self.db, tenant_ctx).await?;
+        Ok(rules
+            .into_iter()
+            .filter(|r| {
+                r.is_enabled
+                    && match (r.workspace_id, r.project_id) {
+                        (None, None) => true,
+                        (Some(ws_id), None) => workspace_id == Some(ws_id),
+                        (Some(ws_id), Some(p_id)) => {
+                            workspace_id == Some(ws_id) && project_id == Some(p_id)
+                        }
+                        (None, Some(p_id)) => project_id == Some(p_id),
+                    }
+            })
+            .filter_map(|r| r.to_cache_entry())
+            .collect())
+    }
+}
 
 #[derive(FromRow)]
 struct WorkspaceDbRow {

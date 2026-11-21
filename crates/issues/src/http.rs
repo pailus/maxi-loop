@@ -11,13 +11,16 @@ use crate::model::{
     IssueDetailView, IssueEventView, IssueListFilter, IssueStatsResponse, IssueSummaryView,
     PaginatedIssuesResponse, UpdateIssueStatusInput,
 };
+use crate::notes::{
+    CreateIssueNoteInput, IssueNoteView, NoteActor, add_issue_note, list_issue_notes,
+};
 use crate::releases::{
     ReleaseListFilter, ReleaseView, UpsertReleaseInput, list_release_issues, list_releases,
     upsert_release,
 };
 use crate::service::{
     IssueScope, get_issue_detail, get_issue_event, get_issue_stats, list_issue_events, list_issues,
-    update_issue_status,
+    update_issue_status_with_actor,
 };
 
 pub fn router<S>() -> Router<S>
@@ -52,6 +55,10 @@ where
             "/issues/{issue_id}/events/{event_id}",
             get(default_get_issue_event_handler),
         )
+        .route(
+            "/issues/{issue_id}/notes",
+            get(default_list_issue_notes_handler).post(default_add_issue_note_handler),
+        )
         // Explicit slug-scoped hierarchy routes: /t/{tenant_slug}/...
         .route("/t/{tenant_slug}/issues", get(tenant_list_issues_handler))
         .route(
@@ -77,6 +84,10 @@ where
         .route(
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/events/{event_id}",
             get(project_get_issue_event_handler),
+        )
+        .route(
+            "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/notes",
+            get(project_list_issue_notes_handler).post(project_add_issue_note_handler),
         )
         // Release tracking routes
         .route(
@@ -383,7 +394,7 @@ async fn default_update_issue_status_handler(
     Path(issue_id): Path<i64>,
     Json(input): Json<UpdateIssueStatusInput>,
 ) -> Result<Json<IssueSummaryView>, AppError> {
-    let updated = update_issue_status(
+    let (updated, _) = update_issue_status_with_actor(
         &state.db,
         session.tenant_ctx,
         session.role,
@@ -393,6 +404,11 @@ async fn default_update_issue_status_handler(
             project_slug: None,
         },
         issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: "ui",
+        },
         input,
     )
     .await?;
@@ -410,7 +426,7 @@ async fn project_update_issue_status_handler(
     )>,
     Json(input): Json<UpdateIssueStatusInput>,
 ) -> Result<Json<IssueSummaryView>, AppError> {
-    let updated = update_issue_status(
+    let (updated, _) = update_issue_status_with_actor(
         &state.db,
         session.tenant_ctx,
         session.role,
@@ -420,10 +436,121 @@ async fn project_update_issue_status_handler(
             project_slug: Some(&project_slug),
         },
         issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: "ui",
+        },
         input,
     )
     .await?;
     Ok(Json(updated))
+}
+
+async fn default_list_issue_notes_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(issue_id): Path<i64>,
+    Query(query): Query<EventsListQuery>,
+) -> Result<Json<Vec<IssueNoteView>>, AppError> {
+    let notes = list_issue_notes(
+        &state.db,
+        session.tenant_ctx,
+        IssueScope {
+            tenant_slug: &session.tenant.slug,
+            workspace_slug: None,
+            project_slug: None,
+        },
+        issue_id,
+        query.limit,
+    )
+    .await?;
+    Ok(Json(notes))
+}
+
+async fn project_list_issue_notes_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug, issue_id)): Path<(
+        String,
+        String,
+        String,
+        i64,
+    )>,
+    Query(query): Query<EventsListQuery>,
+) -> Result<Json<Vec<IssueNoteView>>, AppError> {
+    let notes = list_issue_notes(
+        &state.db,
+        session.tenant_ctx,
+        IssueScope {
+            tenant_slug: &tenant_slug,
+            workspace_slug: Some(&workspace_slug),
+            project_slug: Some(&project_slug),
+        },
+        issue_id,
+        query.limit,
+    )
+    .await?;
+    Ok(Json(notes))
+}
+
+async fn default_add_issue_note_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(issue_id): Path<i64>,
+    Json(input): Json<CreateIssueNoteInput>,
+) -> Result<(StatusCode, Json<IssueNoteView>), AppError> {
+    let note = add_issue_note(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        IssueScope {
+            tenant_slug: &session.tenant.slug,
+            workspace_slug: None,
+            project_slug: None,
+        },
+        issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: "ui",
+        },
+        input,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(note)))
+}
+
+async fn project_add_issue_note_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug, issue_id)): Path<(
+        String,
+        String,
+        String,
+        i64,
+    )>,
+    Json(input): Json<CreateIssueNoteInput>,
+) -> Result<(StatusCode, Json<IssueNoteView>), AppError> {
+    let note = add_issue_note(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        IssueScope {
+            tenant_slug: &tenant_slug,
+            workspace_slug: Some(&workspace_slug),
+            project_slug: Some(&project_slug),
+        },
+        issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: "ui",
+        },
+        input,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(note)))
 }
 
 async fn list_releases_handler(

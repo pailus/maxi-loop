@@ -8,12 +8,17 @@ use axum::extract::FromRef;
 use maxi_loop_alerts::delivery::DeliveryPolicy;
 use maxi_loop_alerts::engine::{AlertSignalSender, spawn_alert_engine};
 use maxi_loop_auth::http::AuthState;
+use maxi_loop_auth::mcp::McpAuthService;
 use maxi_loop_auth::rate_limit::LoginRateLimiter;
 use maxi_loop_ingest::cache::DsnCache;
 use maxi_loop_ingest::http::IngestState;
 use maxi_loop_ingest::model::QueuedEnvelope;
 use maxi_loop_ingest::scrub_cache::ScrubRulesCache;
 use maxi_loop_ingest::worker::{IngestWorkerConfig, spawn_ingest_worker_with_hooks};
+use maxi_loop_issues::service::IssuesService;
+use maxi_loop_mcp::http::McpState;
+use maxi_loop_mcp::rate_limit::McpRateLimiter;
+use maxi_loop_org::service::OrgService;
 use maxi_loop_platform::config::Config;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -23,6 +28,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub db: PgPool,
     pub login_limiter: LoginRateLimiter,
+    pub mcp_limiter: McpRateLimiter,
     pub dsn_cache: DsnCache,
     pub scrub_cache: ScrubRulesCache,
     pub ingest_tx: mpsc::Sender<QueuedEnvelope>,
@@ -99,6 +105,7 @@ impl AppState {
             config: Arc::new(config),
             db,
             login_limiter,
+            mcp_limiter: McpRateLimiter::new(),
             dsn_cache: DsnCache::new(),
             scrub_cache: ScrubRulesCache::new(),
             ingest_tx,
@@ -125,6 +132,18 @@ impl FromRef<AppState> for IngestState {
             Arc::clone(&state.config),
             state.dsn_cache.clone(),
             state.ingest_tx.clone(),
+        )
+    }
+}
+
+impl FromRef<AppState> for McpState {
+    fn from_ref(state: &AppState) -> Self {
+        McpState::new(
+            Arc::clone(&state.config),
+            McpAuthService::new(state.db.clone()),
+            OrgService::new(state.db.clone(), Arc::clone(&state.config)),
+            IssuesService::new(state.db.clone()),
+            state.mcp_limiter.clone(),
         )
     }
 }

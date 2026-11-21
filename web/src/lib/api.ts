@@ -633,3 +633,119 @@ export async function deleteAlertRule(ruleId: number): Promise<void> {
 export async function fetchAlertDeliveries(limit = 50): Promise<AlertDeliveryView[]> {
   return requestJson<AlertDeliveryView[]>(`/api/v1/alerts/deliveries?limit=${limit}`);
 }
+
+// --- Phase 2b: Issue Notes & Embedded MCP Server ---
+
+export interface IssueNoteView {
+  id: number;
+  issue_id: number;
+  project_id: number;
+  author_user_id: number | null;
+  author_email: string;
+  source: "ui" | "mcp";
+  body: string;
+  commit_ref: string | null;
+  status_change: IssueStatus | null;
+  created_at: string;
+}
+
+export async function fetchIssueNotes(issueId: number): Promise<IssueNoteView[]> {
+  return requestJson<IssueNoteView[]>(`/api/v1/issues/${issueId}/notes`);
+}
+
+export async function createIssueNote(
+  issueId: number,
+  body: string,
+  commitRef?: string,
+): Promise<IssueNoteView> {
+  return requestJson<IssueNoteView>(`/api/v1/issues/${issueId}/notes`, {
+    method: "POST",
+    body: JSON.stringify({
+      body,
+      commit_ref: commitRef?.trim() || undefined,
+    }),
+  });
+}
+
+export type McpAccessScope = "tenant" | "workspace" | "project";
+
+export interface McpTokenView {
+  id: number;
+  tenant_id: number;
+  user_id: number;
+  user_email: string;
+  name: string;
+  token_prefix: string;
+  access_scope: McpAccessScope;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  project_id: number | null;
+  project_slug: string | null;
+  can_read: boolean;
+  can_triage: boolean;
+  rate_limit_per_minute: number;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedMcpTokenResponse {
+  token: McpTokenView;
+  raw_token: string;
+}
+
+export interface CreateMcpTokenInput {
+  name: string;
+  access_scope?: McpAccessScope;
+  workspace_slug?: string;
+  project_slug?: string;
+  can_triage?: boolean;
+  rate_limit_per_minute?: number;
+  expires_in_days?: number;
+}
+
+export interface McpAuditLogView {
+  id: number;
+  tenant_id: number;
+  token_id: number | null;
+  user_id: number;
+  user_email: string;
+  token_name: string;
+  tool_name: string;
+  arguments_json: Record<string, unknown>;
+  status: "ok" | "error" | "denied" | "rate_limited";
+  error_code: string | null;
+  duration_ms: number;
+  created_at: string;
+}
+
+export async function fetchMcpTokens(): Promise<McpTokenView[]> {
+  return requestJson<McpTokenView[]>("/api/v1/mcp/tokens");
+}
+
+export async function createMcpToken(
+  input: CreateMcpTokenInput,
+): Promise<CreatedMcpTokenResponse> {
+  return requestJson<CreatedMcpTokenResponse>("/api/v1/mcp/tokens", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeMcpToken(tokenId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/mcp/tokens/${tokenId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to revoke MCP token (${res.status})`);
+  }
+}
+
+export async function fetchMcpAuditLogs(limit = 100): Promise<McpAuditLogView[]> {
+  return requestJson<McpAuditLogView[]>(`/api/v1/mcp/audit-logs?limit=${limit}`);
+}

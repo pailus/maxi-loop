@@ -37,6 +37,7 @@ pub enum IssueSort {
     LastSeenDesc,
     FirstSeenDesc,
     EventsDesc,
+    RegressedDesc,
 }
 
 impl IssueSort {
@@ -45,8 +46,9 @@ impl IssueSort {
             None | Some("last_seen") => Ok(Self::LastSeenDesc),
             Some("first_seen") => Ok(Self::FirstSeenDesc),
             Some("events" | "event_count") => Ok(Self::EventsDesc),
+            Some("regressed" | "regression") => Ok(Self::RegressedDesc),
             Some(_) => Err(AppError::Validation(
-                "sort must be 'last_seen', 'first_seen', or 'events'".to_owned(),
+                "sort must be 'last_seen', 'first_seen', 'events', or 'regressed'".to_owned(),
             )),
         }
     }
@@ -56,6 +58,7 @@ impl IssueSort {
             Self::LastSeenDesc => " ORDER BY i.last_seen DESC, i.id DESC",
             Self::FirstSeenDesc => " ORDER BY i.first_seen DESC, i.id DESC",
             Self::EventsDesc => " ORDER BY i.event_count DESC, i.last_seen DESC, i.id DESC",
+            Self::RegressedDesc => " ORDER BY i.is_regressed DESC, i.last_seen DESC, i.id DESC",
         }
     }
 }
@@ -94,6 +97,8 @@ pub struct IssueListFilter {
     pub release: Option<String>,
     pub status: Option<String>,
     pub is_regressed: Option<bool>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
     pub query: Option<String>,
     pub sort: Option<String>,
     pub page: Option<u32>,
@@ -182,6 +187,10 @@ pub struct IssueDetailView {
 #[derive(Clone, Debug, Deserialize)]
 pub struct UpdateIssueStatusInput {
     pub status: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub commit_ref: Option<String>,
 }
 
 #[cfg(test)]

@@ -1,17 +1,22 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  Bot,
   Check,
   EyeOff,
+  MessageSquare,
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
 import {
   type IssueDetailView,
   type IssueEventView,
+  type IssueNoteView,
   type IssueStatus,
+  createIssueNote,
   fetchIssueEvents,
+  fetchIssueNotes,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
 import {
@@ -37,14 +42,46 @@ export function IssueDetailFullView({
   onUpdateStatus,
   onBack,
 }: IssueDetailFullViewProps) {
-  const [activeTab, setActiveTab] = useState<"overview" | "events" | "counters">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "events" | "counters" | "notes">("overview");
   const [interval, setInterval] = useState<"1h" | "1d">("1h");
   const [events, setEvents] = useState<IssueEventView[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [notes, setNotes] = useState<IssueNoteView[]>([]);
+  const [noteBody, setNoteBody] = useState("");
+  const [noteCommitRef, setNoteCommitRef] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
 
   const { issue, sample_event } = detail;
   const tags = normalizeTagsList(detail.tags);
   const issueKey = `${issue.project_slug.slice(0, 3).toUpperCase()}-${issue.id}`;
+
+  useEffect(() => {
+    let active = true;
+    fetchIssueNotes(issue.id)
+      .then((list) => {
+        if (active) setNotes(list);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [issue.id]);
+
+  async function handleAddNote(e: FormEvent) {
+    e.preventDefault();
+    if (!noteBody.trim()) return;
+    setSavingNote(true);
+    try {
+      const created = await createIssueNote(issue.id, noteBody.trim(), noteCommitRef);
+      setNotes((prev) => [created, ...prev]);
+      setNoteBody("");
+      setNoteCommitRef("");
+    } catch {
+      // Keep input on failure
+    } finally {
+      setSavingNote(false);
+    }
+  }
 
   useEffect(() => {
     if (activeTab !== "events") return;
@@ -190,6 +227,19 @@ export function IssueDetailFullView({
           className="pm-tab"
         >
           Hourly &amp; daily counters
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "notes"}
+          onClick={() => setActiveTab("notes")}
+          className="pm-tab"
+        >
+          <MessageSquare size={13} />
+          <span>Notes &amp; AI Triage</span>
+          <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover)] text-[11px] font-bold">
+            {notes.length}
+          </span>
         </button>
       </nav>
 
@@ -404,6 +454,89 @@ export function IssueDetailFullView({
               )}
             </div>
           </div>
+        </section>
+      )}
+
+      {activeTab === "notes" && (
+        <section className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden mb-8">
+          <div className="px-4 py-3 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-xs font-semibold text-[var(--color-text)]">
+            Triage notes &amp; AI agent annotations
+          </div>
+
+          {canTriage && (
+            <form
+              onSubmit={handleAddNote}
+              className="p-4 border-b border-[var(--color-border-light)] space-y-2.5 bg-[var(--color-bg)]"
+            >
+              <textarea
+                rows={2}
+                required
+                maxLength={4000}
+                value={noteBody}
+                onChange={(e) => setNoteBody(e.target.value)}
+                placeholder="Add root-cause analysis or resolution notes..."
+                className="pm-input h-auto py-2"
+              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  maxLength={128}
+                  value={noteCommitRef}
+                  onChange={(e) => setNoteCommitRef(e.target.value)}
+                  placeholder="Optional commit SHA or PR reference"
+                  className="pm-input max-w-xs pm-mono"
+                />
+                <button
+                  type="submit"
+                  disabled={savingNote}
+                  className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                >
+                  {savingNote ? "Saving..." : "Add note"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {notes.length === 0 ? (
+            <div className="p-6 text-xs text-[var(--color-text-dim)]">
+              No triage notes yet. Notes recorded via the UI or MCP agents appear
+              here.
+            </div>
+          ) : (
+            <div className="divide-y divide-[var(--color-border-light)]">
+              {notes.map((n) => (
+                <div key={n.id} className="px-4 py-3 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-[var(--color-text)]">
+                      {n.author_email}
+                    </span>
+                    <span
+                      className={`pm-lozenge ${
+                        n.source === "mcp" ? "pm-lozenge-primary" : ""
+                      }`}
+                    >
+                      {n.source === "mcp" && <Bot size={11} />}
+                      <span>{n.source.toUpperCase()}</span>
+                    </span>
+                    {n.status_change && (
+                      <span className="pm-lozenge pm-lozenge-success">
+                        STATUS → {n.status_change.toUpperCase()}
+                      </span>
+                    )}
+                    {n.commit_ref && (
+                      <span className="pm-lozenge pm-mono">{n.commit_ref}</span>
+                    )}
+                    <span className="ml-auto text-[11px] text-[var(--color-text-dim)]">
+                      {formatShortDate(n.created_at)}
+                    </span>
+                  </div>
+                  <p className="text-[var(--color-text-muted)] whitespace-pre-wrap break-words">
+                    {n.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
     </div>

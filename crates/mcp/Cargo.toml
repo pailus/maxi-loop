@@ -1,0 +1,23 @@
+[package]
+name = "maxi-loop-mcp"
+description = "Embedded Streamable HTTP MCP server (/mcp) for AI issue analysis and triage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Architectural invariant (D006): `maxi-loop-mcp` MUST NOT depend on `sqlx`.
+# All database access flows strictly through the shared internal service facades
+# in `maxi-loop-auth`, `maxi-loop-org`, and `maxi-loop-issues`.
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+governor.workspace = true
+http.workspace = true
+maxi-loop-auth.workspace = true
+maxi-loop-issues.workspace = true
+maxi-loop-org.workspace = true
+maxi-loop-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

@@ -19,6 +19,7 @@ maxi-loop-alerts.workspace = true
 maxi-loop-auth.workspace = true
 maxi-loop-ingest.workspace = true
 maxi-loop-issues.workspace = true
+maxi-loop-mcp.workspace = true
 maxi-loop-org.workspace = true
 maxi-loop-platform.workspace = true
 maxi-loop-retention.workspace = true

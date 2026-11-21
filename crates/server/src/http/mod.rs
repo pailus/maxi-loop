@@ -22,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::check))
         .merge(maxi_loop_ingest::http::router::<AppState>())
+        .merge(maxi_loop_mcp::http::router::<AppState>())
         .nest("/api/v1", api_router)
         .fallback(assets::serve_spa)
         .with_state(state)

@@ -5,6 +5,34 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F002: PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0001_initial_schema.sql` defining roles (`maxi_loop_app`, `maxi_loop_worker`), fail-closed `app_current_tenant_id()`, core tables (`tenants`, `workspaces`, `projects`, `users`, `memberships`, `sessions`, `issues`, daily range-partitioned `events`, `issue_hourly_counters`) with leading `(tenant_id, project_id)` primary keys and indexes, `ENABLE`/`FORCE ROW LEVEL SECURITY` policies, and `ensure_events_partition(DATE)`
+- Implemented `TenantContext`, transaction-local `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + `set_config('app.tenant_id', ..., true)`), and `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`) in `crates/platform/src/tenant.rs`
+- Implemented SQLx migration runner and daily partition helpers (`ensure_events_partition`, `ensure_upcoming_events_partitions`) in `crates/platform/src/db.rs`
+- Implemented Argon2id password hashing/verification and idempotent `bootstrap_defaults` in `crates/platform/src/bootstrap.rs`, plus `maxi-loop bootstrap` CLI subcommand and automatic first-boot bootstrap in `crates/server`
+- Added PostgreSQL 16 integration test `crates/platform/tests/schema_rls_bootstrap.rs` verifying table RLS flags, daily partition creation, idempotent bootstrap, cross-tenant read/write/forged-insert isolation (including direct child partition queries), and fail-closed unset `app.tenant_id`
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (7 server + 8 platform unit + 1 Postgres 16 RLS integration = 16 passed)
+- `cargo build --workspace` → PASS
+- Manual smoke check (`maxi-loop bootstrap` x2 + `maxi-loop` server + `/healthz` + SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: all slug/email/password/tenant_id inputs validated server-side; `bootstrap_admin_password` and `database_url` redacted in `Config::Debug`; Argon2id (`m=19456, t=2, p=1`) with CSPRNG `OsRng` salt; transaction-local `SET LOCAL ROLE` and `set_config(..., true)` prevent connection-pool tenant bleed; `app_current_tenant_id()` fails closed on empty/non-numeric GUC; negative tests cover cross-tenant read/update/delete/insert and unset `app.tenant_id`
+- New dependencies: `argon2` v0.5 + `password-hash` v0.5 (RustCrypto, required by Design §5.9 / PRD F-ADM-1 for Argon2id password hashing) and `chrono` v0.4 (standard Rust UTC date/timestamp arithmetic for daily partitions). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Used transaction-local `SET LOCAL ROLE maxi_loop_app` alongside `set_config('app.tenant_id', $1, true)` so RLS is enforced even when the pool connection user is the DB owner/superuser, and automatically resets on commit/rollback
+
+**Not finished / blockers:**
+- Ready to begin F003 (Session auth + Tenant/Workspace/Project/DSN management API)
+
 ### 2026-11-21 — Antigravity — Refactor: Cargo Workspace + Vertical-Slice Module Layout (D006)
 
 **Status at end of session:** done

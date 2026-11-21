@@ -1,7 +1,7 @@
 {
   "$schema": "./feature-list.schema.json",
   "project": "Maxi Loop",
-  "last_updated": "2026-11-21",
+  "last_updated": "2026-11-22",
   "features": [
     {
       "id": "F001",
@@ -209,7 +209,7 @@
     {
       "id": "F011",
       "title": "Phase 2b: Embedded MCP server (/mcp Streamable HTTP) for AI issue analysis and triage",
-      "status": "todo",
+      "status": "done",
       "priority": "medium",
       "acceptance_criteria": [
         "Streamable HTTP `/mcp` endpoint runs over the shared internal service layer with revocable scoped Bearer tokens (`read` default, `triage` opt-in)",

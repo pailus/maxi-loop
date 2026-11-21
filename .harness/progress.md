@@ -33,6 +33,42 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F011: Phase 2b: Embedded MCP server (/mcp Streamable HTTP) for AI issue analysis and triage
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0004_phase2b_mcp.sql` adding `mcp_tokens` (SHA-256 hash only, tenant/workspace/project access scope, `can_read` default + `can_triage` opt-in, `rate_limit_per_minute`, expiry & revocation), `mcp_audit_logs`, and `issue_notes` (shared by UI and MCP), all with leading `tenant_id` keys/indexes and `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Moved pure PII scrubbing (`scrub_event_payload`, `scrub_event_payload_with_rules`, `scrub_text_with_rules`) to `crates/platform/src/scrub.rs` (re-exported in `crates/ingest/src/scrub.rs`) so MCP output scrubbing shares exact ingest-parity logic without depending on `crates/ingest` or `sqlx`
+- Extended `crates/auth/src/mcp.rs` with revocable scoped MCP Bearer tokens (`mlmcp_<64-hex>`), `McpAuthService` facade, audit logging, and `/api/v1/mcp/tokens` (`GET`/`POST`/`DELETE`) + `/api/v1/mcp/audit-logs` routes
+- Extended `crates/org/src/service.rs` with `OrgService` facade (`list_projects`, `list_effective_pii_rules`) and `crates/issues` with `notes.rs` (`issue_notes` CRUD + `/api/v1/issues/{id}/notes`), `since`/`until` & `sort=regressed` filters, `resolve_release_commit_sha`, `update_issue_status_with_actor`, and `IssuesService` facade
+- Created `crates/mcp` (`maxi-loop-mcp`) with **zero `sqlx` dependency** (`D006` compiler-enforced single service layer):
+  - `http.rs` & `protocol.rs`: Streamable HTTP `/mcp` JSON-RPC 2.0 endpoint (`initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`; `GET /mcp` → `405`, `DELETE /mcp` → `204`) with Bearer auth, 256 KiB payload cap, `Mcp-Session-Id`, and full audit logging (`ok`/`error`/`denied`/`rate_limited`)
+  - `rate_limit.rs`: per-token `governor` GCRA rate limiter returning HTTP `429` + `Retry-After`
+  - `sanitize.rs`: output PII scrubbing (baseline + tenant/workspace/project custom rules), untrusted-data envelope (`<<<UNTRUSTED_EVENT_DATA>>>` + `security_notice`), token-efficient truncation with explicit markers, in-app stack frame formatting with code context (`pre_context`/`context_line`/`post_context`), and UI deep links
+  - `tools.rs`: implements all 7 tools (`list_projects`, `list_issues`, `get_issue` with release-to-`commit_sha` mapping, `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note`) with least-privilege `tools/list` filtering and strict project/workspace/tenant scope enforcement
+- Added MaxiBoard UI `web/src/modules/mcp/McpView.tsx` (MCP Bearer token management with one-time copyable token banner + Streamable HTTP client config snippet + Audit Log tab) and **Notes & AI Triage** tab in `IssueDetailFullView.tsx`
+- Added PostgreSQL 16 integration test `crates/server/tests/mcp_server.rs` covering auth/revocation, viewer privilege-escalation denial, read vs triage scopes, project-scope isolation, post-ingest output PII scrubbing, untrusted-data wrapping, truncation, release-to-SHA mapping, per-token rate limiting (`429`), audit logs, and Tenant A vs Tenant B cross-tenant isolation
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (55/55 passed, including `mcp_server` integration test & 5 `maxi-loop-mcp` unit tests)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified `POST /mcp` unauth `401`, `GET /mcp` `405`, created read-only token → `initialize` → `tools/list` (5 read tools) → `tools/call` `list_projects` → verified audit log → revoked token → confirmed `401`) → PASS
+
+**Security notes:**
+- Self-review passed: `crates/mcp` cannot import `sqlx` (`D006`), enforcing all queries through RLS-protected tenant services; raw MCP tokens are 256-bit CSPRNG, shown once at creation, and stored strictly as SHA-256 hashes; viewers cannot mint `triage` tokens (`403`); read-only tokens cannot invoke `update_issue_status` or `add_issue_note` (denied + audit-logged); `list_projects` never exposes DSN keys; every MCP event/issue output applies baseline + inherited custom PII scrubbing and wraps untrusted event text in `<<<UNTRUSTED_EVENT_DATA>>>` markers with a `security_notice`; per-token rate limits enforce `429` + `Retry-After` and audit logging; audit log arguments are PII-scrubbed and size-capped; negative tests cover auth/revocation, privilege escalation, sibling-project scope isolation, rate limiting, and cross-tenant isolation
+- Dependencies: 0 new external Rust or npm dependencies added. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Implemented MCP Streamable HTTP JSON-RPC 2.0 directly over `axum` + `serde_json` (0 new crates) and moved pure PII scrubbing to `crates/platform/src/scrub.rs` so `crates/mcp` stays strictly free of `sqlx` while guaranteeing ingest-parity PII output scrubbing
+
+**Not finished / blockers:**
+- Ready to begin Phase 3 — `F012` (Performance monitoring: transactions, spans, 1-minute duration histograms, sampled zstd traces, distributed waterfall, and MCP `list_transactions` / `get_trace` tools)
+
 ### 2026-11-22 — Antigravity — F010: Phase 2: Configurable PII scrubbing, Release tracking, and Alerts (Webhook, Telegram, Email)
 
 **Status at end of session:** done
@@ -278,31 +314,3 @@
 
 **Not finished / blockers:**
 - Ready to begin F004 (Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel)
-
-### 2026-11-21 — Antigravity — F002: PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0001_initial_schema.sql` defining roles (`maxi_loop_app`, `maxi_loop_worker`), fail-closed `app_current_tenant_id()`, core tables (`tenants`, `workspaces`, `projects`, `users`, `memberships`, `sessions`, `issues`, daily range-partitioned `events`, `issue_hourly_counters`) with leading `(tenant_id, project_id)` primary keys and indexes, `ENABLE`/`FORCE ROW LEVEL SECURITY` policies, and `ensure_events_partition(DATE)`
-- Implemented `TenantContext`, transaction-local `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + `set_config('app.tenant_id', ..., true)`), and `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`) in `crates/platform/src/tenant.rs`
-- Implemented SQLx migration runner and daily partition helpers (`ensure_events_partition`, `ensure_upcoming_events_partitions`) in `crates/platform/src/db.rs`
-- Implemented Argon2id password hashing/verification and idempotent `bootstrap_defaults` in `crates/platform/src/bootstrap.rs`, plus `maxi-loop bootstrap` CLI subcommand and automatic first-boot bootstrap in `crates/server`
-- Added PostgreSQL 16 integration test `crates/platform/tests/schema_rls_bootstrap.rs` verifying table RLS flags, daily partition creation, idempotent bootstrap, cross-tenant read/write/forged-insert isolation (including direct child partition queries), and fail-closed unset `app.tenant_id`
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (7 server + 8 platform unit + 1 Postgres 16 RLS integration = 16 passed)
-- `cargo build --workspace` → PASS
-- Manual smoke check (`maxi-loop bootstrap` x2 + `maxi-loop` server + `/healthz` + SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: all slug/email/password/tenant_id inputs validated server-side; `bootstrap_admin_password` and `database_url` redacted in `Config::Debug`; Argon2id (`m=19456, t=2, p=1`) with CSPRNG `OsRng` salt; transaction-local `SET LOCAL ROLE` and `set_config(..., true)` prevent connection-pool tenant bleed; `app_current_tenant_id()` fails closed on empty/non-numeric GUC; negative tests cover cross-tenant read/update/delete/insert and unset `app.tenant_id`
-- New dependencies: `argon2` v0.5 + `password-hash` v0.5 (RustCrypto, required by Design §5.9 / PRD F-ADM-1 for Argon2id password hashing) and `chrono` v0.4 (standard Rust UTC date/timestamp arithmetic for daily partitions). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Used transaction-local `SET LOCAL ROLE maxi_loop_app` alongside `set_config('app.tenant_id', $1, true)` so RLS is enforced even when the pool connection user is the DB owner/superuser, and automatically resets on commit/rollback
-
-**Not finished / blockers:**
-- Ready to begin F003 (Session auth + Tenant/Workspace/Project/DSN management API)

@@ -8,26 +8,24 @@
 ## Last session
 - Date: 2026-11-22
 - Assistant: Antigravity
-- Feature worked on: F010 (Phase 2: Configurable PII scrubbing, Release tracking, and Alerts — Webhook, Telegram, Email) — done
+- Feature worked on: F011 (Phase 2b: Embedded MCP server `/mcp` Streamable HTTP for AI issue analysis and triage) — done
 
 ## Current state
 - What works and is verified:
-  - **Phase 1 (`F001`–`F009`) and Phase 2 (`F010`) are complete.**
-  - Added migration `migrations/0003_phase2_pii_releases_alerts.sql` (`issues.first_release`, `pii_scrub_rules`, `releases`, `issue_releases`, `alert_channels`, `alert_rules`, `alert_deliveries` + RLS).
-  - Implemented inherited configurable PII scrubbing (`crates/org/src/pii.rs`, `crates/ingest/src/scrub_cache.rs`, `scrub.rs`) applied additively after mandatory baseline scrubbing (`D002`), live-synced in memory.
-  - Implemented Release tracking (`crates/ingest/src/worker.rs`, `crates/issues/src/releases.rs`) auto-tracking releases & inferred `commit_sha`, linking issues via `issue_releases`, and exposing `/api/v1/releases` + `/api/v1/releases/{id}/issues`.
-  - Created `crates/alerts` (`maxi-loop-alerts`) with SSRF-safe IP-pinned delivery (`ssrf.rs`, `delivery.rs`), HMAC-SHA256 Webhook (priority #1), Telegram Bot API, server-configured SMTP/TLS Email, real-time `new_issue`/`regression` consumer + 60s `spike` evaluator (`engine.rs`), cooldown deduplication, masked secrets, and `/api/v1/alerts/{channels,rules,deliveries}` routes.
-  - Added MaxiBoard UI views `ReleasesView.tsx` and `AlertsView.tsx` in `web/src/modules/` and rebuilt embedded SPA.
-  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (48/48 passed), `cargo build --workspace`, `cargo build --release -p maxi-loop`, and live smoke check against restarted `maxi-loop-dev.service` on port `8080`.
+  - **Phase 1 (`F001`–`F009`), Phase 2 (`F010`), and Phase 2b (`F011`) are complete.**
+  - Added migration `migrations/0004_phase2b_mcp.sql` (`mcp_tokens`, `mcp_audit_logs`, `issue_notes` + RLS).
+  - Moved pure PII scrubbing to `crates/platform/src/scrub.rs` (re-exported by `crates/ingest/src/scrub.rs`) for ingest-parity MCP output scrubbing without coupling `crates/mcp` to `crates/ingest` or `sqlx`.
+  - Extended `crates/auth/src/mcp.rs` (`McpAuthService`, `/api/v1/mcp/tokens`, `/api/v1/mcp/audit-logs`), `crates/org/src/service.rs` (`OrgService`), and `crates/issues` (`notes.rs`, `IssuesService`, `/api/v1/issues/{id}/notes`, `since`/`until`/`sort=regressed`, `resolve_release_commit_sha`).
+  - Created `crates/mcp` (`maxi-loop-mcp`, **zero `sqlx` dependency** per `D006`) serving Streamable HTTP JSON-RPC 2.0 on `POST /mcp` with all 7 tools (`list_projects`, `list_issues`, `get_issue`, `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note`), per-token `governor` rate limiting (`429`), output PII scrubbing, untrusted-data wrapping, truncation markers, release-to-`commit_sha` mapping, and full audit logging.
+  - Added MaxiBoard UI `web/src/modules/mcp/McpView.tsx` (**MCP & AI** sidebar tab) and **Notes & AI Triage** tab in `IssueDetailFullView.tsx`, rebuilt embedded SPA.
+  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (55/55 passed), `cargo build --workspace`, `cargo build --release -p maxi-loop`, and live smoke check against restarted `maxi-loop-dev.service` on port `8080`.
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only gitignored `.env`, `.env.local`, and `tests/e2e/python/.venv/`)
 
 ## What the next session MUST watch out for
 - Running service: `maxi-loop-dev.service` (systemd user unit) is running on `127.0.0.1:8080` for the user's Agentway tunnel preview.
+- Test hygiene note: `crates/server/tests/phase2_pii_releases_alerts.rs` calls global `evaluate_spike_rules(&pool, ...)` across all tenants in the shared dev DB; if older test tenants' 15-minute cooldown expires within their 60-minute spike window, the first run can count those older rules until cooldown resets.
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host.
 
 ## Suggested next steps
-1. Start **Phase 2b — `F011`**: Embedded MCP server (`/mcp` Streamable HTTP) for AI issue analysis and triage:
-   - Add migration for revocable scoped MCP Bearer tokens (`mcp_tokens`: SHA-256 hash, tenant/workspace/project scope, `read`/`triage` action scopes, rate limit) + `mcp_audit_logs` + `issue_notes` (all with RLS).
-   - Create `crates/mcp` (`maxi-loop-mcp`) depending **only** on service crates (`org`, `issues`, `platform`) — **never** on `sqlx` directly (`D006` compiler-enforced single service layer).
-   - Implement `list_projects`, `list_issues`, `get_issue` (with `commit_sha` release mapping & code context), `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note` with untrusted-content wrapping, output PII scrubbing, per-token rate limiting, audit logging, and cross-tenant isolation tests.
+1. Start **Phase 3 — `F012`**: Performance monitoring (transactions, spans, 1-minute duration histograms for p50/p95/p99, throughput & error rate, sampled zstd-compressed full traces, distributed trace waterfall UI, and MCP `list_transactions` + `get_trace` tools).

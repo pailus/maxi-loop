@@ -8,6 +8,7 @@ members = [
     "crates/issues",
     "crates/retention",
     "crates/alerts",
+    "crates/mcp",
     "crates/server",
     "crates/loadgen",
 ]
@@ -59,3 +60,4 @@ maxi-loop-ingest = { path = "crates/ingest" }
 maxi-loop-issues = { path = "crates/issues" }
 maxi-loop-retention = { path = "crates/retention" }
 maxi-loop-alerts = { path = "crates/alerts" }
+maxi-loop-mcp = { path = "crates/mcp" }

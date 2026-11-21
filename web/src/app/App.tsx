@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   Bell,
+  Bot,
   FolderKanban,
   Grid,
   Inbox,
@@ -27,6 +28,7 @@ import { AlertsView } from "../modules/alerts/AlertsView";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
 import { IssuesView, type IssuesTabMode } from "../modules/issues/IssuesView";
+import { McpView } from "../modules/mcp/McpView";
 import { ProjectIcon } from "../modules/projects/ProjectIcon";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
@@ -36,6 +38,7 @@ type ActiveNav =
   | "regressed"
   | "releases"
   | "alerts"
+  | "mcp"
   | "projects"
   | "health";
 
@@ -368,6 +371,19 @@ export function App() {
 
               <button
                 type="button"
+                onClick={() => setActiveNav("mcp")}
+                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
+                  activeNav === "mcp"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Bot size={16} />
+                <span>MCP &amp; AI</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveNav("projects")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "projects"
@@ -512,6 +528,15 @@ export function App() {
             workspaceName={currentWorkspaceName}
             projects={projects}
             canManage={canManageProjects}
+            onShowToast={(msg) => showToast(msg)}
+          />
+        )}
+
+        {activeNav === "mcp" && (
+          <McpView
+            workspaceName={currentWorkspaceName}
+            projects={projects}
+            canTriage={canTriage}
             onShowToast={(msg) => showToast(msg)}
           />
         )}

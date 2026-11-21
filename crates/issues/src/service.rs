@@ -11,6 +11,108 @@ use crate::model::{
     IssueStatsResponse, IssueStatus, IssueSummaryView, PaginatedIssuesResponse, StatsInterval,
     UpdateIssueStatusInput,
 };
+use crate::notes::{
+    CreateIssueNoteInput, IssueNoteView, NewIssueNote, NoteActor, add_issue_note,
+    insert_issue_note_in_tx, list_issue_notes, validate_commit_ref, validate_note_body,
+};
+use crate::releases::resolve_release_commit_sha;
+
+/// Service facade owned by `maxi-loop-issues` so upstream layers (like `maxi-loop-mcp`) can call
+/// all issue, event, stats, release, and note operations without importing `sqlx` (`D006`).
+#[derive(Clone)]
+pub struct IssuesService {
+    db: PgPool,
+}
+
+impl IssuesService {
+    pub fn new(db: PgPool) -> Self {
+        Self { db }
+    }
+
+    pub async fn list_issues(
+        &self,
+        tenant_ctx: TenantContext,
+        scope: IssueScope<'_>,
+        filter: IssueListFilter,
+    ) -> Result<PaginatedIssuesResponse, AppError> {
+        list_issues(&self.db, tenant_ctx, scope, filter).await
+    }
+
+    pub async fn get_issue_detail(
+        &self,
+        tenant_ctx: TenantContext,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        hours: Option<u32>,
+    ) -> Result<IssueDetailView, AppError> {
+        get_issue_detail(&self.db, tenant_ctx, scope, issue_id, hours).await
+    }
+
+    pub async fn get_issue_stats(
+        &self,
+        tenant_ctx: TenantContext,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        interval: Option<&str>,
+        hours: Option<u32>,
+    ) -> Result<IssueStatsResponse, AppError> {
+        get_issue_stats(&self.db, tenant_ctx, scope, issue_id, interval, hours).await
+    }
+
+    pub async fn get_issue_event(
+        &self,
+        tenant_ctx: TenantContext,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        event_id: &str,
+    ) -> Result<IssueEventView, AppError> {
+        get_issue_event(&self.db, tenant_ctx, scope, issue_id, event_id).await
+    }
+
+    pub async fn update_issue_status_with_actor(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        actor: NoteActor<'_>,
+        input: UpdateIssueStatusInput,
+    ) -> Result<(IssueSummaryView, Option<IssueNoteView>), AppError> {
+        update_issue_status_with_actor(&self.db, tenant_ctx, role, scope, issue_id, actor, input)
+            .await
+    }
+
+    pub async fn add_issue_note(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        actor: NoteActor<'_>,
+        input: CreateIssueNoteInput,
+    ) -> Result<IssueNoteView, AppError> {
+        add_issue_note(&self.db, tenant_ctx, role, scope, issue_id, actor, input).await
+    }
+
+    pub async fn list_issue_notes(
+        &self,
+        tenant_ctx: TenantContext,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        limit: Option<u32>,
+    ) -> Result<Vec<IssueNoteView>, AppError> {
+        list_issue_notes(&self.db, tenant_ctx, scope, issue_id, limit).await
+    }
+
+    pub async fn resolve_release_commit_sha(
+        &self,
+        tenant_ctx: TenantContext,
+        project_id: i64,
+        version: &str,
+    ) -> Result<Option<String>, AppError> {
+        resolve_release_commit_sha(&self.db, tenant_ctx, project_id, version).await
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct IssueScope<'a> {
@@ -428,6 +530,32 @@ pub async fn update_issue_status(
     issue_id: i64,
     input: UpdateIssueStatusInput,
 ) -> Result<IssueSummaryView, AppError> {
+    let (updated, _) =
+        update_issue_status_inner(pool, tenant_ctx, role, scope, issue_id, None, input).await?;
+    Ok(updated)
+}
+
+pub async fn update_issue_status_with_actor(
+    pool: &PgPool,
+    tenant_ctx: TenantContext,
+    role: Role,
+    scope: IssueScope<'_>,
+    issue_id: i64,
+    actor: NoteActor<'_>,
+    input: UpdateIssueStatusInput,
+) -> Result<(IssueSummaryView, Option<IssueNoteView>), AppError> {
+    update_issue_status_inner(pool, tenant_ctx, role, scope, issue_id, Some(actor), input).await
+}
+
+async fn update_issue_status_inner(
+    pool: &PgPool,
+    tenant_ctx: TenantContext,
+    role: Role,
+    scope: IssueScope<'_>,
+    issue_id: i64,
+    actor: Option<NoteActor<'_>>,
+    input: UpdateIssueStatusInput,
+) -> Result<(IssueSummaryView, Option<IssueNoteView>), AppError> {
     if !role.can_triage_issues() {
         return Err(AppError::Forbidden("insufficient permissions"));
     }
@@ -437,6 +565,16 @@ pub async fn update_issue_status(
         ));
     }
     let target_status = IssueStatus::parse(&input.status)?;
+    let note_body = match input
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => Some(validate_note_body(raw)?),
+        None => None,
+    };
+    let commit_ref = validate_commit_ref(input.commit_ref.as_deref())?;
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
     verify_tenant_slug_in_tx(&mut tx, tenant_ctx, scope.tenant_slug).await?;
@@ -466,12 +604,36 @@ pub async fn update_issue_status(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("update issue status: {err}")))?;
 
+    let created_note = if let Some(ref act) = actor
+        && (note_body.is_some() || commit_ref.is_some())
+    {
+        let body_text =
+            note_body.unwrap_or_else(|| format!("Status changed to {}", target_status.as_str()));
+        Some(
+            insert_issue_note_in_tx(
+                &mut tx,
+                NewIssueNote {
+                    tenant_id: tenant_ctx.tenant_id(),
+                    project_id: existing.project_id,
+                    issue_id: existing.id,
+                    actor: act,
+                    body: &body_text,
+                    commit_ref: commit_ref.as_deref(),
+                    status_change: Some(target_status),
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
     let updated = load_scoped_issue_in_tx(&mut tx, tenant_ctx, &scope, issue_id).await?;
     tx.commit()
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit update_issue_status: {err}")))?;
 
-    Ok(updated)
+    Ok((updated, created_note))
 }
 
 struct ValidatedIssueFilter {
@@ -482,6 +644,8 @@ struct ValidatedIssueFilter {
     release: Option<String>,
     status: Option<IssueStatus>,
     is_regressed: Option<bool>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
     query: Option<String>,
     sort: IssueSort,
     page: u32,
@@ -605,6 +769,14 @@ impl ValidatedIssueFilter {
             ));
         }
 
+        if let (Some(since), Some(until)) = (raw.since, raw.until)
+            && since > until
+        {
+            return Err(AppError::Validation(
+                "since timestamp must be <= until timestamp".to_owned(),
+            ));
+        }
+
         let offset = i64::from(page - 1) * i64::from(per_page);
 
         Ok(Self {
@@ -615,6 +787,8 @@ impl ValidatedIssueFilter {
             release,
             status,
             is_regressed: raw.is_regressed,
+            since: raw.since,
+            until: raw.until,
             query,
             sort,
             page,
@@ -653,6 +827,12 @@ impl ValidatedIssueFilter {
         if let Some(reg) = self.is_regressed {
             qb.push(" AND i.is_regressed = ").push_bind(reg);
         }
+        if let Some(since) = self.since {
+            qb.push(" AND i.last_seen >= ").push_bind(since);
+        }
+        if let Some(until) = self.until {
+            qb.push(" AND i.last_seen <= ").push_bind(until);
+        }
         if let Some(q) = &self.query {
             let escaped = q
                 .replace('\\', "\\\\")
@@ -678,7 +858,7 @@ fn validate_lookback_hours(hours: Option<u32>) -> Result<u32, AppError> {
     Ok(h)
 }
 
-async fn verify_tenant_slug_in_tx(
+pub(crate) async fn verify_tenant_slug_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     tenant_ctx: TenantContext,
     expected_slug: &str,
@@ -755,7 +935,7 @@ async fn verify_project_slug_in_tx(
     proj_id.ok_or(AppError::NotFound)
 }
 
-async fn load_scoped_issue_in_tx(
+pub(crate) async fn load_scoped_issue_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     tenant_ctx: TenantContext,
     scope: &IssueScope<'_>,
