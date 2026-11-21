@@ -57,6 +57,13 @@ impl Role {
             Self::TenantOwner | Self::TenantAdmin | Self::WorkspaceAdmin
         )
     }
+
+    pub fn can_triage_issues(self) -> bool {
+        matches!(
+            self,
+            Self::TenantOwner | Self::TenantAdmin | Self::WorkspaceAdmin | Self::Member
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1033,6 +1033,7 @@ dependencies = [
  "http",
  "maxi-loop-auth",
  "maxi-loop-ingest",
+ "maxi-loop-issues",
  "maxi-loop-org",
  "maxi-loop-platform",
  "mime_guess",
@@ -1085,6 +1086,19 @@ dependencies = [
  "subtle",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "maxi-loop-issues"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "maxi-loop-auth",
+ "maxi-loop-platform",
+ "serde",
+ "serde_json",
+ "sqlx",
 ]
 
 [[package]]

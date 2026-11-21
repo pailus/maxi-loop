@@ -8,14 +8,13 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F005 (Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert) — done
+- Feature worked on: F006 (Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests) — done
 
 ## Current state
 - What works and is verified:
-  - `crates/ingest/src/scrub.rs`: recursive depth-bounded baseline PII scrubbing (`[Filtered]`) for sensitive headers (`Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, etc., in both object and `[key, value]` tuple-array forms), cookies, sensitive fields (`password`, `token`, `secret`, `api_key`, `access_token`, `client_secret`, etc.), URL/query-string parameters, and `Bearer`/`Basic` tokens before persistence
-  - `crates/ingest/src/fingerprint.rs`: Sentry event normalization and deterministic SHA-256 fingerprinting from exception type + in-app stack frames (`module`/`filename` + `function`, stripping Rust compiler hash suffixes), with normalized error message fallback (UUID/hex/number tokenization), custom `fingerprint` array support, `culprit` computation, and tag normalization
-  - `crates/ingest/src/worker.rs`: asynchronous batch worker (`spawn_ingest_worker`, flushing every 100ms–1s or 256 events) and transactional `flush_processed_batch` (`begin_worker_tx`) that checks `to_regclass` before `ensure_events_partition`, upserts `issues`, auto-reopens `resolved` issues on regression (`status = 'unresolved'`, `is_regressed = TRUE`), caps full event payloads at `MAX_FULL_EVENTS_PER_ISSUE` (default 50) + sample (`is_sample = TRUE`), and batch-upserts `events` and `issue_hourly_counters`
-  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (34/34 passed), `cargo build --workspace`, and live HTTP envelope → worker → PostgreSQL smoke test
+  - `crates/issues` (`maxi-loop-issues`) implements RLS-enforced (`begin_tenant_tx` + `TenantContext`) issue list pagination & filtering (`project_id`, `project_slug`, `workspace_slug`, `environment`, `release`, `status`, `is_regressed`, `query`, `sort`), issue detail (`stack_frames`, `tags`, `sample_event`, `hourly_series`, `daily_series`), hourly/daily stats (`/stats?interval=1h|1d`), stored events list/detail (`/events`), and status triage (`PATCH /issues/{id}/status` for `unresolved`/`resolved`/`ignored` with `Role::can_triage_issues` RBAC and CSRF validation)
+  - Supports both single-tenant convenience routes (`/api/v1/issues/...`, `/api/v1/projects/{project_slug}/issues`) and explicit slug-scoped hierarchy routes (`/api/v1/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/...`)
+  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (36/36 passed), `cargo build --workspace`, and live HTTP smoke test
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
 
@@ -25,9 +24,7 @@
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F006**: Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests (`crates/issues`):
-   - Create `crates/issues` (`maxi-loop-issues`) vertical-slice crate (`model`, `service`, `http`) using `begin_tenant_tx` + `TenantContext`
-   - List issues with pagination and filters by `project`, `environment`, `release`, and `status`
-   - Issue detail returning summary, stack trace (`stack_frames`), tags, environment, release, sample event payload (`sample_event_id` / `is_sample`), and hourly/daily counter series from `issue_hourly_counters`
-   - Issue status triage endpoint (`PATCH /api/v1/.../issues/{issue_id}` or `/status`) updating `unresolved` / `resolved` / `ignored` (clearing `is_regressed` when resolved) with server-side role authorization (`member`+ vs `viewer`)
-   - Cross-tenant isolation tests verifying Tenant A cannot read or update Tenant B issues, events, or hourly stats.
+1. Start **F007**: Retention scheduler: daily partition maintenance, `DROP PARTITION`, and override batch delete (`crates/retention`):
+   - Background scheduler pre-creating upcoming daily `events_YYYY_MM_DD` partitions and dropping partitions older than global retention (`RETENTION_DEFAULT_DAYS`, default 30 days) via `DROP TABLE` / `DROP PARTITION`
+   - Bounded scheduled batch deletes for tenants/workspaces/projects configured with shorter retention overrides (`< global`) across `events`, `issue_hourly_counters`, and expired `issues` (plus expired `sessions` cleanup)
+   - Integration tests against PostgreSQL 16 verifying partition creation, dropping expired partitions, and shorter override batch cleanup.

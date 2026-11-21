@@ -15,6 +15,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health::check))
         .merge(maxi_loop_auth::http::router::<AppState>())
         .merge(maxi_loop_org::http::router::<AppState>())
+        .merge(maxi_loop_issues::http::router::<AppState>())
         .fallback(api_not_found);
 
     Router::new()

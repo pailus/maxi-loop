@@ -109,7 +109,7 @@
     {
       "id": "F006",
       "title": "Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "List issues supports pagination and filters by project, environment, release, and status",
@@ -119,9 +119,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F005"],
       "notes": "PRD F-ISS-2..5, F-ADM-7"
