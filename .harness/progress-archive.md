@@ -5,6 +5,36 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F006: Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests
+
+**Status at end of session:** done
+
+**Done:**
+- Created `crates/issues` (`maxi-loop-issues`):
+  - `model.rs`: typed `IssueStatus` (`unresolved`/`resolved`/`ignored`), allow-listed `IssueSort` (`last_seen`/`first_seen`/`events`), allow-listed `StatsInterval` (`1h`/`1d`), `IssueListFilter`, `IssueSummaryView`, `PaginatedIssuesResponse`, `IssueDetailView`, `IssueEventView`, `CounterBucketPoint`, `IssueStatsResponse`, and `UpdateIssueStatusInput`
+  - `service.rs`: RLS-enforced (`begin_tenant_tx` + `TenantContext`) shared service layer (`list_issues`, `get_issue_detail`, `get_issue_stats`, `list_issue_events`, `get_issue_event`, `update_issue_status`) reusable by both the JSON HTTP API and Phase 2b MCP server
+  - `http.rs`: convenience routes (`/api/v1/issues`, `/api/v1/projects/{project_slug}/issues`, `/api/v1/issues/{issue_id}`, `/api/v1/issues/{issue_id}/status`, `/api/v1/issues/{issue_id}/stats`, `/api/v1/issues/{issue_id}/events`, `/api/v1/issues/{issue_id}/events/{event_id}`) and explicit slug-scoped hierarchy routes (`/api/v1/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/...`)
+- Extended `Role` in `crates/auth` with `can_triage_issues()` (`tenant_owner`, `tenant_admin`, `workspace_admin`, `member` permitted; `viewer` read-only)
+- Mounted `maxi_loop_issues::http::router` under `/api/v1` in `crates/server`
+- Added PostgreSQL 16 integration test `crates/server/tests/issues_api_isolation.rs` verifying pagination, filtering (`project`, `environment`, `release`, `status`, `sort`), issue detail (`stack_frames`, `tags`, `sample_event`, `hourly_series`, `daily_series`), stats endpoint (`1h` & `1d`), triage RBAC (`viewer` `403`, missing CSRF `403`, invalid status `400`, owner/member `200`), and Tenant A vs Tenant B cross-tenant isolation
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (36 passed: 7 server unit + 4 server integration + 5 auth unit + 9 ingest unit + 1 issues unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
+- `cargo build --workspace` → PASS
+- Manual smoke check (live `maxi-loop serve` + login + project create + envelope ingest → `GET /api/v1/issues` filter → `GET /api/v1/issues/{id}` detail & series → `PATCH /api/v1/issues/{id}/status` resolve + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: all query/path inputs (`issue_id`, `project_id`, `workspace_slug`, `project_slug`, `environment`, `release`, `status`, `sort`, `interval`, `page`, `per_page`, `hours`, `limit`, search `query` with escaped `ILIKE` wildcards) validated server-side with strict allow-lists; all queries run inside `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + `app.tenant_id` RLS) with explicit `tenant_id` binds; `viewer` role denied on status mutation (`403 Forbidden`); CSRF header enforced by `AuthSession` extractor on `PATCH`/`POST`; negative tests cover `viewer` triage, missing CSRF, invalid status, and Tenant A vs Tenant B cross-tenant reads & mutations across all issue/event/stats routes
+- Dependencies: 0 new external crates added
+
+**Key decisions & why:**
+- Built `crates/issues/src/service.rs` without Axum/HTTP coupling so Phase 2b `crates/mcp` can call the exact same tenant-scoped service methods directly per `D006` and Design §5.10
+
+**Not finished / blockers:**
+- Ready to begin F007 (Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete)
+
 ### 2026-11-21 — Antigravity — F005: Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert
 
 **Status at end of session:** done

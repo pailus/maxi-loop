@@ -26,7 +26,7 @@ crates/                  — Rust workspace crates (vertical-slice modular layou
   server/                — `maxi-loop` binary: composition root, CLI (`serve` / `bootstrap`), router (`/mcp`, `/api/{id}/envelope/`, `/api/v1/*`), security headers, `/healthz`, embedded SPA
   loadgen/               — `maxi-loop-loadgen` binary: synthetic Sentry Envelope HTTP/1.1 keep-alive load-test generator (`none`/`gzip`/`deflate`/`br`), latency percentiles, and `429` (`Retry-After` / `X-Sentry-Rate-Limits`) verifier
 tests/
-  e2e/python/            — Official Python `sentry-sdk` (FastAPI + Django) E2E verification suite
+  e2e/python/            — Official Python `sentry-sdk` (FastAPI + Django WSGI) E2E error, performance & distributed trace verification suite
   e2e/go/                — Official Go `github.com/getsentry/sentry-go` E2E error & tracing suite
   e2e/rust/              — Official Rust `sentry` + `sentry-tracing` E2E error & tracing suite
   e2e/verify_go_rust_sdks.py — Orchestrator verifying live Go & Rust SDK error grouping, PII scrubbing, histograms & trace waterfalls

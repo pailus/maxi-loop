@@ -33,6 +33,36 @@
 
 ---
 
+### 2026-11-22 — Antigravity — FastAPI & Django SDK E2E upgrade (Error + Performance + Distributed Trace) & OTel status-code parsing
+
+**Status at end of session:** done
+
+**Done:**
+- Hardened `crates/performance/src/ingest_proc.rs` (`extract_http_status_code`) to also inspect nested OpenTelemetry/Sentry 2.x `contexts.trace.data["http.response.status_code"]` / `contexts.trace.data["http.status_code"]`, with unit test `detects_5xx_error_from_nested_otel_trace_data_status_code`
+- Upgraded `tests/e2e/python/verify_sentry_sdk.py` and `tests/e2e/python/README.md` to test official Python `sentry-sdk==2.75.0` with **FastAPI** (`FastApiIntegration`, `fastapi==0.165.0`) and **Django** (`DjangoIntegration`, `django==5.2.19`, real WSGI handler via `get_wsgi_application()`) for **both** Error Tracking AND Performance Monitoring (`traces_sample_rate=1.0`):
+  - Error grouping (`ZeroDivisionError` ×3 + `ValueError` ×1; `RuntimeError` ×2 + `KeyError` ×1), `in_app` frames + `context_line`, `Authorization`/`Cookie` PII scrubbing
+  - 1-minute duration histograms (`p50_ms >= 500ms`), error transaction rate (`3/3` FastAPI, `2/2` Django), sampled zstd trace span PII scrubbing (`password`, `api_key` → `[Filtered]`), per-project API token read access (`mlapi_...`)
+  - Real cross-service **FastAPI → Django** distributed trace waterfall (`sentry-trace` + `baggage` propagation, verifying exact `parent_span_id` linkage & 7 spans across 2 services)
+  - Negative tampered-DSN check confirming `0` issues AND `0` transactions ingested
+- Archived `F006` (and removed duplicate `F005`) from `.harness/progress.md` to `.harness/progress-archive.md`
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (77/77 passed, incl. 9/9 `maxi-loop-performance` unit tests)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Live official Python `sentry-sdk==2.75.0` E2E (`tests/e2e/python/verify_sentry_sdk.py` against restarted `maxi-loop-dev.service` on port `8080`) → PASS (FastAPI `p50=584.2ms` + `3/3` errors + 2 grouped issues; Django `p50=550.9ms` + `2/2` errors + 2 grouped issues; 2-service distributed waterfall `7 spans` FastAPI=3/Django=4 + `[Filtered]` PII; tampered DSN: 0 issues & 0 transactions)
+
+**Security notes:**
+- Self-review passed: no untrusted SQL/shell/path changes; `extract_http_status_code` safely parses bounded `u16` from JSON without panics; Python E2E generates ephemeral runtime secrets via `secrets.token_hex`, passes DSN/secrets via env (never argv), uses argument arrays (`shell=False`), verifies `[Filtered]` PII scrubbing in both issues and sampled zstd trace waterfalls, and includes negative tampered-DSN verification for both events and transactions
+- Dependencies: 0 new production or test dependencies added
+
+**Key decisions & why:**
+- Switched the Django E2E worker from `django.test.Client` to real WSGI (`get_wsgi_application()`) so `DjangoIntegration` exercises the full production WSGI transaction, signal span, and `sentry-trace` propagation pipeline
+
+**Not finished / blockers:**
+- All SDK stacks tested so far (Python FastAPI/Django, Go, Rust) pass live Error + Performance E2E. Remaining optional next work: React SDK (`@sentry/react`) E2E, production Docker/deployment docs, or P2 features from PRD §7
+
 ### 2026-11-22 — Antigravity — F014: Phase 5: Go & Rust SDK verification, multi-user RBAC, inherited settings, API tokens, aggregate tenant limits
 
 **Status at end of session:** done
@@ -312,61 +342,3 @@
 
 **Not finished / blockers:**
 - Ready to begin F008 (Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart)
-
-### 2026-11-21 — Antigravity — F006: Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests
-
-**Status at end of session:** done
-
-**Done:**
-- Created `crates/issues` (`maxi-loop-issues`):
-  - `model.rs`: typed `IssueStatus` (`unresolved`/`resolved`/`ignored`), allow-listed `IssueSort` (`last_seen`/`first_seen`/`events`), allow-listed `StatsInterval` (`1h`/`1d`), `IssueListFilter`, `IssueSummaryView`, `PaginatedIssuesResponse`, `IssueDetailView`, `IssueEventView`, `CounterBucketPoint`, `IssueStatsResponse`, and `UpdateIssueStatusInput`
-  - `service.rs`: RLS-enforced (`begin_tenant_tx` + `TenantContext`) shared service layer (`list_issues`, `get_issue_detail`, `get_issue_stats`, `list_issue_events`, `get_issue_event`, `update_issue_status`) reusable by both the JSON HTTP API and Phase 2b MCP server
-  - `http.rs`: convenience routes (`/api/v1/issues`, `/api/v1/projects/{project_slug}/issues`, `/api/v1/issues/{issue_id}`, `/api/v1/issues/{issue_id}/status`, `/api/v1/issues/{issue_id}/stats`, `/api/v1/issues/{issue_id}/events`, `/api/v1/issues/{issue_id}/events/{event_id}`) and explicit slug-scoped hierarchy routes (`/api/v1/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/...`)
-- Extended `Role` in `crates/auth` with `can_triage_issues()` (`tenant_owner`, `tenant_admin`, `workspace_admin`, `member` permitted; `viewer` read-only)
-- Mounted `maxi_loop_issues::http::router` under `/api/v1` in `crates/server`
-- Added PostgreSQL 16 integration test `crates/server/tests/issues_api_isolation.rs` verifying pagination, filtering (`project`, `environment`, `release`, `status`, `sort`), issue detail (`stack_frames`, `tags`, `sample_event`, `hourly_series`, `daily_series`), stats endpoint (`1h` & `1d`), triage RBAC (`viewer` `403`, missing CSRF `403`, invalid status `400`, owner/member `200`), and Tenant A vs Tenant B cross-tenant isolation
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (36 passed: 7 server unit + 4 server integration + 5 auth unit + 9 ingest unit + 1 issues unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
-- `cargo build --workspace` → PASS
-- Manual smoke check (live `maxi-loop serve` + login + project create + envelope ingest → `GET /api/v1/issues` filter → `GET /api/v1/issues/{id}` detail & series → `PATCH /api/v1/issues/{id}/status` resolve + clean SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: all query/path inputs (`issue_id`, `project_id`, `workspace_slug`, `project_slug`, `environment`, `release`, `status`, `sort`, `interval`, `page`, `per_page`, `hours`, `limit`, search `query` with escaped `ILIKE` wildcards) validated server-side with strict allow-lists; all queries run inside `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + `app.tenant_id` RLS) with explicit `tenant_id` binds; `viewer` role denied on status mutation (`403 Forbidden`); CSRF header enforced by `AuthSession` extractor on `PATCH`/`POST`; negative tests cover `viewer` triage, missing CSRF, invalid status, and Tenant A vs Tenant B cross-tenant reads & mutations across all issue/event/stats routes
-- Dependencies: 0 new external crates added
-
-**Key decisions & why:**
-- Built `crates/issues/src/service.rs` without Axum/HTTP coupling so Phase 2b `crates/mcp` can call the exact same tenant-scoped service methods directly per `D006` and Design §5.10
-
-**Not finished / blockers:**
-- Ready to begin F007 (Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete)
-
-### 2026-11-21 — Antigravity — F005: Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert
-
-**Status at end of session:** done
-
-**Done:**
-- Implemented `crates/ingest/src/scrub.rs`: depth-bounded recursive baseline PII scrubbing (`[Filtered]`) for sensitive headers (`Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, etc., in both object and `[key, value]` tuple-array formats), cookies, sensitive fields (`password`, `token`, `secret`, `api_key`, `client_secret`, `access_token`, etc.), sensitive query parameters in `query_string` / `url`, and `Bearer`/`Basic` auth values before persistence
-- Implemented `crates/ingest/src/fingerprint.rs`: Sentry event normalization and deterministic SHA-256 fingerprinting based on exception type + in-app stack frames (`module`/`filename` + `function`, stripping Rust compiler hash suffixes), with fallback to normalized error message (UUID/hex/number tokenization), plus custom `fingerprint` array support, `culprit` extraction, and tag normalization
-- Implemented `crates/ingest/src/worker.rs`: async batch worker (`spawn_ingest_worker`, flushing every 100ms–1s or 256 events) and transactional `flush_processed_batch` (`begin_worker_tx`): checks `to_regclass` before `ensure_events_partition`, upserts `issues` in deterministic order, auto-reopens `resolved` issues on regression (`status = 'unresolved'`, `is_regressed = TRUE`), caps full event payloads at `MAX_FULL_EVENTS_PER_ISSUE` (default 50) + sample (`is_sample = TRUE`), and executes multi-row batch inserts/upserts into `events` and `issue_hourly_counters`
-- Wired `spawn_ingest_worker` into `crates/server` (`AppState::new` and `AppState::with_login_limiter`)
-- Added PostgreSQL 16 integration test `crates/server/tests/ingest_worker.rs` verifying live background worker PII scrubbing, grouping consistency, regression reopen, `ignored` status retention, full-event cap + regression sample, and hourly counter aggregation
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (34 passed: 7 server unit + 3 server integration + 5 auth unit + 9 ingest unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
-- `cargo build --workspace` → PASS
-- Manual smoke check (live `maxi-loop serve` + login + project creation + 2 gzipped envelopes with `Authorization` & `password` PII → verified grouped issue `event_count = 2`, `[Filtered]` in `events.payload`, and `issue_hourly_counters` count = 2 + clean SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: PII scrubbing executes before any field extraction or database persistence so raw credentials (`Authorization`, `Cookie`, `password`, `token`, `secret`, `api_key`, URL query secrets) never reach PostgreSQL (`events.payload`, `events.tags`, or `issues`); recursion bounded by `MAX_SCRUB_DEPTH = 32`; parameterized SQLx `QueryBuilder` binds inside `begin_worker_tx`; negative tests verify zero raw secret substrings in persisted rows
-- Dependencies: added `sha2.workspace = true` to `crates/ingest` (already in workspace lockfile, 0 new external crates)
-
-**Key decisions & why:**
-- Check `SELECT to_regclass($1) IS NOT NULL` before calling `ensure_events_partition` in `flush_processed_batch` so the 100ms ingest hot path avoids executing partition DDL (`AccessExclusiveLock`) when the daily partition already exists
-
-**Not finished / blockers:**
-- Ready to begin F006 (Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests)

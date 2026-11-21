@@ -708,15 +708,20 @@ fn extract_http_status_code(tags: &Value, ctx: Option<&Map<String, Value>>) -> O
         return Some(code);
     }
     if let Some(map) = ctx {
-        for key in ["http.status_code", "http.response.status_code"] {
-            if let Some(v) = map.get(key) {
-                if let Some(n) = v.as_u64() {
-                    return u16::try_from(n).ok();
-                }
-                if let Some(s) = v.as_str()
-                    && let Ok(code) = s.parse::<u16>()
-                {
-                    return Some(code);
+        for candidate in [Some(map), map.get("data").and_then(Value::as_object)]
+            .into_iter()
+            .flatten()
+        {
+            for key in ["http.status_code", "http.response.status_code"] {
+                if let Some(v) = candidate.get(key) {
+                    if let Some(n) = v.as_u64() {
+                        return u16::try_from(n).ok();
+                    }
+                    if let Some(s) = v.as_str()
+                        && let Ok(code) = s.parse::<u16>()
+                    {
+                        return Some(code);
+                    }
                 }
             }
         }
@@ -850,5 +855,48 @@ mod tests {
         assert!(!serialized.contains("secret_query_val"));
         assert!(!serialized.contains("db_password_raw"));
         assert!(serialized.contains("[Filtered]"));
+    }
+
+    #[test]
+    fn detects_5xx_error_from_nested_otel_trace_data_status_code() {
+        let payload = json!({
+            "event_id": "tx222222222222222222222222222222",
+            "type": "transaction",
+            "transaction": "/api/fastapi/fail",
+            "start_timestamp": "2026-11-21T18:57:02.000000Z",
+            "timestamp": "2026-11-21T18:57:02.040000Z",
+            "environment": "production",
+            "contexts": {
+                "trace": {
+                    "trace_id": "fedcba9876543210fedcba9876543210",
+                    "span_id": "aaaa1111bbbb2222",
+                    "op": "http.server",
+                    "status": "ok",
+                    "data": {
+                        "http.response.status_code": 503
+                    }
+                }
+            },
+            "spans": []
+        });
+
+        let raw = QueuedTransaction {
+            tenant_id: 1,
+            workspace_id: 1,
+            project_id: 1,
+            event_id: "tx222222222222222222222222222222".to_owned(),
+            received_at: Utc::now(),
+            environment: "production".to_owned(),
+            release: None,
+            platform: "python".to_owned(),
+            raw_payload: serde_json::to_vec(&payload).unwrap(),
+        };
+
+        let processed =
+            process_queued_transaction_with_rules(raw, &[], TraceSamplingPolicy::default())
+                .expect("process ok");
+
+        assert!(processed.is_error);
+        assert_eq!(processed.sample_reason, Some(SampleReason::Error));
     }
 }
