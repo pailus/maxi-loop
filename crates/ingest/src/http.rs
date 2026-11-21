@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, FromRef, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::header::HeaderValue;
+use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -51,10 +53,49 @@ where
 {
     // Raise Axum's default 2 MiB extractor limit to 64 MiB so our handler can return
     // structured 413 JSON responses based on `config.max_envelope_compressed_bytes`.
+    // Attach non-credentialed CORS headers strictly to the public DSN ingest routes so
+    // browser SDKs (`@sentry/react`) can POST cross-origin and read rate-limit headers.
     Router::new()
-        .route("/api/{project_id}/envelope/", post(ingest_envelope_handler))
-        .route("/api/{project_id}/envelope", post(ingest_envelope_handler))
+        .route(
+            "/api/{project_id}/envelope/",
+            post(ingest_envelope_handler).options(ingest_cors_preflight_handler),
+        )
+        .route(
+            "/api/{project_id}/envelope",
+            post(ingest_envelope_handler).options(ingest_cors_preflight_handler),
+        )
+        .layer(middleware::from_fn(apply_ingest_cors_headers))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+}
+
+async fn ingest_cors_preflight_handler() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+async fn apply_ingest_cors_headers(req: Request<axum::body::Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("POST, OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Content-Type, Content-Encoding, X-Sentry-Auth"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("X-Sentry-Rate-Limits, Retry-After"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("86400"),
+    );
+    resp
 }
 
 #[derive(Deserialize, Default)]

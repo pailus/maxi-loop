@@ -10,6 +10,8 @@
 # Frontend dependencies & build output
 /web/node_modules/
 /web/dist/
+/tests/e2e/react/node_modules/
+/tests/e2e/react/dist/
 
 # Python E2E virtual environments & caches
 .venv/

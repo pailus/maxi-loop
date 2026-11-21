@@ -528,7 +528,7 @@ async fn envelope_ingest_dsn_cache_decompression_early_drop_rate_limit_and_backp
         "Sentry sentry_version=7, sentry_key={}",
         rotated_proj1.dsn_public_key
     );
-    let (st_new_key, _, _) = send_envelope(
+    let (st_new_key, headers_new_key, _) = send_envelope(
         &app,
         &format!("/api/{}/envelope/", proj1.id),
         Some(&new_auth_header_1),
@@ -537,5 +537,66 @@ async fn envelope_ingest_dsn_cache_decompression_early_drop_rate_limit_and_backp
     )
     .await;
     assert_eq!(st_new_key, StatusCode::OK);
+    assert_eq!(
+        headers_new_key
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+    assert!(
+        headers_new_key
+            .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("X-Sentry-Rate-Limits") && v.contains("Retry-After"))
+    );
+    assert!(
+        !headers_new_key.contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+        "wildcard CORS on ingest must never allow credentials"
+    );
     assert_eq!(dsn_cache.db_reload_count(), 0);
+
+    // 8. Browser SDK CORS preflight on `/api/{id}/envelope/` succeeds without touching `/api/v1/*`:
+    let preflight_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri(format!("/api/{}/envelope/", proj1.id))
+                .header(header::ORIGIN, "https://app.example.com")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(
+                    header::ACCESS_CONTROL_REQUEST_HEADERS,
+                    "content-type, x-sentry-auth",
+                )
+                .body(Body::empty())
+                .expect("build preflight request"),
+        )
+        .await
+        .expect("preflight response");
+    assert_eq!(preflight_resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        preflight_resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+    assert!(
+        preflight_resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("X-Sentry-Auth"))
+    );
+    assert!(
+        !preflight_resp
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+    );
+
+    // Cookie-authenticated `/api/v1/*` routes must NEVER emit wildcard CORS:
+    let (st_health, headers_health, _) =
+        send_json(&app, Method::GET, "/api/v1/health", None, None, None).await;
+    assert_eq!(st_health, StatusCode::OK);
+    assert!(!headers_health.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
 }

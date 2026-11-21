@@ -33,6 +33,35 @@
 
 ---
 
+### 2026-11-22 — Antigravity — Browser Ingest CORS & Official React SDK (`@sentry/react`) Headless Chrome E2E
+
+**Status at end of session:** done
+
+**Done:**
+- Fixed browser cross-origin ingest in `crates/ingest/src/http.rs`: added `OPTIONS` preflight handler (`204 No Content`) and non-credentialed CORS middleware strictly scoped to `/api/{project_id}/envelope/` (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, Content-Encoding, X-Sentry-Auth`, `Access-Control-Expose-Headers: X-Sentry-Rate-Limits, Retry-After`, `Access-Control-Max-Age: 86400`, explicitly omitting `Access-Control-Allow-Credentials`), keeping cookie-authenticated `/api/v1/*` routes strictly same-origin
+- Extended `crates/server/tests/envelope_ingest.rs` with CORS preflight (`204`), `POST` CORS/expose-header assertions, no-credentials assertion, and negative verification that `/api/v1/health` never emits `Access-Control-Allow-Origin`
+- Created isolated production-built Vite + React + TypeScript E2E app under `tests/e2e/react/` (`package.json` with `@sentry/react` ^9, `vite.config.ts` emitting minified JS + `.js.map`, `src/checkout.ts`, `src/App.tsx`, `src/main.tsx`, `README.md`) and real Headless Chrome orchestrator `tests/e2e/verify_react_sdk.py`
+- Updated `.gitignore` for `/tests/e2e/react/node_modules/` & `/tests/e2e/react/dist/`, archived `F007` to `.harness/progress-archive.md`
+
+**Verification run:**
+- `npm --prefix tests/e2e/react run build` → PASS (`tsc --noEmit && vite build`, minified bundle + `1.87 MB` `.js.map`)
+- `npm --prefix tests/e2e/react audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (77/77 passed, incl. `envelope_ingest` CORS & `/api/v1/*` non-CORS assertions)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Live Headless Chrome E2E (`tests/e2e/verify_react_sdk.py` against restarted `maxi-loop-dev.service` on port `8080`) → PASS (204 CORS preflight on `/api/{id}/envelope/` & absent on `/api/v1/health`; Vite `.js.map` uploaded via `mlapi_...` write token; 4 minified errors → 2 grouped issues `TypeError` ×3 + `RangeError` ×1 resolved back to `src/checkout.ts` with `context_line`/`pre_context`/`post_context` + `node_modules/` marked `in_app=False` + `[Filtered]` PII; Browser React → Backend Django distributed waterfall `6 spans` across 2 services `p50=605.0ms`; tampered DSN in Chrome: 0 issues & 0 transactions)
+
+**Security notes:**
+- Self-review passed: wildcard CORS (`Access-Control-Allow-Origin: *`) is attached exclusively to the non-credentialed public DSN ingest route `/api/{project_id}/envelope/` and NEVER sets `Access-Control-Allow-Credentials`; cookie-authenticated `/api/v1/*` and `/mcp` routes remain untouched (verified by negative test on `/api/v1/health`); React E2E injects ephemeral DSN/secrets dynamically via local `/e2e-config.js` (never baked into committed code), static file handler validates `Path.resolve().is_relative_to(dist_dir)`, Chrome/backend spawned with argument arrays (`shell=False`), and negative check verifies tampered DSN ingests 0 issues & 0 transactions
+- Dependencies: 0 new production Rust or `web/` npm dependencies added; isolated test-only `@sentry/react` in `tests/e2e/react/` (`npm audit` = 0 vulnerabilities). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Implemented ingest CORS via a lightweight 20-line `axum::middleware::from_fn` directly on `crates/ingest/src/http.rs` (0 new crates) rather than a global CORS layer so cookie-authenticated `/api/v1/*` endpoints can never accidentally inherit permissive CORS
+
+**Not finished / blockers:**
+- All 5 target PRD SDK stacks (**Python FastAPI, Python Django, Go, Rust, React/Browser**) are now 100% live-verified E2E for both Error Tracking and Performance Monitoring / Distributed Tracing! Ready for user's next choice (production `Dockerfile`/`README.md` or PRD P2 features)
+
 ### 2026-11-22 — Antigravity — FastAPI & Django SDK E2E upgrade (Error + Performance + Distributed Trace) & OTel status-code parsing
 
 **Status at end of session:** done
@@ -313,32 +342,3 @@
 
 **Not finished / blockers:**
 - Ready to begin F009 (Envelope load-test generator and real Python Django/FastAPI Sentry SDK E2E verification)
-
-### 2026-11-21 — Antigravity — F007: Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0002_drop_events_partition.sql` with `SECURITY DEFINER` function `drop_expired_events_partitions(cutoff_date DATE) RETURNS TEXT[]` granted exclusively to `maxi_loop_worker` to drop expired daily child partitions of `public.events` (`^events_[0-9]{4}_[0-9]{2}_[0-9]{2}$`) older than global retention without table bloat, and added `crates/platform/build.rs` (`cargo:rerun-if-changed=../../migrations`)
-- Created `crates/retention` (`maxi-loop-retention`):
-  - `model.rs`: `RetentionConfig` (`global_retention_days`, `days_ahead`, `batch_delete_limit`, `max_batches_per_run`, `schedule_interval`) and `RetentionReport`
-  - `service.rs`: `compute_effective_retention_days` (inheriting and clamping `global -> tenant -> workspace -> project`), `compute_partition_cutoff_date`, `run_retention_cycle` (pre-creates upcoming daily partitions via `ensure_events_partition`, drops expired partitions via `drop_expired_events_partitions`, and executes bounded `LIMIT`-capped batch deletes for shorter workspace/project retention overrides as well as global expired `issue_hourly_counters`, stale `issues`, and expired `sessions`), and `spawn_retention_scheduler`
-- Wired `spawn_retention_scheduler` into `crates/server/src/main.rs` on `maxi-loop serve`
-- Added PostgreSQL 16 integration test `crates/server/tests/retention_scheduler.rs` verifying override validation (`<= global` and `<= workspace`), upcoming partition pre-creation, `DROP TABLE` on expired partitions (`-35d` and `-31d`), and multi-batch bounded deletion for 7-day project override and 14-day workspace override while preserving sibling 30-day project data in the same daily partitions
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (39 passed: 7 server unit + 5 server integration + 5 auth unit + 9 ingest unit + 1 issues unit + 1 org unit + 8 platform unit + 1 platform RLS integration + 2 retention unit)
-- `cargo build --workspace` → PASS
-- Manual smoke check (created expired partition `events_2025_01_15` → started live `maxi-loop serve` → verified background retention scheduler dropped `events_2025_01_15` automatically + clean SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: `drop_expired_events_partitions` queries `pg_inherits` scoped strictly to child tables of `public.events` matching `^events_[0-9]{4}_[0-9]{2}_[0-9]{2}$` and quotes identifier via `format('DROP TABLE IF EXISTS public.%I', rec.part_name)`; `REVOKE ALL ... FROM PUBLIC` and `GRANT EXECUTE ... TO maxi_loop_worker`; all batch deletes use parameterized queries inside `begin_worker_tx` bounded by `batch_delete_limit` and `max_batches_per_run` to prevent database lock starvation; negative tests verify out-of-range workspace/project retention overrides (`> global` / `> workspace`) are rejected with `400 Bad Request`
-- Dependencies: 0 new external crates added
-
-**Key decisions & why:**
-- Added `crates/platform/build.rs` emitting `cargo:rerun-if-changed=../../migrations` so Cargo always recompiles `sqlx::migrate!("../../migrations")` whenever a new SQL migration file is added
-
-**Not finished / blockers:**
-- Ready to begin F008 (Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart)
