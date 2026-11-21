@@ -33,6 +33,36 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F009: Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification
+
+**Status at end of session:** done
+
+**Done:**
+- Created `crates/loadgen` (`maxi-loop-loadgen` binary) in the Cargo workspace (`cli.rs`, `generator.rs`, `runner.rs`, `main.rs`):
+  - Parses HTTP Sentry DSNs (`--dsn` or `SENTRY_DSN`, redacting `public_key` in `Debug` & output), validates concurrency/total/duration/timeout bounds, generates synthetic Python Sentry Envelopes with `none`/`gzip`/`deflate`/`br` compression and optional unsupported `session` items, runs concurrent HTTP/1.1 keep-alive workers via `hyper` + `hyper-util`, and reports throughput, status breakdown, `429` header telemetry (`Retry-After`, `X-Sentry-Rate-Limits`), and `min`/`p50`/`p95`/`p99`/`max` latency percentiles (text or `--json`)
+  - Added 6 unit & live-HTTP tests covering DSN parsing/redaction, invalid-flag rejection, all compression codecs, latency percentiles, and `200`/`429` (`Retry-After` + `X-Sentry-Rate-Limits`) verification
+- Created official Python `sentry-sdk` E2E verification suite under `tests/e2e/python/` (`requirements.txt`, `verify_sentry_sdk.py`, `README.md`) testing both **FastAPI** (`FastApiIntegration`) and **Django** (`DjangoIntegration`) by changing **only the DSN**, plus a tampered-DSN negative test
+- Ran live release-mode idle RSS, throughput, `429` quota/backpressure, and Python E2E verification against `target/release/maxi-loop` + PostgreSQL 16 and documented baseline results in `docs/benchmarks-phase1.md`
+- Updated `.gitignore` for `.venv/` / `__pycache__/` and `.harness/ARCHITECTURE.md`; archived `F001` progress entry to `.harness/progress-archive.md`
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (45/45 passed: 7 server unit + 5 server integration + 5 auth + 9 ingest + 1 issues + 6 loadgen + 1 org + 8 platform unit + 1 platform RLS + 2 retention)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop -p maxi-loop-loadgen` → PASS (binary sizes: `13 MB` server + embedded SPA, `3.0 MB` loadgen)
+- Live release-mode benchmarks (`maxi-loop serve` + `maxi-loop-loadgen` + Postgres 16) → PASS (Idle RSS `8.4 MiB`, burst gzip `27.6k req/s`, burst uncompressed `63.6k req/s`, gzip + early-drop `25.6k req/s`, per-project `120/min` quota exact `120` 2xx / `380` 429 with `1:error:project`, sustained 5s `143,555` req / `23,040` persisted events with `5:error:organization` backpressure and 0 lost accepted events)
+- Official Python `sentry-sdk==2.75.0` E2E (`fastapi==0.165.0` + `django==5.2.19`) → PASS (FastAPI `4` exceptions → `2` grouped issues, Django `3` exceptions → `2` grouped issues, `in_app` frames + `context_line` preserved, `Authorization`/`Cookie` headers scrubbed to `[Filtered]`, tampered DSN rejected with 0 events ingested)
+
+**Security notes:**
+- Self-review passed: `ParsedDsn` redacts `public_key` in `Debug` and target output, accepts `SENTRY_DSN` via env to avoid CLI secret exposure, validates all numeric/string arguments with explicit bounds, enforces per-request network timeouts, and never disables TLS checks; Python E2E generates ephemeral runtime tokens via `secrets.token_hex`, passes `SENTRY_DSN` via env (never argv), executes worker subprocesses with argument arrays (`shell=False`), and includes negative invalid-DSN verification; `.venv/` gitignored and `.env` untracked
+- Dependencies: promoted `hyper` (`client`, `http1`), `hyper-util` (`tokio`), and `http-body-util` already in `Cargo.lock` (adding only 2 tiny hyper-maintained transitive crates: `try-lock` v0.2.5 and `want` v0.3.2); Python E2E deps (`sentry-sdk`, `fastapi`, `httpx`, `django`) are isolated to `tests/e2e/python/requirements.txt` and not shipped in production; `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Placed the load generator in a separate workspace crate (`crates/loadgen`) so the production `maxi-loop` binary remains lean (13 MB, 8.4 MiB idle RSS) without bundling HTTP client/load-test code
+
+**Not finished / blockers:**
+- Phase 1 (MVP, `F001`–`F009`) is now 100% complete! Ready to start Phase 2 (`F010`: Configurable PII scrubbing, Release tracking, and Alerts — Webhook first, then Telegram and Email)
+
 ### 2026-11-21 — Antigravity — F008: Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart
 
 **Status at end of session:** done
@@ -260,33 +290,3 @@
 
 **Not finished / blockers:**
 - Ready to begin F002
-
-### 2026-11-21 — Antigravity — F001: Project scaffolding, configuration, Docker Compose Postgres 16, and health server
-
-**Status at end of session:** done
-
-**Done:**
-- Initialized git repository (`main`), copied PRD & design docs into `docs/`, filled `.harness/ARCHITECTURE.md`, recorded decisions `D001`–`D005` in `.harness/decisions.md`, and populated the Phase 1–5 roadmap (`F001`–`F014`) in `.harness/feature-list.json`
-- Scaffolded `maxi-loop` Rust crate (`axum`, `tokio`, `sqlx`, `rust-embed`, `tower-http`, `tracing-subscriber`) with validated centralized config (redacted `DATABASE_URL` in Debug), security headers, bounded DB `/healthz` & `/api/v1/health`, and embedded SPA asset handler
-- Scaffolded `web/` React + TypeScript + Vite + Tailwind CSS v4 shell (`npm`) embedded into the single binary
-- Added isolated `docker-compose.yml` (`postgres:16-alpine` on `127.0.0.1:55432`) and `.env.example` (`.env` gitignored)
-- Performed manual smoke check against running Postgres 16 (`/healthz`, `/api/v1/health`, `/`, `/api/v1/unknown`, graceful SIGTERM shutdown)
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (TypeScript check + Vite production bundle built cleanly)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test` → PASS (9 passed, 0 failed)
-- `cargo build` → PASS
-- Manual smoke check (`maxi-loop` + Postgres 16) → PASS (`200 OK` on `/healthz`, `/api/v1/health`, `/`; `404` JSON on unknown API; clean SIGTERM shutdown)
-
-**Security notes:**
-- Self-review passed: all config env inputs validated with range/scheme checks; `DATABASE_URL` redacted from `Debug`/logs; health errors return generic `unavailable` without leaking DB details; global security headers (`nosniff`, `DENY`, `Referrer-Policy`, `CSP`) applied; path traversal rejected on SPA handler; `.env` gitignored and not committed; negative test cases cover missing/invalid config, unreachable DB, unknown API route, and path traversal
-- Dependency audit: `npm --prefix web audit` = 0 vulnerabilities; `cargo-audit` and `gitleaks` are not installed on this machine (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Recorded `D001`–`D005` in `.harness/decisions.md` (user confirmed all recommendations)
-
-**Not finished / blockers:**
-- None for F001; ready to begin F002 (Postgres schema, daily-partitioned events, RLS policies, and bootstrap CLI)

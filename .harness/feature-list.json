@@ -170,7 +170,7 @@
     {
       "id": "F009",
       "title": "Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "Synthetic envelope generator benchmarks ingest throughput and 429 behavior against running server",
@@ -179,9 +179,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F008"],
       "notes": "Completes Phase 1 (MVP); Design §9 & §11"

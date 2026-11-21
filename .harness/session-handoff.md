@@ -8,21 +8,17 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F008 (Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart) — done
+- Feature worked on: F009 (Envelope load-test generator and real Python Django/FastAPI Sentry SDK E2E verification) — done (**completes Phase 1 MVP**)
 
 ## Current state
 - What works and is verified:
-  - Designed 4-screen FigCraft mockup (`/home/p4ck/Documents/maxi-loop-ui.figcraft`) via FigCraft MCP using the **MaxiBoard** light Jira-inspired design system (`D007`)
-  - Implemented vertical-slice React frontend in `web/src/`:
-    - `web/src/index.css`: MaxiBoard tokens (`#FFFFFF`, `#F7F8F9`, `#172B4D`, `#0C66E4`), `.pm-lozenge`, `.pm-tab`, `.pm-input`, `.pm-bicon`
-    - `web/src/lib/api.ts`: typed HTTP client for auth, workspaces, projects/DSN rotation, issues list/detail/events/stats, and status triage with automatic `X-CSRF-Token` header attachment
-    - `web/src/modules/projects/ProjectIcon.tsx`: 12 Maxiflow Doodle SVG project icons rendered as pure typed React JSX components
-    - `web/src/modules/auth/LoginView.tsx`: single-tenant default workspace login card with optional tenant slug disclosure and `$ maxi-loop bootstrap` tip
-    - `web/src/modules/issues/` (`IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `OccurrenceChart.tsx`, `StackTraceView.tsx`): 3-pane MaxiBoard master-detail layout, status tabs, filters (`project`, `environment`, `release`, `query`, `sort`), pagination, `1h`/`1d` occurrence histogram chart, `In-app only`/`All frames` stack trace code viewer, PII-scrubbed sample event payload inspector, and `Resolve`/`Ignore`/`Unresolve` triage with `#172B4D` undo toast
-    - `web/src/modules/projects/ProjectsView.tsx`: project cards with copyable Sentry DSN, DSN rotation, retention/rate-limit metadata, and right-hand Create Project drawer with MaxiBoard icon picker + `sentry_sdk.init` snippet
-  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (39/39 passed), `cargo build --workspace`, and live smoke test
+  - **Phase 1 (MVP) `F001`–`F009` is 100% complete.**
+  - Added `crates/loadgen` (`maxi-loop-loadgen` binary): synthetic Sentry Envelope HTTP/1.1 keep-alive load-test generator supporting `none`/`gzip`/`deflate`/`br`, optional unsupported `session` early-drop item, total-request or duration modes, latency percentiles (`min`/`p50`/`p95`/`p99`/`max`), and `429` header verification (`Retry-After`, `X-Sentry-Rate-Limits`).
+  - Added official Python `sentry-sdk` E2E verification suite in `tests/e2e/python/` (`verify_sentry_sdk.py`, `requirements.txt`, `README.md`) verified live against `maxi-loop` with `sentry-sdk==2.75.0`, `fastapi==0.165.0`, and `django==5.2.19` by changing only the DSN (grouping, `in_app` frames + `context_line`, hourly counters, `[Filtered]` PII scrubbing, and invalid-DSN negative test).
+  - Documented Phase 1 baseline measurements in `docs/benchmarks-phase1.md`: `13 MB` server binary, **`8.4 MiB` idle RSS**, `27.6k req/s` gzip burst (`63.6k req/s` uncompressed), exact `120/min` per-project `429` (`1:error:project`), and `23,040` events persisted in 5s under saturation (`5:error:organization` backpressure, 0 lost accepted events, `100.6 MiB` peak RSS).
+  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (45/45 passed), `cargo build --workspace`, live release benchmarks, and Python FastAPI + Django E2E suite.
 - What is in progress but unfinished: none
-- Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
+- Files left "dirty" / half-done (if any): none (only untracked `.env` and `tests/e2e/python/.venv/`, both gitignored)
 
 ## What the next session MUST watch out for
 - Unresolved blockers: none
@@ -30,7 +26,7 @@
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F009**: Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification:
-   - Build synthetic envelope load-test generator / benchmark subcommand or tool to measure ingest throughput, latency, and `429 Too Many Requests` (`Retry-After` / `X-Sentry-Rate-Limits`) behavior against a running `maxi-loop` server
-   - Verify real Python `sentry-sdk` (FastAPI/Django) E2E exception ingestion & grouping by only changing the DSN
-   - Measure and document baseline throughput and idle RSS memory footprint (completing Phase 1 MVP).
+1. Start **Phase 2 — `F010`**: Configurable PII scrubbing, Release tracking, and Alerts (Webhook first per `D002`, then Telegram and Email):
+   - Add migration & schema for configurable PII scrub rules (inherited tenant → workspace → project), releases metadata (commit SHA mapping for future Phase 2b MCP), alert rules, and alert delivery channels/logs.
+   - Apply configurable scrub rules in `crates/ingest` worker alongside mandatory baseline scrubbing (`D002`).
+   - Implement `crates/alerts` (with SSRF protections on outbound webhooks per `.harness/SECURITY.md` §3, timeouts, and cooldown/dedup) + UI management views in `web/`.

@@ -10,6 +10,11 @@
 /web/node_modules/
 /web/dist/
 
+# Python E2E virtual environments & caches
+.venv/
+__pycache__/
+*.pyc
+
 # Logs & OS files
 *.log
 .DS_Store

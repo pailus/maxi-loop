@@ -8,6 +8,7 @@ members = [
     "crates/issues",
     "crates/retention",
     "crates/server",
+    "crates/loadgen",
 ]
 
 [workspace.package]
@@ -26,6 +27,9 @@ flate2 = "1"
 governor = "0.8"
 hex = "0.4"
 http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 mime_guess = "2"
 password-hash = { version = "0.5", features = ["rand_core", "std"] }
 rust-embed = "8"
