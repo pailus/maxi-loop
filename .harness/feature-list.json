@@ -89,7 +89,7 @@
     {
       "id": "F005",
       "title": "Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "Worker scrubs default sensitive headers (Authorization, Cookie) and fields (password, token, secret, api_key) before persistence",
@@ -99,9 +99,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F004"],
       "notes": "PRD F-ISS-1, F-ISS-4, F-ISS-5, D002 baseline PII scrubbing; Design §5.2-5.4"

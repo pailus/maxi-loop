@@ -9,6 +9,7 @@ use maxi_loop_auth::rate_limit::LoginRateLimiter;
 use maxi_loop_ingest::cache::DsnCache;
 use maxi_loop_ingest::http::IngestState;
 use maxi_loop_ingest::model::QueuedEnvelope;
+use maxi_loop_ingest::worker::{IngestWorkerConfig, spawn_ingest_worker};
 use maxi_loop_platform::config::Config;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -24,14 +25,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config, db: PgPool) -> Self {
-        let (state, mut rx) = Self::with_channel(config, db, LoginRateLimiter::default());
-        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let (state, rx) = Self::with_channel(config, db, LoginRateLimiter::default());
+        let worker_cfg = IngestWorkerConfig::from_config(&state.config);
+        spawn_ingest_worker(state.db.clone(), rx, worker_cfg);
         state
     }
 
     pub fn with_login_limiter(config: Config, db: PgPool, login_limiter: LoginRateLimiter) -> Self {
-        let (state, mut rx) = Self::with_channel(config, db, login_limiter);
-        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let (state, rx) = Self::with_channel(config, db, login_limiter);
+        let worker_cfg = IngestWorkerConfig::from_config(&state.config);
+        spawn_ingest_worker(state.db.clone(), rx, worker_cfg);
         state
     }
 
