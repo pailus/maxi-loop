@@ -86,20 +86,20 @@ A feature/task may **only** be marked `done` when ALL of these hold:
       (and `.harness/ARCHITECTURE.md` / `.harness/decisions.md` when affected)
 - [ ] No new `TODO`/`FIXME` left behind without being recorded in the feature list
 
-**Verification commands for this project** (stack: Rust + React + PostgreSQL):
+**Verification commands for this project** (stack: Rust Cargo workspace + React + PostgreSQL):
 ```bash
 npm --prefix web run build
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo check
-cargo test
-cargo build
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace
+cargo test --workspace
+cargo build --workspace
 ```
 
 **How to run the project (dev / manual smoke check):**
 ```bash
 docker compose up -d postgres
-cargo run
+cargo run -p maxi-loop
 ```
 
 **Dependency audit** (run when dependencies were added or upgraded; skip a

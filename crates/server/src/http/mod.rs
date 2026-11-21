@@ -4,11 +4,11 @@ pub mod health;
 use axum::Router;
 use axum::http::header::{self, HeaderValue};
 use axum::routing::get;
+use maxi_loop_platform::error::AppError;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::AppState;
-use crate::error::AppError;
 
 pub fn build_router(state: AppState) -> Router {
     let api_router = Router::new()
@@ -49,11 +49,11 @@ async fn api_not_found() -> AppError {
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
+    use maxi_loop_platform::config::{Config, LogFormat};
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::config::{Config, LogFormat};
 
     fn test_state_unreachable_db() -> AppState {
         let config = Config {

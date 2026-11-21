@@ -1,0 +1,29 @@
+[package]
+name = "maxi-loop"
+description = "Lightweight Sentry-compatible error tracking and performance monitoring server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "maxi-loop"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+dotenvy.workspace = true
+http.workspace = true
+maxi-loop-platform.workspace = true
+mime_guess.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

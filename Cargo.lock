@@ -814,17 +814,27 @@ dependencies = [
  "axum",
  "dotenvy",
  "http",
+ "maxi-loop-platform",
  "mime_guess",
  "rust-embed",
  "serde",
  "serde_json",
  "sqlx",
- "thiserror",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "maxi-loop-platform"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "sqlx",
+ "thiserror",
 ]
 
 [[package]]

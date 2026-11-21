@@ -1,12 +1,17 @@
-[package]
-name = "maxi-loop"
+[workspace]
+resolver = "3"
+members = [
+    "crates/platform",
+    "crates/server",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Lightweight Sentry-compatible error tracking and performance monitoring server"
 publish = false
 
-[dependencies]
+[workspace.dependencies]
 axum = "0.8"
 dotenvy = "0.15"
 http = "1"
@@ -17,9 +22,9 @@ serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-[dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
+maxi-loop-platform = { path = "crates/platform" }

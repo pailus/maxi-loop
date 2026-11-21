@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "web/dist"]
+#[folder = "../../web/dist"]
 struct WebAssets;
 
 pub async fn serve_spa(uri: Uri) -> Response {

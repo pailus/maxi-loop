@@ -8,6 +8,12 @@
 
 ---
 
+### D006 — 2026-11-21 — Cargo workspace with vertical-slice feature crates (Option A)
+**Decision:** Organize the Rust backend as a Cargo workspace under `crates/` using vertical-slice feature crates (`crates/platform`, `crates/server`, plus per-feature crates added as features are built: `auth`, `org`, `ingest`, `issues`, `retention`, `alerts`, `mcp`, `performance`, `sourcemaps`), and mirror the feature-modular layout in the frontend (`web/src/modules/<feature>/`).
+**Why:** Compiler-enforced module boundaries (e.g., `crates/mcp` cannot import `sqlx` directly and must go through service crates), clean per-module ownership matching the 1-feature-at-a-time workflow, and cheap future scaling (Design §6: splitting ingest/worker roles or swapping queue/storage behind traits).
+**Rejected:** Single-crate monolith; layer-first top-level folders (`domain/`, `storage/`, `service/`, `http/`).
+**Decided by:** user
+
 ### D005 — 2026-11-21 — Frontend stack & ingest protocol scope
 **Decision:** Build the embedded UI with Vite + React + TypeScript + Tailwind CSS (managed with `npm`, English UI), embedded in the Rust binary via `rust-embed`. Implement Sentry's modern `/api/{project_id}/envelope/` endpoint only (skip legacy `/store/`).
 **Why:** `npm` is available in the environment (no `pnpm`/`bun`), single-binary deployment requires static asset embedding, and all target modern Sentry SDKs (Python, Go, Rust, JS) use the envelope protocol.

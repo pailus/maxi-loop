@@ -8,22 +8,22 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F001 — Project scaffolding, configuration, Docker Compose Postgres 16, and health server (done)
+- Feature worked on: F001 + Cargo Workspace vertical-slice refactor (`D006`) — done
 
 ## Current state
 - What works and is verified:
-  - `maxi-loop` single-binary Rust server + embedded Vite/React/TS/Tailwind SPA (`web/dist`)
+  - Cargo workspace (`crates/platform`, `crates/server`) producing single binary `maxi-loop`
+  - Vertical-slice React SPA (`web/src/{app,lib,modules/health}`) embedded via `rust-embed` (`../../web/dist`)
   - Isolated Docker Compose PostgreSQL 16 (`maxi-loop-postgres` on `127.0.0.1:55432`)
-  - `/healthz` and `/api/v1/health` verified with real Postgres connectivity, security headers, safe 404 JSON fallback, and graceful SIGTERM shutdown
-  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (9/9), `cargo build`
+  - All workspace checks pass: `npm --prefix web run build`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (9/9), `cargo build --workspace`, and live smoke test
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
 
 ## What the next session MUST watch out for
 - Unresolved blockers: none
-- Decisions still waiting for user confirmation: none (`D001`–`D005` all confirmed)
+- Decisions still waiting for user confirmation: none (`D001`–`D006` all confirmed)
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F002**: PostgreSQL schema migrations (`tenants`, `workspaces`, `projects`, `users`, `memberships`, `sessions`, `issues`, daily-partitioned `events`, `issue_hourly_counters`), RLS tenant-isolation policies + worker role, and idempotent single-tenant bootstrap CLI/first-boot.
-2. Add integration tests verifying migrations, partition creation, and RLS isolation against `maxi-loop-postgres`.
+1. Start **F002**: PostgreSQL schema migrations (`migrations/`), `TenantContext` + RLS transaction helper in `crates/platform`, worker DB role, and idempotent single-tenant bootstrap CLI/first-boot.
+2. Add integration tests verifying migrations, daily partition creation, and RLS tenant isolation against `maxi-loop-postgres`.

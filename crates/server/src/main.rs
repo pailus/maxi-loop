@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
 
-use maxi_loop::config::{Config, LogFormat};
+use maxi_loop::AppState;
 use maxi_loop::http::build_router;
-use maxi_loop::{AppState, connect_db};
+use maxi_loop_platform::config::{Config, LogFormat};
+use maxi_loop_platform::db::connect_db;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
