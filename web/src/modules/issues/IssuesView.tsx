@@ -39,6 +39,7 @@ interface IssuesViewProps {
   onSelectProjectSlug: (slug: string) => void;
   globalSearchQuery: string;
   initialTabMode?: IssuesTabMode;
+  initialReleaseFilter?: string;
   canTriage: boolean;
   onShowToast: (message: string, undoAction?: () => void) => void;
   onNavigateToProjects: () => void;
@@ -63,6 +64,7 @@ export function IssuesView({
   onSelectProjectSlug,
   globalSearchQuery,
   initialTabMode = "unresolved",
+  initialReleaseFilter = "",
   canTriage,
   onShowToast,
   onNavigateToProjects,
@@ -70,7 +72,14 @@ export function IssuesView({
   const [tabMode, setTabMode] = useState<IssuesTabMode>(initialTabMode);
   const [localSearch, setLocalSearch] = useState("");
   const [environment, setEnvironment] = useState("");
-  const [release, setRelease] = useState("");
+  const [release, setRelease] = useState(initialReleaseFilter);
+
+  useEffect(() => {
+    if (initialReleaseFilter) {
+      setRelease(initialReleaseFilter);
+      setPage(1);
+    }
+  }, [initialReleaseFilter]);
   const [sort, setSort] = useState<"last_seen" | "first_seen" | "events">("last_seen");
   const [page, setPage] = useState(1);
 

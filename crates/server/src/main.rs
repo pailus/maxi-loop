@@ -122,6 +122,18 @@ async fn main() {
             std::process::exit(1);
         }
     }
+    match state.scrub_cache.reload_from_db(&state.db).await {
+        Ok(loaded_pii_rules) => {
+            info!(
+                loaded_pii_rules,
+                "preloaded configurable PII scrub rules into memory"
+            );
+        }
+        Err(err) => {
+            error!(error = %err, "failed to preload PII scrub rules cache");
+            std::process::exit(1);
+        }
+    }
     let retention_cfg = RetentionConfig::from_config(&state.config);
     spawn_retention_scheduler(state.db.clone(), retention_cfg);
     let app = build_router(state);

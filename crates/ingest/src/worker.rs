@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use maxi_loop_platform::alert_notify::{AlertSignal, AlertSignalKind, AlertSignalObserver};
 use maxi_loop_platform::config::Config;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::begin_worker_tx;
@@ -10,8 +12,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
-use crate::fingerprint::{ProcessedEvent, process_queued_event};
+use crate::fingerprint::{ProcessedEvent, process_queued_event_with_rules};
 use crate::model::{QueuedEnvelope, QueuedEvent};
+use crate::scrub_cache::ScrubRulesCache;
 
 #[derive(Clone, Copy, Debug)]
 pub struct IngestWorkerConfig {
@@ -74,13 +77,23 @@ pub fn truncate_to_hour_utc(ts: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp(hour_secs, 0).unwrap_or(ts)
 }
 
-/// Spawn the asynchronous ingest batch worker that drains `QueuedEnvelope` items from the bounded
-/// `tokio::sync::mpsc` channel, scrubs PII, computes fingerprints, and flushes batches to PostgreSQL
-/// every `100ms`–`1s` (or when `max_batch_events` is reached).
+/// Spawn the asynchronous ingest batch worker with default (baseline-only) PII scrubbing.
 pub fn spawn_ingest_worker(
+    pool: PgPool,
+    rx: mpsc::Receiver<QueuedEnvelope>,
+    worker_config: IngestWorkerConfig,
+) -> JoinHandle<()> {
+    spawn_ingest_worker_with_hooks(pool, rx, worker_config, None, None)
+}
+
+/// Spawn the asynchronous ingest batch worker with inherited configurable PII scrubbing (`ScrubRulesCache`)
+/// and real-time alert signal emission (`AlertSignalObserver`).
+pub fn spawn_ingest_worker_with_hooks(
     pool: PgPool,
     mut rx: mpsc::Receiver<QueuedEnvelope>,
     worker_config: IngestWorkerConfig,
+    scrub_cache: Option<ScrubRulesCache>,
+    alert_observer: Option<Arc<dyn AlertSignalObserver>>,
 ) -> JoinHandle<()> {
     let flush_interval = worker_config
         .flush_interval
@@ -97,27 +110,36 @@ pub fn spawn_ingest_worker(
                 None => break,
             };
 
-            append_envelope_events(first, &mut pending);
+            append_envelope_events(first, scrub_cache.as_ref(), &mut pending);
 
             let deadline = tokio::time::Instant::now() + flush_interval;
             while pending.len() < max_batch_events {
                 match tokio::time::timeout_at(deadline, rx.recv()).await {
                     Ok(Some(envelope)) => {
-                        append_envelope_events(envelope, &mut pending);
+                        append_envelope_events(envelope, scrub_cache.as_ref(), &mut pending);
                     }
                     Ok(None) | Err(_) => break,
                 }
             }
 
             if !pending.is_empty() {
-                if let Err(err) =
-                    flush_processed_batch(&pool, &pending, max_full_events_per_issue).await
+                match flush_processed_batch_with_signals(&pool, &pending, max_full_events_per_issue)
+                    .await
                 {
-                    error!(
-                        batch_events = pending.len(),
-                        error = %err,
-                        "failed to flush ingest event batch to PostgreSQL"
-                    );
+                    Ok((_stats, signals)) => {
+                        if let Some(observer) = &alert_observer {
+                            for sig in signals {
+                                observer.on_alert_signal(sig);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!(
+                            batch_events = pending.len(),
+                            error = %err,
+                            "failed to flush ingest event batch to PostgreSQL"
+                        );
+                    }
                 }
                 pending.clear();
             }
@@ -125,9 +147,23 @@ pub fn spawn_ingest_worker(
     })
 }
 
-fn append_envelope_events(envelope: QueuedEnvelope, out: &mut Vec<ProcessedEvent>) {
+fn append_envelope_events(
+    envelope: QueuedEnvelope,
+    scrub_cache: Option<&ScrubRulesCache>,
+    out: &mut Vec<ProcessedEvent>,
+) {
+    let custom_rules = scrub_cache
+        .map(|c| {
+            c.effective_rules(
+                envelope.tenant_id,
+                envelope.workspace_id,
+                envelope.project_id,
+            )
+        })
+        .unwrap_or_default();
+
     for raw_ev in envelope.events {
-        match process_queued_event(raw_ev) {
+        match process_queued_event_with_rules(raw_ev, &custom_rules) {
             Ok(processed) => out.push(processed),
             Err(err) => {
                 warn!(
@@ -150,25 +186,31 @@ pub async fn flush_queued_events(
 ) -> Result<BatchFlushStats, AppError> {
     let mut processed = Vec::with_capacity(events.len());
     for ev in events {
-        processed.push(process_queued_event(ev)?);
+        processed.push(process_queued_event_with_rules(ev, &[])?);
     }
     flush_processed_batch(pool, &processed, max_full_events_per_issue).await
 }
 
-/// Flush a batch of `ProcessedEvent` items to PostgreSQL inside a single `maxi_loop_worker` transaction:
-/// 1. Ensures target daily `events_YYYY_MM_DD` partitions exist.
-/// 2. Upserts `issues` grouped by `(tenant_id, project_id, fingerprint)` and auto-reopens `resolved`
-///    issues on regression (`status = 'unresolved'`, `is_regressed = TRUE`).
-/// 3. Caps full event payloads stored in `events` at `max_full_events_per_issue` (+ sample on first
-///    event or regression after cap).
-/// 4. Batch-inserts stored `events` and batch-upserts `issue_hourly_counters`.
+/// Flush a batch of `ProcessedEvent` items to PostgreSQL inside a single `maxi_loop_worker` transaction.
 pub async fn flush_processed_batch(
     pool: &PgPool,
     batch: &[ProcessedEvent],
     max_full_events_per_issue: u32,
 ) -> Result<BatchFlushStats, AppError> {
+    let (stats, _signals) =
+        flush_processed_batch_with_signals(pool, batch, max_full_events_per_issue).await?;
+    Ok(stats)
+}
+
+/// Flush a batch of `ProcessedEvent` items to PostgreSQL inside a single `maxi_loop_worker` transaction
+/// and return both flush statistics and real-time `AlertSignal`s (for new issues & regressions).
+pub async fn flush_processed_batch_with_signals(
+    pool: &PgPool,
+    batch: &[ProcessedEvent],
+    max_full_events_per_issue: u32,
+) -> Result<(BatchFlushStats, Vec<AlertSignal>), AppError> {
     if batch.is_empty() {
-        return Ok(BatchFlushStats::default());
+        return Ok((BatchFlushStats::default(), Vec::new()));
     }
 
     let cap = i32::try_from(max_full_events_per_issue.max(1)).unwrap_or(50);
@@ -212,6 +254,9 @@ pub async fn flush_processed_batch(
 
     let mut events_to_insert: Vec<EventToInsert> = Vec::new();
     let mut hourly_increments: BTreeMap<(i64, i64, i64, DateTime<Utc>), i64> = BTreeMap::new();
+    let mut release_agg: BTreeMap<(i64, i64, String), ReleaseAgg> = BTreeMap::new();
+    let mut issue_release_agg: BTreeMap<(i64, i64, i64, String), IssueReleaseAgg> = BTreeMap::new();
+    let mut alert_signals: Vec<AlertSignal> = Vec::new();
     let mut regressed_issues = 0usize;
 
     for ((tenant_id, project_id, fingerprint), group_events) in &grouped {
@@ -221,6 +266,10 @@ pub async fn flush_processed_batch(
             .map(|e| e.received_at)
             .min()
             .unwrap_or_else(Utc::now);
+        let first_release_in_batch = group_events
+            .iter()
+            .min_by_key(|e| e.received_at)
+            .and_then(|e| e.release.clone());
         let latest_ev = group_events
             .iter()
             .max_by_key(|e| e.received_at)
@@ -240,6 +289,7 @@ pub async fn flush_processed_batch(
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("select issue for update: {err}")))?;
 
+        let is_new_issue = existing.is_none();
         let (issue_id, prev_stored, was_resolved, mut sample_event_id) = match existing {
             Some(row) => {
                 let is_regression = row.status == "resolved";
@@ -283,9 +333,9 @@ pub async fn flush_processed_batch(
             sample_event_id = Some(sample_ev.event_id.clone());
         }
 
-        let resolved_issue_id: i64 = match issue_id {
+        let (resolved_issue_id, total_issue_events): (i64, i64) = match issue_id {
             Some((id, next_status, next_regressed)) => {
-                sqlx::query(
+                let updated_count: i64 = sqlx::query_scalar(
                     "UPDATE issues \
                      SET title = $4, \
                          exception_type = $5, \
@@ -299,10 +349,12 @@ pub async fn flush_processed_batch(
                          first_seen = LEAST(first_seen, $13), \
                          last_seen = GREATEST(last_seen, $14), \
                          last_environment = $15, \
-                         last_release = COALESCE($16, last_release), \
-                         sample_event_id = COALESCE($17, sample_event_id), \
+                         first_release = COALESCE(first_release, $16), \
+                         last_release = COALESCE($17, last_release), \
+                         sample_event_id = COALESCE($18, sample_event_id), \
                          updated_at = NOW() \
-                     WHERE tenant_id = $1 AND project_id = $2 AND id = $3",
+                     WHERE tenant_id = $1 AND project_id = $2 AND id = $3 \
+                     RETURNING event_count",
                 )
                 .bind(*tenant_id)
                 .bind(*project_id)
@@ -319,23 +371,24 @@ pub async fn flush_processed_batch(
                 .bind(first_seen)
                 .bind(latest_ev.received_at)
                 .bind(&latest_ev.environment)
+                .bind(&first_release_in_batch)
                 .bind(&latest_ev.release)
                 .bind(&sample_event_id)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await
                 .map_err(|err| AppError::DatabaseQuery(format!("update issue {id}: {err}")))?;
-                id
+                (id, updated_count)
             }
             None => {
-                sqlx::query_scalar::<_, i64>(
+                let new_id: i64 = sqlx::query_scalar(
                     "INSERT INTO issues ( \
                         tenant_id, project_id, fingerprint, title, exception_type, exception_value, \
                         culprit, level, status, is_regressed, event_count, stored_full_events, \
-                        first_seen, last_seen, last_environment, last_release, sample_event_id \
+                        first_seen, last_seen, last_environment, first_release, last_release, sample_event_id \
                      ) VALUES ( \
                         $1, $2, $3, $4, $5, $6, \
                         $7, $8, 'unresolved', FALSE, $9, $10, \
-                        $11, $12, $13, $14, $15 \
+                        $11, $12, $13, $14, $15, $16 \
                      ) RETURNING id",
                 )
                 .bind(*tenant_id)
@@ -351,13 +404,37 @@ pub async fn flush_processed_batch(
                 .bind(first_seen)
                 .bind(latest_ev.received_at)
                 .bind(&latest_ev.environment)
+                .bind(&first_release_in_batch)
                 .bind(&latest_ev.release)
                 .bind(&sample_event_id)
                 .fetch_one(&mut *tx)
                 .await
-                .map_err(|err| AppError::DatabaseQuery(format!("insert issue: {err}")))?
+                .map_err(|err| AppError::DatabaseQuery(format!("insert issue: {err}")))?;
+                (new_id, batch_event_count)
             }
         };
+
+        if is_new_issue || was_resolved {
+            alert_signals.push(AlertSignal {
+                tenant_id: *tenant_id,
+                workspace_id: latest_ev.workspace_id,
+                project_id: *project_id,
+                issue_id: resolved_issue_id,
+                kind: if is_new_issue {
+                    AlertSignalKind::NewIssue
+                } else {
+                    AlertSignalKind::Regression
+                },
+                title: latest_ev.title.clone(),
+                exception_type: latest_ev.exception_type.clone(),
+                exception_value: latest_ev.exception_value.clone(),
+                culprit: latest_ev.culprit.clone(),
+                level: latest_ev.level.clone(),
+                environment: latest_ev.environment.clone(),
+                release: latest_ev.release.clone(),
+                event_count: total_issue_events,
+            });
+        }
 
         // Queue capped full events (up to `regular_to_store`) for multi-row batch insert.
         for (idx, ev) in group_events.iter().take(regular_to_store).enumerate() {
@@ -404,16 +481,149 @@ pub async fn flush_processed_batch(
             });
         }
 
-        // Aggregate hourly counters for ALL events in the group (even when full payloads are capped).
+        // Aggregate hourly counters AND release links for ALL events in the group.
+        let mut new_issue_attributed_to_release = false;
         for ev in group_events {
             let hour_bucket = truncate_to_hour_utc(ev.received_at);
             *hourly_increments
                 .entry((*tenant_id, *project_id, resolved_issue_id, hour_bucket))
                 .or_insert(0) += 1;
+
+            if let Some(version) = ev.release.as_deref() {
+                let rel_entry = release_agg
+                    .entry((*tenant_id, *project_id, version.to_owned()))
+                    .or_insert_with(|| ReleaseAgg {
+                        environment: Some(ev.environment.clone()),
+                        first_seen: ev.received_at,
+                        last_seen: ev.received_at,
+                        event_count: 0,
+                        new_issues_count: 0,
+                    });
+                rel_entry.first_seen = rel_entry.first_seen.min(ev.received_at);
+                if ev.received_at >= rel_entry.last_seen {
+                    rel_entry.last_seen = ev.received_at;
+                    rel_entry.environment = Some(ev.environment.clone());
+                }
+                rel_entry.event_count += 1;
+                if is_new_issue && !new_issue_attributed_to_release {
+                    rel_entry.new_issues_count += 1;
+                    new_issue_attributed_to_release = true;
+                }
+
+                let ir_entry = issue_release_agg
+                    .entry((
+                        *tenant_id,
+                        *project_id,
+                        resolved_issue_id,
+                        version.to_owned(),
+                    ))
+                    .or_insert_with(|| IssueReleaseAgg {
+                        first_seen: ev.received_at,
+                        last_seen: ev.received_at,
+                        event_count: 0,
+                    });
+                ir_entry.first_seen = ir_entry.first_seen.min(ev.received_at);
+                ir_entry.last_seen = ir_entry.last_seen.max(ev.received_at);
+                ir_entry.event_count += 1;
+            }
         }
     }
 
-    // 3. Multi-row batch insert into `events` (for events under the per-issue cap + sample).
+    // 3. Multi-row batch upsert into `releases` and `issue_releases` for tracked releases.
+    if !release_agg.is_empty() {
+        let rel_rows: Vec<ReleaseUpsertRow> = release_agg
+            .into_iter()
+            .map(|((tenant_id, project_id, version), agg)| {
+                let commit_sha = infer_commit_sha(&version);
+                ReleaseUpsertRow {
+                    tenant_id,
+                    project_id,
+                    version,
+                    commit_sha,
+                    environment: agg.environment,
+                    first_seen: agg.first_seen,
+                    last_seen: agg.last_seen,
+                    event_count: agg.event_count,
+                    new_issues_count: agg.new_issues_count,
+                }
+            })
+            .collect();
+
+        let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO releases ( \
+                tenant_id, project_id, version, commit_sha, environment, \
+                first_seen, last_seen, event_count, new_issues_count \
+             ) ",
+        );
+        qb.push_values(&rel_rows, |mut b, row| {
+            b.push_bind(row.tenant_id)
+                .push_bind(row.project_id)
+                .push_bind(&row.version)
+                .push_bind(&row.commit_sha)
+                .push_bind(&row.environment)
+                .push_bind(row.first_seen)
+                .push_bind(row.last_seen)
+                .push_bind(row.event_count)
+                .push_bind(row.new_issues_count);
+        });
+        qb.push(
+            " ON CONFLICT (tenant_id, project_id, version) DO UPDATE SET \
+                commit_sha = COALESCE(releases.commit_sha, EXCLUDED.commit_sha), \
+                environment = COALESCE(EXCLUDED.environment, releases.environment), \
+                first_seen = LEAST(releases.first_seen, EXCLUDED.first_seen), \
+                last_seen = GREATEST(releases.last_seen, EXCLUDED.last_seen), \
+                event_count = releases.event_count + EXCLUDED.event_count, \
+                new_issues_count = releases.new_issues_count + EXCLUDED.new_issues_count, \
+                updated_at = NOW()",
+        );
+        qb.build()
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| AppError::DatabaseQuery(format!("batch upsert releases: {err}")))?;
+    }
+
+    if !issue_release_agg.is_empty() {
+        let ir_rows: Vec<IssueReleaseUpsertRow> = issue_release_agg
+            .into_iter()
+            .map(
+                |((tenant_id, project_id, issue_id, version), agg)| IssueReleaseUpsertRow {
+                    tenant_id,
+                    project_id,
+                    issue_id,
+                    version,
+                    first_seen: agg.first_seen,
+                    last_seen: agg.last_seen,
+                    event_count: agg.event_count,
+                },
+            )
+            .collect();
+
+        let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO issue_releases ( \
+                tenant_id, project_id, issue_id, release_version, first_seen, last_seen, event_count \
+             ) ",
+        );
+        qb.push_values(&ir_rows, |mut b, row| {
+            b.push_bind(row.tenant_id)
+                .push_bind(row.project_id)
+                .push_bind(row.issue_id)
+                .push_bind(&row.version)
+                .push_bind(row.first_seen)
+                .push_bind(row.last_seen)
+                .push_bind(row.event_count);
+        });
+        qb.push(
+            " ON CONFLICT (tenant_id, project_id, issue_id, release_version) DO UPDATE SET \
+                first_seen = LEAST(issue_releases.first_seen, EXCLUDED.first_seen), \
+                last_seen = GREATEST(issue_releases.last_seen, EXCLUDED.last_seen), \
+                event_count = issue_releases.event_count + EXCLUDED.event_count",
+        );
+        qb.build().execute(&mut *tx).await.map_err(|err| {
+            AppError::DatabaseQuery(format!("batch upsert issue_releases: {err}"))
+        })?;
+    }
+
+    // 4. Multi-row batch insert into `events` (for events under the per-issue cap + sample).
     if !events_to_insert.is_empty() {
         let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
             "INSERT INTO events ( \
@@ -478,13 +688,63 @@ pub async fn flush_processed_batch(
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit worker batch tx: {err}")))?;
 
-    Ok(BatchFlushStats {
-        processed_events: batch.len(),
-        upserted_issues: grouped.len(),
-        regressed_issues,
-        inserted_full_events: events_to_insert.len(),
-        updated_hourly_buckets: hourly_increments.len(),
-    })
+    Ok((
+        BatchFlushStats {
+            processed_events: batch.len(),
+            upserted_issues: grouped.len(),
+            regressed_issues,
+            inserted_full_events: events_to_insert.len(),
+            updated_hourly_buckets: hourly_increments.len(),
+        },
+        alert_signals,
+    ))
+}
+
+struct ReleaseUpsertRow {
+    tenant_id: i64,
+    project_id: i64,
+    version: String,
+    commit_sha: Option<String>,
+    environment: Option<String>,
+    first_seen: DateTime<Utc>,
+    last_seen: DateTime<Utc>,
+    event_count: i64,
+    new_issues_count: i64,
+}
+
+struct IssueReleaseUpsertRow {
+    tenant_id: i64,
+    project_id: i64,
+    issue_id: i64,
+    version: String,
+    first_seen: DateTime<Utc>,
+    last_seen: DateTime<Utc>,
+    event_count: i64,
+}
+
+struct ReleaseAgg {
+    environment: Option<String>,
+    first_seen: DateTime<Utc>,
+    last_seen: DateTime<Utc>,
+    event_count: i64,
+    new_issues_count: i64,
+}
+
+struct IssueReleaseAgg {
+    first_seen: DateTime<Utc>,
+    last_seen: DateTime<Utc>,
+    event_count: i64,
+}
+
+/// If a release version looks like a 7..=40 hex Git commit SHA (or ends with `@<sha>`),
+/// infer `commit_sha` automatically so releases map directly to commits.
+fn infer_commit_sha(version: &str) -> Option<String> {
+    let candidate = version.rsplit('@').next().unwrap_or(version).trim();
+    if (7..=40).contains(&candidate.len()) && candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(candidate.to_ascii_lowercase())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

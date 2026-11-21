@@ -1,4 +1,5 @@
 use axum::extract::{FromRef, Path, Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, patch};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
@@ -9,6 +10,10 @@ use serde::Deserialize;
 use crate::model::{
     IssueDetailView, IssueEventView, IssueListFilter, IssueStatsResponse, IssueSummaryView,
     PaginatedIssuesResponse, UpdateIssueStatusInput,
+};
+use crate::releases::{
+    ReleaseListFilter, ReleaseView, UpsertReleaseInput, list_release_issues, list_releases,
+    upsert_release,
 };
 use crate::service::{
     IssueScope, get_issue_detail, get_issue_event, get_issue_stats, list_issue_events, list_issues,
@@ -72,6 +77,19 @@ where
         .route(
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/events/{event_id}",
             get(project_get_issue_event_handler),
+        )
+        // Release tracking routes
+        .route(
+            "/releases",
+            get(list_releases_handler).post(upsert_release_handler),
+        )
+        .route(
+            "/projects/{project_slug}/releases",
+            get(project_list_releases_handler),
+        )
+        .route(
+            "/releases/{release_id}/issues",
+            get(list_release_issues_handler),
         )
 }
 
@@ -406,4 +424,43 @@ async fn project_update_issue_status_handler(
     )
     .await?;
     Ok(Json(updated))
+}
+
+async fn list_releases_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Query(filter): Query<ReleaseListFilter>,
+) -> Result<Json<Vec<ReleaseView>>, AppError> {
+    let items = list_releases(&state.db, session.tenant_ctx, filter).await?;
+    Ok(Json(items))
+}
+
+async fn project_list_releases_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(project_slug): Path<String>,
+    Query(mut filter): Query<ReleaseListFilter>,
+) -> Result<Json<Vec<ReleaseView>>, AppError> {
+    filter.project_slug = Some(project_slug);
+    let items = list_releases(&state.db, session.tenant_ctx, filter).await?;
+    Ok(Json(items))
+}
+
+async fn upsert_release_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Json(input): Json<UpsertReleaseInput>,
+) -> Result<(StatusCode, Json<ReleaseView>), AppError> {
+    let rel = upsert_release(&state.db, session.tenant_ctx, session.role, input).await?;
+    Ok((StatusCode::CREATED, Json(rel)))
+}
+
+async fn list_release_issues_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(release_id): Path<i64>,
+    Query(query): Query<EventsListQuery>,
+) -> Result<Json<Vec<IssueSummaryView>>, AppError> {
+    let items = list_release_issues(&state.db, session.tenant_ctx, release_id, query.limit).await?;
+    Ok(Json(items))
 }

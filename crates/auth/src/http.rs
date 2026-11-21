@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use maxi_loop_platform::config::Config;
 use maxi_loop_platform::dsn_notify::{ProjectDsnInfo, ProjectDsnObserver};
 use maxi_loop_platform::error::AppError;
+use maxi_loop_platform::scrub_notify::{PiiScrubRuleEntry, PiiScrubRulesObserver};
 use serde::Serialize;
 use sqlx::PgPool;
 
@@ -23,6 +24,7 @@ pub struct AuthState {
     pub db: PgPool,
     pub login_limiter: LoginRateLimiter,
     pub dsn_observer: Option<Arc<dyn ProjectDsnObserver>>,
+    pub pii_observer: Option<Arc<dyn PiiScrubRulesObserver>>,
 }
 
 impl AuthState {
@@ -32,6 +34,7 @@ impl AuthState {
             db,
             login_limiter,
             dsn_observer: None,
+            pii_observer: None,
         }
     }
 
@@ -46,12 +49,41 @@ impl AuthState {
             db,
             login_limiter,
             dsn_observer: Some(dsn_observer),
+            pii_observer: None,
+        }
+    }
+
+    pub fn with_observers(
+        config: Arc<Config>,
+        db: PgPool,
+        login_limiter: LoginRateLimiter,
+        dsn_observer: Arc<dyn ProjectDsnObserver>,
+        pii_observer: Arc<dyn PiiScrubRulesObserver>,
+    ) -> Self {
+        Self {
+            config,
+            db,
+            login_limiter,
+            dsn_observer: Some(dsn_observer),
+            pii_observer: Some(pii_observer),
         }
     }
 
     pub fn notify_project_dsn(&self, info: ProjectDsnInfo) {
         if let Some(observer) = &self.dsn_observer {
             observer.on_project_dsn_upserted(info);
+        }
+    }
+
+    pub fn notify_pii_rule_upserted(&self, rule: PiiScrubRuleEntry) {
+        if let Some(observer) = &self.pii_observer {
+            observer.on_pii_rule_upserted(rule);
+        }
+    }
+
+    pub fn notify_pii_rule_deleted(&self, tenant_id: i64, rule_id: i64) {
+        if let Some(observer) = &self.pii_observer {
+            observer.on_pii_rule_deleted(tenant_id, rule_id);
         }
     }
 }

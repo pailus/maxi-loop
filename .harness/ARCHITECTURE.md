@@ -11,24 +11,25 @@
 ```
 Cargo.toml               — Cargo workspace root + shared `[workspace.dependencies]`
 docs/                    — PRD (sentry-lite-prd.md), technical design (sentry-lite-design.md), and Phase 1 benchmark report (benchmarks-phase1.md)
-migrations/              — SQLx PostgreSQL migrations (`0001_initial_schema.sql`: schema, daily partitions, RLS; `0002_drop_events_partition.sql`: `drop_expired_events_partitions`)
+migrations/              — SQLx PostgreSQL migrations (`0001_initial_schema.sql`: schema, daily partitions, RLS; `0002_drop_events_partition.sql`: `drop_expired_events_partitions`; `0003_phase2_pii_releases_alerts.sql`: `pii_scrub_rules`, `releases`, `issue_releases`, `alert_channels`, `alert_rules`, `alert_deliveries` + RLS)
 crates/                  — Rust workspace crates (vertical-slice modular layout)
-  platform/              — `maxi-loop-platform`: config, typed errors, DB pool/migrations/partitions, TenantContext & RLS tx helpers, Argon2id bootstrap
+  platform/              — `maxi-loop-platform`: config (incl. optional SMTP), typed errors, DB pool/migrations/partitions, TenantContext & RLS tx helpers, Argon2id bootstrap, observer traits (`ProjectDsnObserver`, `PiiScrubRulesObserver`, `AlertSignalObserver`)
   auth/                  — `maxi-loop-auth`: Argon2id login/logout/me, CSPRNG session token + SHA-256 hash storage, `HttpOnly`/`SameSite=Lax` cookies, CSRF protection, login rate limiter, `AuthSession` extractor
-  org/                   — `maxi-loop-org`: tenant/workspace/project/DSN service (`begin_tenant_tx` + `TenantContext`), CSPRNG DSN generation & rotation, retention override validation (`<= global`), slug & single-tenant routes
-  ingest/                — `maxi-loop-ingest`: `POST /api/{project_id}/envelope/`, in-memory `DsnCache` (0 per-envelope DB queries, live sync via `ProjectDsnObserver`), bounded gzip/deflate/brotli decompression, early drop of unsupported items, per-project `governor` rate limiting, bounded `tokio::sync::mpsc` channel backpressure (`429` + `Retry-After` / `X-Sentry-Rate-Limits`), baseline PII scrubbing (`scrub.rs`), exception + in-app frame / message fallback fingerprinting (`fingerprint.rs`), and 100ms–1s batch writer (`worker.rs`: issue upsert, regression auto-reopen, `MAX_FULL_EVENTS_PER_ISSUE` cap + sample, multi-row `events` & `issue_hourly_counters` upserts)
-  issues/                — `maxi-loop-issues`: RLS-enforced issues query/detail/stats/triage service (`begin_tenant_tx` + `TenantContext`), pagination & filtering (`project`, `environment`, `release`, `status`, `is_regressed`, `query`, `sort`), sample event & stack trace lookup, hourly/daily counter series, status triage (`unresolved`/`resolved`/`ignored` with `Role::can_triage_issues`), and single-tenant + slug-hierarchy routes
+  org/                   — `maxi-loop-org`: tenant/workspace/project/DSN service (`begin_tenant_tx` + `TenantContext`), CSPRNG DSN generation & rotation, retention override validation (`<= global`), inherited configurable PII scrub rules CRUD (`/api/v1/pii-rules`), slug & single-tenant routes
+  ingest/                — `maxi-loop-ingest`: `POST /api/{project_id}/envelope/`, in-memory `DsnCache` & `ScrubRulesCache` (0 per-envelope DB queries), bounded gzip/deflate/brotli decompression, early drop of unsupported items, per-project `governor` rate limiting, bounded `tokio::sync::mpsc` channel backpressure (`429`), mandatory baseline + inherited custom PII scrubbing (`scrub.rs`), fingerprinting (`fingerprint.rs`), and 100ms–1s batch writer (`worker.rs`: issue upsert, `first_release` + `releases`/`issue_releases` tracking, regression auto-reopen, `MAX_FULL_EVENTS_PER_ISSUE` cap, multi-row `events` & `issue_hourly_counters`, real-time `AlertSignal` emission)
+  issues/                — `maxi-loop-issues`: RLS-enforced issues & release tracking service (`begin_tenant_tx` + `TenantContext`), pagination & filtering, sample event & stack trace lookup, hourly/daily counter series, status triage, and release tracking API (`/api/v1/releases`, `/api/v1/projects/{slug}/releases`, `/api/v1/releases/{id}/issues`)
   retention/             — `maxi-loop-retention`: background retention scheduler (`spawn_retention_scheduler`) and `run_retention_cycle` (`begin_worker_tx`) pre-creating upcoming daily `events_YYYY_MM_DD` partitions, dropping partitions older than global retention via `drop_expired_events_partitions`, and running bounded batch deletes for shorter workspace/project retention overrides (`<= global`)
+  alerts/                — `maxi-loop-alerts`: RLS-enforced alert channels (`webhook`, `telegram`, `email` with masked secrets), alert rules (`new_issue`, `regression`, `spike`), SSRF-safe IP-pinned HTTPS delivery (`tokio-rustls` + `webpki-roots`, HMAC-SHA256 webhook signatures, official Telegram Bot API, server SMTP/TLS email), real-time signal consumer + 60s spike evaluator with cooldown deduplication and `alert_deliveries` audit log
   server/                — `maxi-loop` binary: composition root, CLI (`serve` / `bootstrap`), router, security headers, `/healthz`, embedded SPA
   loadgen/               — `maxi-loop-loadgen` binary: synthetic Sentry Envelope HTTP/1.1 keep-alive load-test generator (`none`/`gzip`/`deflate`/`br`), latency percentiles, and `429` (`Retry-After` / `X-Sentry-Rate-Limits`) verifier
   # Feature crates added one-by-one as each feature is built (no empty speculative crates):
-  # alerts/, mcp/, performance/, sourcemaps/
+  # mcp/, performance/, sourcemaps/
 tests/
   e2e/python/            — Official Python `sentry-sdk` (FastAPI + Django) E2E exception grouping, source context, and PII scrubbing verification suite
 web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (MaxiBoard light theme, built into `web/dist`)
   src/app/               — App shell (56px MaxiBoard topbar, 240px sidebar, global `/` search, undo toast)
   src/lib/               — Shared HTTP client (`api.ts` with cookie auth & automatic `X-CSRF-Token`)
-  src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `issues/`, `projects/`, `health/`)
+  src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `issues/`, `releases/`, `alerts/`, `projects/`, `health/`)
 docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & integration tests
 .harness/                — AI working rules, feature list, progress log, decisions, handoff
 ```

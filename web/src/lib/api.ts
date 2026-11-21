@@ -132,6 +132,7 @@ export interface IssueSummaryView {
   first_seen: string;
   last_seen: string;
   last_environment: string;
+  first_release: string | null;
   last_release: string | null;
   sample_event_id: string | null;
   created_at: string;
@@ -374,4 +375,261 @@ export async function updateIssueStatus(
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
+}
+
+// --- Phase 2: Configurable PII Scrubbing ---
+
+export type PiiScrubRuleType = "field_name" | "header_name" | "value_substring";
+
+export interface PiiScrubRuleView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  project_id: number | null;
+  project_slug: string | null;
+  scope: "tenant" | "workspace" | "project";
+  name: string;
+  rule_type: PiiScrubRuleType;
+  pattern: string;
+  replacement: string;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePiiScrubRuleInput {
+  name: string;
+  rule_type: PiiScrubRuleType;
+  pattern: string;
+  replacement?: string;
+  workspace_slug?: string;
+  project_slug?: string;
+}
+
+export async function fetchPiiRules(): Promise<PiiScrubRuleView[]> {
+  return requestJson<PiiScrubRuleView[]>("/api/v1/pii-rules");
+}
+
+export async function createPiiRule(
+  input: CreatePiiScrubRuleInput,
+): Promise<PiiScrubRuleView> {
+  return requestJson<PiiScrubRuleView>("/api/v1/pii-rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function togglePiiRule(
+  ruleId: number,
+  isEnabled: boolean,
+): Promise<PiiScrubRuleView> {
+  return requestJson<PiiScrubRuleView>(`/api/v1/pii-rules/${ruleId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_enabled: isEnabled }),
+  });
+}
+
+export async function deletePiiRule(ruleId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/pii-rules/${ruleId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to delete PII rule (${res.status})`);
+  }
+}
+
+// --- Phase 2: Release Tracking ---
+
+export interface ReleaseView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number;
+  workspace_slug: string;
+  project_id: number;
+  project_slug: string;
+  version: string;
+  commit_sha: string | null;
+  environment: string | null;
+  notes: string;
+  first_seen: string;
+  last_seen: string;
+  deployed_at: string | null;
+  event_count: number;
+  new_issues_count: number;
+  linked_issues_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertReleaseInput {
+  project_slug: string;
+  workspace_slug?: string;
+  version: string;
+  commit_sha?: string;
+  environment?: string;
+  notes?: string;
+}
+
+export async function fetchReleases(projectSlug?: string): Promise<ReleaseView[]> {
+  const qs = projectSlug ? `?project_slug=${encodeURIComponent(projectSlug)}` : "";
+  return requestJson<ReleaseView[]>(`/api/v1/releases${qs}`);
+}
+
+export async function upsertRelease(input: UpsertReleaseInput): Promise<ReleaseView> {
+  return requestJson<ReleaseView>("/api/v1/releases", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// --- Phase 2: Alerts (Webhook, Telegram, Email) ---
+
+export type AlertChannelType = "webhook" | "telegram" | "email";
+export type AlertTriggerType = "new_issue" | "regression" | "spike";
+
+export interface AlertChannelView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  project_id: number | null;
+  project_slug: string | null;
+  scope: "tenant" | "workspace" | "project";
+  name: string;
+  channel_type: AlertChannelType;
+  config_summary: Record<string, unknown>;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAlertChannelInput {
+  name: string;
+  channel_type: AlertChannelType;
+  config: Record<string, unknown>;
+  workspace_slug?: string;
+  project_slug?: string;
+}
+
+export interface AlertRuleView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  project_id: number | null;
+  project_slug: string | null;
+  scope: "tenant" | "workspace" | "project";
+  channel_id: number;
+  channel_name: string;
+  channel_type: AlertChannelType;
+  name: string;
+  trigger_type: AlertTriggerType;
+  environment_filter: string | null;
+  spike_threshold: number | null;
+  spike_window_minutes: number | null;
+  cooldown_minutes: number;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAlertRuleInput {
+  name: string;
+  channel_id: number;
+  trigger_type: AlertTriggerType;
+  project_slug?: string;
+  environment_filter?: string;
+  spike_threshold?: number;
+  spike_window_minutes?: number;
+  cooldown_minutes?: number;
+}
+
+export interface AlertDeliveryView {
+  id: number;
+  tenant_id: number;
+  project_id: number;
+  project_slug: string;
+  rule_id: number;
+  rule_name: string;
+  channel_id: number;
+  channel_name: string;
+  issue_id: number;
+  issue_title: string;
+  trigger_type: AlertTriggerType;
+  channel_type: AlertChannelType;
+  status: "sent" | "failed" | "skipped";
+  http_status: number | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export async function fetchAlertChannels(): Promise<AlertChannelView[]> {
+  return requestJson<AlertChannelView[]>("/api/v1/alerts/channels");
+}
+
+export async function createAlertChannel(
+  input: CreateAlertChannelInput,
+): Promise<AlertChannelView> {
+  return requestJson<AlertChannelView>("/api/v1/alerts/channels", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAlertChannel(channelId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/alerts/channels/${channelId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to delete channel (${res.status})`);
+  }
+}
+
+export async function fetchAlertRules(): Promise<AlertRuleView[]> {
+  return requestJson<AlertRuleView[]>("/api/v1/alerts/rules");
+}
+
+export async function createAlertRule(
+  input: CreateAlertRuleInput,
+): Promise<AlertRuleView> {
+  return requestJson<AlertRuleView>("/api/v1/alerts/rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function toggleAlertRule(
+  ruleId: number,
+  isEnabled: boolean,
+): Promise<AlertRuleView> {
+  return requestJson<AlertRuleView>(`/api/v1/alerts/rules/${ruleId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_enabled: isEnabled }),
+  });
+}
+
+export async function deleteAlertRule(ruleId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/alerts/rules/${ruleId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to delete rule (${res.status})`);
+  }
+}
+
+export async function fetchAlertDeliveries(limit = 50): Promise<AlertDeliveryView[]> {
+  return requestJson<AlertDeliveryView[]>(`/api/v1/alerts/deliveries?limit=${limit}`);
 }

@@ -10,6 +10,30 @@ pub enum LogFormat {
 }
 
 #[derive(Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub from_address: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub use_tls: bool,
+}
+
+impl fmt::Debug for SmtpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redacted_pw = self.password.as_ref().map(|_| "<redacted>");
+        f.debug_struct("SmtpConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("from_address", &self.from_address)
+            .field("username", &self.username)
+            .field("password", &redacted_pw)
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct Config {
     pub app_host: IpAddr,
     pub app_port: u16,
@@ -33,6 +57,7 @@ pub struct Config {
     pub bootstrap_admin_email: Option<String>,
     pub bootstrap_admin_password: Option<String>,
     pub bootstrap_admin_name: String,
+    pub smtp: Option<SmtpConfig>,
 }
 
 // Redact sensitive fields so credentials can never be logged via Debug.
@@ -68,6 +93,7 @@ impl fmt::Debug for Config {
             .field("bootstrap_admin_email", &self.bootstrap_admin_email)
             .field("bootstrap_admin_password", &redacted_admin_pw)
             .field("bootstrap_admin_name", &self.bootstrap_admin_name)
+            .field("smtp", &self.smtp)
             .finish()
     }
 }
@@ -261,6 +287,8 @@ impl Config {
             "BOOTSTRAP_ADMIN_NAME",
         )?;
 
+        let smtp = parse_smtp_config(&lookup)?;
+
         Ok(Self {
             app_host,
             app_port,
@@ -284,12 +312,68 @@ impl Config {
             bootstrap_admin_email,
             bootstrap_admin_password,
             bootstrap_admin_name,
+            smtp,
         })
     }
 
     pub fn socket_addr(&self) -> Result<SocketAddr, ConfigError> {
         Ok(SocketAddr::new(self.app_host, self.app_port))
     }
+}
+
+fn parse_smtp_config<F>(lookup: &F) -> Result<Option<SmtpConfig>, ConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(host) = lookup("SMTP_HOST")
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if host.len() > 253 || host.chars().any(char::is_whitespace) {
+        return Err(ConfigError::InvalidValue(
+            "SMTP_HOST",
+            "must be a valid hostname",
+        ));
+    }
+
+    let port = parse_u16_range(
+        lookup("SMTP_PORT").as_deref(),
+        587,
+        1,
+        u16::MAX,
+        "SMTP_PORT",
+    )?;
+    let from_address = lookup("SMTP_FROM")
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .ok_or(ConfigError::InvalidValue(
+            "SMTP_FROM",
+            "must be set when SMTP_HOST is configured",
+        ))?;
+    if !is_valid_email(&from_address) {
+        return Err(ConfigError::InvalidValue(
+            "SMTP_FROM",
+            "must be a valid email address",
+        ));
+    }
+
+    let username = lookup("SMTP_USERNAME")
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let password = lookup("SMTP_PASSWORD").filter(|s| !s.is_empty());
+    let use_tls = parse_bool(lookup("SMTP_USE_TLS").as_deref(), true, "SMTP_USE_TLS")?;
+
+    Ok(Some(SmtpConfig {
+        host,
+        port,
+        from_address,
+        username,
+        password,
+        use_tls,
+    }))
 }
 
 fn parse_public_base_url(

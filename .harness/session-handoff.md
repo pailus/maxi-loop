@@ -6,27 +6,28 @@
 > recorded in progress.md).
 
 ## Last session
-- Date: 2026-11-21
+- Date: 2026-11-22
 - Assistant: Antigravity
-- Feature worked on: F009 (Envelope load-test generator and real Python Django/FastAPI Sentry SDK E2E verification) — done (**completes Phase 1 MVP**)
+- Feature worked on: F010 (Phase 2: Configurable PII scrubbing, Release tracking, and Alerts — Webhook, Telegram, Email) — done
 
 ## Current state
 - What works and is verified:
-  - **Phase 1 (MVP) `F001`–`F009` is 100% complete.**
-  - Added `crates/loadgen` (`maxi-loop-loadgen` binary): synthetic Sentry Envelope HTTP/1.1 keep-alive load-test generator supporting `none`/`gzip`/`deflate`/`br`, optional unsupported `session` early-drop item, total-request or duration modes, latency percentiles (`min`/`p50`/`p95`/`p99`/`max`), and `429` header verification (`Retry-After`, `X-Sentry-Rate-Limits`).
-  - Added official Python `sentry-sdk` E2E verification suite in `tests/e2e/python/` (`verify_sentry_sdk.py`, `requirements.txt`, `README.md`) verified live against `maxi-loop` with `sentry-sdk==2.75.0`, `fastapi==0.165.0`, and `django==5.2.19` by changing only the DSN (grouping, `in_app` frames + `context_line`, hourly counters, `[Filtered]` PII scrubbing, and invalid-DSN negative test).
-  - Documented Phase 1 baseline measurements in `docs/benchmarks-phase1.md`: `13 MB` server binary, **`8.4 MiB` idle RSS**, `27.6k req/s` gzip burst (`63.6k req/s` uncompressed), exact `120/min` per-project `429` (`1:error:project`), and `23,040` events persisted in 5s under saturation (`5:error:organization` backpressure, 0 lost accepted events, `100.6 MiB` peak RSS).
-  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (45/45 passed), `cargo build --workspace`, live release benchmarks, and Python FastAPI + Django E2E suite.
+  - **Phase 1 (`F001`–`F009`) and Phase 2 (`F010`) are complete.**
+  - Added migration `migrations/0003_phase2_pii_releases_alerts.sql` (`issues.first_release`, `pii_scrub_rules`, `releases`, `issue_releases`, `alert_channels`, `alert_rules`, `alert_deliveries` + RLS).
+  - Implemented inherited configurable PII scrubbing (`crates/org/src/pii.rs`, `crates/ingest/src/scrub_cache.rs`, `scrub.rs`) applied additively after mandatory baseline scrubbing (`D002`), live-synced in memory.
+  - Implemented Release tracking (`crates/ingest/src/worker.rs`, `crates/issues/src/releases.rs`) auto-tracking releases & inferred `commit_sha`, linking issues via `issue_releases`, and exposing `/api/v1/releases` + `/api/v1/releases/{id}/issues`.
+  - Created `crates/alerts` (`maxi-loop-alerts`) with SSRF-safe IP-pinned delivery (`ssrf.rs`, `delivery.rs`), HMAC-SHA256 Webhook (priority #1), Telegram Bot API, server-configured SMTP/TLS Email, real-time `new_issue`/`regression` consumer + 60s `spike` evaluator (`engine.rs`), cooldown deduplication, masked secrets, and `/api/v1/alerts/{channels,rules,deliveries}` routes.
+  - Added MaxiBoard UI views `ReleasesView.tsx` and `AlertsView.tsx` in `web/src/modules/` and rebuilt embedded SPA.
+  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (48/48 passed), `cargo build --workspace`, `cargo build --release -p maxi-loop`, and live smoke check against restarted `maxi-loop-dev.service` on port `8080`.
 - What is in progress but unfinished: none
-- Files left "dirty" / half-done (if any): none (only untracked `.env` and `tests/e2e/python/.venv/`, both gitignored)
+- Files left "dirty" / half-done (if any): none (only gitignored `.env`, `.env.local`, and `tests/e2e/python/.venv/`)
 
 ## What the next session MUST watch out for
-- Unresolved blockers: none
-- Decisions still waiting for user confirmation: none
-- Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
+- Running service: `maxi-loop-dev.service` (systemd user unit) is running on `127.0.0.1:8080` for the user's Agentway tunnel preview.
+- Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host.
 
 ## Suggested next steps
-1. Start **Phase 2 — `F010`**: Configurable PII scrubbing, Release tracking, and Alerts (Webhook first per `D002`, then Telegram and Email):
-   - Add migration & schema for configurable PII scrub rules (inherited tenant → workspace → project), releases metadata (commit SHA mapping for future Phase 2b MCP), alert rules, and alert delivery channels/logs.
-   - Apply configurable scrub rules in `crates/ingest` worker alongside mandatory baseline scrubbing (`D002`).
-   - Implement `crates/alerts` (with SSRF protections on outbound webhooks per `.harness/SECURITY.md` §3, timeouts, and cooldown/dedup) + UI management views in `web/`.
+1. Start **Phase 2b — `F011`**: Embedded MCP server (`/mcp` Streamable HTTP) for AI issue analysis and triage:
+   - Add migration for revocable scoped MCP Bearer tokens (`mcp_tokens`: SHA-256 hash, tenant/workspace/project scope, `read`/`triage` action scopes, rate limit) + `mcp_audit_logs` + `issue_notes` (all with RLS).
+   - Create `crates/mcp` (`maxi-loop-mcp`) depending **only** on service crates (`org`, `issues`, `platform`) — **never** on `sqlx` directly (`D006` compiler-enforced single service layer).
+   - Implement `list_projects`, `list_issues`, `get_issue` (with `commit_sha` release mapping & code context), `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note` with untrusted-content wrapping, output PII scrubbing, per-token rate limiting, audit logging, and cross-tenant isolation tests.

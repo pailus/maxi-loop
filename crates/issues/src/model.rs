@@ -121,6 +121,7 @@ pub struct IssueSummaryView {
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub last_environment: String,
+    pub first_release: Option<String>,
     pub last_release: Option<String>,
     pub sample_event_id: Option<String>,
     pub created_at: DateTime<Utc>,

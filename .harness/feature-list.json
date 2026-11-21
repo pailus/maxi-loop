@@ -189,7 +189,7 @@
     {
       "id": "F010",
       "title": "Phase 2: Configurable PII scrubbing, Release tracking, and Alerts (Webhook, Telegram, Email)",
-      "status": "todo",
+      "status": "done",
       "priority": "medium",
       "acceptance_criteria": [
         "Configurable per-tenant/workspace/project PII scrub rules applied in ingest worker",
@@ -199,9 +199,9 @@
       "verification_commands": [
         "npm --prefix web run build",
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F009"],
       "notes": "PRD F-ING-6, F-ISS-6, F-ISS-7"

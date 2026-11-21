@@ -1,10 +1,11 @@
 use maxi_loop_platform::error::AppError;
+use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::model::QueuedEvent;
-use crate::scrub::scrub_event_payload;
+use crate::scrub::scrub_event_payload_with_rules;
 
 const MAX_TITLE_CHARS: usize = 512;
 const MAX_CULPRIT_CHARS: usize = 256;
@@ -69,14 +70,23 @@ struct RawFrame {
     post_context: Vec<String>,
 }
 
-/// Scrub PII from a `QueuedEvent`, extract exception & stack frames, and compute a deterministic
+/// Scrub default PII from a `QueuedEvent`, extract exception & stack frames, and compute a deterministic
 /// grouping fingerprint (exception type + in-app stack frames, with normalized error message fallback).
 pub fn process_queued_event(queued: QueuedEvent) -> Result<ProcessedEvent, AppError> {
+    process_queued_event_with_rules(queued, &[])
+}
+
+/// Scrub mandatory baseline PII + inherited custom PII rules from a `QueuedEvent`, extract exception
+/// & stack frames, and compute a deterministic grouping fingerprint.
+pub fn process_queued_event_with_rules(
+    queued: QueuedEvent,
+    custom_rules: &[PiiScrubRuleEntry],
+) -> Result<ProcessedEvent, AppError> {
     let mut payload: Value = serde_json::from_slice(&queued.raw_payload)
         .map_err(|_| AppError::Validation("invalid event json payload".to_owned()))?;
 
-    // 1. Always scrub default PII before extracting any fields or persisting!
-    scrub_event_payload(&mut payload);
+    // 1. Always scrub baseline + inherited custom PII before extracting any fields or persisting!
+    scrub_event_payload_with_rules(&mut payload, custom_rules);
 
     // 2. Extract primary exception (type, value, raw frames) and fallback message.
     let (exc_type, exc_value, mut raw_frames) = extract_primary_exception(&payload);

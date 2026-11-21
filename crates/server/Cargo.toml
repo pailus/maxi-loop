@@ -15,6 +15,7 @@ axum.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
 http.workspace = true
+maxi-loop-alerts.workspace = true
 maxi-loop-auth.workspace = true
 maxi-loop-ingest.workspace = true
 maxi-loop-issues.workspace = true
@@ -34,4 +35,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 brotli.workspace = true
 flate2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+sha2.workspace = true
 tower.workspace = true

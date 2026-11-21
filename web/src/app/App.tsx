@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Bell,
   FolderKanban,
   Grid,
   Inbox,
@@ -9,6 +10,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Tag,
 } from "lucide-react";
 import {
   type AuthSessionView,
@@ -21,13 +23,21 @@ import {
   fetchWorkspaces,
   logoutSession,
 } from "../lib/api";
+import { AlertsView } from "../modules/alerts/AlertsView";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
 import { IssuesView, type IssuesTabMode } from "../modules/issues/IssuesView";
 import { ProjectIcon } from "../modules/projects/ProjectIcon";
 import { ProjectsView } from "../modules/projects/ProjectsView";
+import { ReleasesView } from "../modules/releases/ReleasesView";
 
-type ActiveNav = "issues" | "regressed" | "projects" | "health";
+type ActiveNav =
+  | "issues"
+  | "regressed"
+  | "releases"
+  | "alerts"
+  | "projects"
+  | "health";
 
 interface ToastState {
   message: string;
@@ -52,6 +62,7 @@ export function App() {
   const [activeWorkspaceSlug, setActiveWorkspaceSlug] = useState<string>("");
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [selectedProjectSlug, setSelectedProjectSlug] = useState<string>("");
+  const [selectedReleaseFilter, setSelectedReleaseFilter] = useState<string>("");
 
   const [activeNav, setActiveNav] = useState<ActiveNav>("issues");
   const [globalSearch, setGlobalSearch] = useState("");
@@ -331,6 +342,32 @@ export function App() {
 
               <button
                 type="button"
+                onClick={() => setActiveNav("releases")}
+                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
+                  activeNav === "releases"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Tag size={16} />
+                <span>Releases</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveNav("alerts")}
+                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
+                  activeNav === "alerts"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Bell size={16} />
+                <span>Alerts &amp; PII</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveNav("projects")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "projects"
@@ -449,9 +486,33 @@ export function App() {
             onSelectProjectSlug={setSelectedProjectSlug}
             globalSearchQuery={globalSearch}
             initialTabMode={issuesTabMode}
+            initialReleaseFilter={selectedReleaseFilter}
             canTriage={canTriage}
             onShowToast={showToast}
             onNavigateToProjects={() => setActiveNav("projects")}
+          />
+        )}
+
+        {activeNav === "releases" && (
+          <ReleasesView
+            workspaceName={currentWorkspaceName}
+            projects={projects}
+            canTriage={canTriage}
+            onOpenReleaseIssues={(projSlug, relVersion) => {
+              setSelectedProjectSlug(projSlug);
+              setSelectedReleaseFilter(relVersion);
+              setActiveNav("issues");
+            }}
+            onShowToast={(msg) => showToast(msg)}
+          />
+        )}
+
+        {activeNav === "alerts" && (
+          <AlertsView
+            workspaceName={currentWorkspaceName}
+            projects={projects}
+            canManage={canManageProjects}
+            onShowToast={(msg) => showToast(msg)}
           />
         )}
 

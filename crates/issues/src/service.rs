@@ -40,6 +40,7 @@ struct IssueSummaryDbRow {
     first_seen: DateTime<Utc>,
     last_seen: DateTime<Utc>,
     last_environment: String,
+    first_release: Option<String>,
     last_release: Option<String>,
     sample_event_id: Option<String>,
     created_at: DateTime<Utc>,
@@ -68,6 +69,7 @@ impl From<IssueSummaryDbRow> for IssueSummaryView {
             first_seen: row.first_seen,
             last_seen: row.last_seen,
             last_environment: row.last_environment,
+            first_release: row.first_release,
             last_release: row.last_release,
             sample_event_id: row.sample_event_id,
             created_at: row.created_at,
@@ -175,7 +177,7 @@ pub async fn list_issues(
                 i.project_id, p.slug AS project_slug, i.fingerprint, i.title, \
                 i.exception_type, i.exception_value, i.culprit, i.level, \
                 i.status, i.is_regressed, i.event_count, i.stored_full_events, \
-                i.first_seen, i.last_seen, i.last_environment, i.last_release, \
+                i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
                 i.sample_event_id, i.created_at, i.updated_at \
          FROM issues i \
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id \
@@ -635,7 +637,15 @@ impl ValidatedIssueFilter {
             qb.push(" AND i.last_environment = ").push_bind(env.clone());
         }
         if let Some(rel) = &self.release {
-            qb.push(" AND i.last_release = ").push_bind(rel.clone());
+            qb.push(" AND (i.last_release = ")
+                .push_bind(rel.clone())
+                .push(
+                    " OR EXISTS (SELECT 1 FROM issue_releases ir \
+                             WHERE ir.tenant_id = i.tenant_id AND ir.project_id = i.project_id \
+                               AND ir.issue_id = i.id AND ir.release_version = ",
+                )
+                .push_bind(rel.clone())
+                .push("))");
         }
         if let Some(st) = self.status {
             qb.push(" AND i.status = ").push_bind(st.as_str());
@@ -767,7 +777,7 @@ async fn load_scoped_issue_in_tx(
                 i.project_id, p.slug AS project_slug, i.fingerprint, i.title, \
                 i.exception_type, i.exception_value, i.culprit, i.level, \
                 i.status, i.is_regressed, i.event_count, i.stored_full_events, \
-                i.first_seen, i.last_seen, i.last_environment, i.last_release, \
+                i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
                 i.sample_event_id, i.created_at, i.updated_at \
          FROM issues i \
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id \

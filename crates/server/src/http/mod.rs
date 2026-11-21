@@ -16,6 +16,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(maxi_loop_auth::http::router::<AppState>())
         .merge(maxi_loop_org::http::router::<AppState>())
         .merge(maxi_loop_issues::http::router::<AppState>())
+        .merge(maxi_loop_alerts::http::router::<AppState>())
         .fallback(api_not_found);
 
     Router::new()
@@ -83,6 +84,7 @@ mod tests {
             bootstrap_admin_email: None,
             bootstrap_admin_password: None,
             bootstrap_admin_name: "Administrator".to_owned(),
+            smtp: None,
         };
         let db = PgPoolOptions::new()
             .max_connections(1)

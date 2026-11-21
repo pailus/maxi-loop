@@ -1,6 +1,6 @@
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
 use maxi_loop_auth::model::AuthSession;
@@ -10,6 +10,10 @@ use serde::Deserialize;
 
 use crate::model::{
     CreateProjectInput, CreateWorkspaceInput, ProjectView, TenantOverview, WorkspaceView,
+};
+use crate::pii::{
+    CreatePiiScrubRuleInput, PiiScrubRuleView, UpdatePiiScrubRuleInput, create_pii_scrub_rule,
+    delete_pii_scrub_rule, list_pii_scrub_rules, update_pii_scrub_rule,
 };
 use crate::service::{
     create_project, create_workspace, get_project, get_tenant_overview, get_workspace,
@@ -58,6 +62,15 @@ where
         .route(
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/dsn/rotate",
             post(rotate_project_dsn_handler),
+        )
+        // Configurable inherited PII scrubbing rules (additive to mandatory baseline)
+        .route(
+            "/pii-rules",
+            get(list_pii_rules_handler).post(create_pii_rule_handler),
+        )
+        .route(
+            "/pii-rules/{rule_id}",
+            patch(update_pii_rule_handler).delete(delete_pii_rule_handler),
         )
 }
 
@@ -306,4 +319,48 @@ fn notify_dsn_cache(state: &AuthState, proj: &ProjectView) {
         dsn_public_key: proj.dsn_public_key.clone(),
         rate_limit_per_minute: u32::try_from(proj.rate_limit_per_minute.max(1)).unwrap_or(1200),
     });
+}
+
+async fn list_pii_rules_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+) -> Result<Json<Vec<PiiScrubRuleView>>, AppError> {
+    let rules = list_pii_scrub_rules(&state.db, session.tenant_ctx).await?;
+    Ok(Json(rules))
+}
+
+async fn create_pii_rule_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Json(input): Json<CreatePiiScrubRuleInput>,
+) -> Result<(StatusCode, Json<PiiScrubRuleView>), AppError> {
+    let created = create_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, input).await?;
+    if let Some(entry) = created.to_cache_entry() {
+        state.notify_pii_rule_upserted(entry);
+    }
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn update_pii_rule_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(rule_id): Path<i64>,
+    Json(input): Json<UpdatePiiScrubRuleInput>,
+) -> Result<Json<PiiScrubRuleView>, AppError> {
+    let updated =
+        update_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, rule_id, input).await?;
+    if let Some(entry) = updated.to_cache_entry() {
+        state.notify_pii_rule_upserted(entry);
+    }
+    Ok(Json(updated))
+}
+
+async fn delete_pii_rule_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(rule_id): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    delete_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, rule_id).await?;
+    state.notify_pii_rule_deleted(session.tenant_ctx.tenant_id(), rule_id);
+    Ok(StatusCode::NO_CONTENT)
 }

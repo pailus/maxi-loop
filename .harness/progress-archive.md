@@ -5,6 +5,29 @@
 
 ---
 
+### 2026-11-21 — Antigravity — Refactor: Cargo Workspace + Vertical-Slice Module Layout (D006)
+
+**Status at end of session:** done
+
+**Done:**
+- Converted `maxi-loop` to a Cargo workspace (`crates/platform` as `maxi-loop-platform`, `crates/server` as binary `maxi-loop`) with shared `[workspace.dependencies]` in root `Cargo.toml`
+- Organized `web/src/` into vertical-slice modules (`app/`, `lib/`, `modules/health/`)
+- Recorded `D006` in `.harness/decisions.md` and updated `.harness/ARCHITECTURE.md` & `.harness/AGENTS.md` with module dependency rules and `--workspace` verification commands
+
+**Verification run:**
+- `npm --prefix web run build` → PASS
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace` → PASS (4 server + 5 platform = 9 passed)
+- `cargo build --workspace` → PASS
+- Manual smoke check (`maxi-loop` + Postgres 16) → PASS (`/healthz` 200 OK, embedded SPA served, clean SIGTERM)
+
+**Key decisions & why:**
+- User chose Option A (vertical-slice per feature) + Cargo Workspace (`D006`) for compiler-enforced boundaries and clean module ownership
+
+**Not finished / blockers:**
+- Ready to begin F002
+
 ### 2026-11-21 — Antigravity — F001: Project scaffolding, configuration, Docker Compose Postgres 16, and health server
 
 **Status at end of session:** done
