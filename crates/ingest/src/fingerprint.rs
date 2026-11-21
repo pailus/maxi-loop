@@ -1,5 +1,6 @@
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
+use maxi_loop_sourcemaps::resolver::SourceMapResolver;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -88,6 +89,42 @@ pub fn process_queued_event_with_rules(
     // 1. Always scrub baseline + inherited custom PII before extracting any fields or persisting!
     scrub_event_payload_with_rules(&mut payload, custom_rules);
 
+    finalize_processed_event(queued, payload)
+}
+
+/// Scrub mandatory baseline + custom PII, resolve minified JS/React stack frames via the bounded
+/// LRU `SourceMapResolver` BEFORE fingerprinting (Design §5.3 & §5.7), and compute the grouping fingerprint.
+pub async fn process_queued_event_with_rules_and_sourcemaps(
+    queued: QueuedEvent,
+    custom_rules: &[PiiScrubRuleEntry],
+    resolver: Option<&SourceMapResolver>,
+) -> Result<ProcessedEvent, AppError> {
+    let mut payload: Value = serde_json::from_slice(&queued.raw_payload)
+        .map_err(|_| AppError::Validation("invalid event json payload".to_owned()))?;
+
+    // 1. Always scrub baseline + inherited custom PII first.
+    scrub_event_payload_with_rules(&mut payload, custom_rules);
+
+    // 2. Resolve minified JS/React stack frames BEFORE fingerprinting so grouping uses original source.
+    if let Some(sm_resolver) = resolver {
+        sm_resolver
+            .resolve_event_payload(
+                queued.tenant_id,
+                queued.project_id,
+                &queued.platform,
+                queued.release.as_deref(),
+                &mut payload,
+            )
+            .await;
+    }
+
+    finalize_processed_event(queued, payload)
+}
+
+fn finalize_processed_event(
+    queued: QueuedEvent,
+    payload: Value,
+) -> Result<ProcessedEvent, AppError> {
     // 2. Extract primary exception (type, value, raw frames) and fallback message.
     let (exc_type, exc_value, mut raw_frames) = extract_primary_exception(&payload);
     if raw_frames.is_empty() {

@@ -248,7 +248,7 @@
     {
       "id": "F013",
       "title": "Phase 4: React Source Maps upload per release and bounded LRU ingest-time resolution",
-      "status": "todo",
+      "status": "done",
       "priority": "low",
       "acceptance_criteria": [
         "Source maps can be uploaded per release (matched by release + filename or debug id)",

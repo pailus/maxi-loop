@@ -1,0 +1,21 @@
+[package]
+name = "maxi-loop-sourcemaps"
+description = "Release-scoped React/JS Source Maps upload, bounded LRU cache, and ingest-time stack frame resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+maxi-loop-auth.workspace = true
+maxi-loop-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sourcemap.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+zstd.workspace = true

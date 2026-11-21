@@ -44,6 +44,9 @@ pub struct Config {
     pub max_full_events_per_issue: u32,
     pub trace_slow_threshold_ms: u32,
     pub trace_random_sample_rate: f64,
+    pub sourcemap_max_upload_bytes: usize,
+    pub sourcemap_cache_max_bytes: usize,
+    pub sourcemap_cache_max_entries: usize,
     pub max_envelope_compressed_bytes: usize,
     pub max_envelope_decompressed_bytes: usize,
     pub max_event_payload_bytes: usize,
@@ -76,6 +79,15 @@ impl fmt::Debug for Config {
             .field("max_full_events_per_issue", &self.max_full_events_per_issue)
             .field("trace_slow_threshold_ms", &self.trace_slow_threshold_ms)
             .field("trace_random_sample_rate", &self.trace_random_sample_rate)
+            .field(
+                "sourcemap_max_upload_bytes",
+                &self.sourcemap_max_upload_bytes,
+            )
+            .field("sourcemap_cache_max_bytes", &self.sourcemap_cache_max_bytes)
+            .field(
+                "sourcemap_cache_max_entries",
+                &self.sourcemap_cache_max_entries,
+            )
             .field(
                 "max_envelope_compressed_bytes",
                 &self.max_envelope_compressed_bytes,
@@ -175,6 +187,30 @@ impl Config {
             1.0,
             "TRACE_RANDOM_SAMPLE_RATE",
         )?;
+
+        let sourcemap_max_upload_bytes = parse_u32_range(
+            lookup("SOURCEMAP_MAX_UPLOAD_BYTES").as_deref(),
+            16_777_216,
+            4_096,
+            67_108_864,
+            "SOURCEMAP_MAX_UPLOAD_BYTES",
+        )? as usize;
+
+        let sourcemap_cache_max_bytes = parse_u32_range(
+            lookup("SOURCEMAP_CACHE_MAX_BYTES").as_deref(),
+            67_108_864,
+            1_048_576,
+            1_073_741_824,
+            "SOURCEMAP_CACHE_MAX_BYTES",
+        )? as usize;
+
+        let sourcemap_cache_max_entries = parse_u32_range(
+            lookup("SOURCEMAP_CACHE_MAX_ENTRIES").as_deref(),
+            128,
+            4,
+            4_096,
+            "SOURCEMAP_CACHE_MAX_ENTRIES",
+        )? as usize;
 
         let max_envelope_compressed_bytes = parse_u32_range(
             lookup("MAX_ENVELOPE_COMPRESSED_BYTES").as_deref(),
@@ -319,6 +355,9 @@ impl Config {
             max_full_events_per_issue,
             trace_slow_threshold_ms,
             trace_random_sample_rate,
+            sourcemap_max_upload_bytes,
+            sourcemap_cache_max_bytes,
+            sourcemap_cache_max_entries,
             max_envelope_compressed_bytes,
             max_envelope_decompressed_bytes,
             max_event_payload_bytes,

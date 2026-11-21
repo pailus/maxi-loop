@@ -21,6 +21,8 @@ use maxi_loop_mcp::rate_limit::McpRateLimiter;
 use maxi_loop_org::service::OrgService;
 use maxi_loop_performance::service::PerformanceService;
 use maxi_loop_platform::config::Config;
+use maxi_loop_sourcemaps::http::SourceMapState;
+use maxi_loop_sourcemaps::resolver::SourceMapResolver;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
@@ -32,6 +34,7 @@ pub struct AppState {
     pub mcp_limiter: McpRateLimiter,
     pub dsn_cache: DsnCache,
     pub scrub_cache: ScrubRulesCache,
+    pub sourcemap_resolver: SourceMapResolver,
     pub ingest_tx: mpsc::Sender<QueuedEnvelope>,
 }
 
@@ -91,6 +94,7 @@ impl AppState {
             worker_cfg,
             Some(state.scrub_cache.clone()),
             Some(Arc::new(alert_sender)),
+            Some(state.sourcemap_resolver.clone()),
         );
         state
     }
@@ -102,6 +106,12 @@ impl AppState {
     ) -> (Self, mpsc::Receiver<QueuedEnvelope>) {
         let capacity = config.ingest_channel_capacity.max(1);
         let (ingest_tx, ingest_rx) = mpsc::channel(capacity);
+        let sourcemap_resolver = SourceMapResolver::new(
+            db.clone(),
+            config.sourcemap_max_upload_bytes,
+            config.sourcemap_cache_max_bytes,
+            config.sourcemap_cache_max_entries,
+        );
         let state = Self {
             config: Arc::new(config),
             db,
@@ -109,9 +119,20 @@ impl AppState {
             mcp_limiter: McpRateLimiter::new(),
             dsn_cache: DsnCache::new(),
             scrub_cache: ScrubRulesCache::new(),
+            sourcemap_resolver,
             ingest_tx,
         };
         (state, ingest_rx)
+    }
+}
+
+impl FromRef<AppState> for SourceMapState {
+    fn from_ref(state: &AppState) -> Self {
+        SourceMapState::new(
+            Arc::clone(&state.config),
+            state.db.clone(),
+            state.sourcemap_resolver.clone(),
+        )
     }
 }
 

@@ -9,6 +9,7 @@ members = [
     "crates/retention",
     "crates/alerts",
     "crates/performance",
+    "crates/sourcemaps",
     "crates/mcp",
     "crates/server",
     "crates/loadgen",
@@ -42,6 +43,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+sourcemap = "9"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros", "chrono"] }
 subtle = "2"
 thiserror = "2"
@@ -63,4 +65,5 @@ maxi-loop-issues = { path = "crates/issues" }
 maxi-loop-retention = { path = "crates/retention" }
 maxi-loop-alerts = { path = "crates/alerts" }
 maxi-loop-performance = { path = "crates/performance" }
+maxi-loop-sourcemaps = { path = "crates/sourcemaps" }
 maxi-loop-mcp = { path = "crates/mcp" }

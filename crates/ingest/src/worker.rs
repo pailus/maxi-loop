@@ -11,12 +11,15 @@ use maxi_loop_platform::alert_notify::{AlertSignal, AlertSignalKind, AlertSignal
 use maxi_loop_platform::config::Config;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::begin_worker_tx;
+use maxi_loop_sourcemaps::resolver::SourceMapResolver;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
-use crate::fingerprint::{ProcessedEvent, process_queued_event_with_rules};
+use crate::fingerprint::{
+    ProcessedEvent, process_queued_event_with_rules, process_queued_event_with_rules_and_sourcemaps,
+};
 use crate::model::{QueuedEnvelope, QueuedEvent};
 use crate::scrub_cache::ScrubRulesCache;
 
@@ -92,17 +95,18 @@ pub fn spawn_ingest_worker(
     rx: mpsc::Receiver<QueuedEnvelope>,
     worker_config: IngestWorkerConfig,
 ) -> JoinHandle<()> {
-    spawn_ingest_worker_with_hooks(pool, rx, worker_config, None, None)
+    spawn_ingest_worker_with_hooks(pool, rx, worker_config, None, None, None)
 }
 
-/// Spawn the asynchronous ingest batch worker with inherited configurable PII scrubbing (`ScrubRulesCache`)
-/// and real-time alert signal emission (`AlertSignalObserver`).
+/// Spawn the asynchronous ingest batch worker with inherited configurable PII scrubbing (`ScrubRulesCache`),
+/// real-time alert signal emission (`AlertSignalObserver`), and bounded-LRU JS source map resolution.
 pub fn spawn_ingest_worker_with_hooks(
     pool: PgPool,
     mut rx: mpsc::Receiver<QueuedEnvelope>,
     worker_config: IngestWorkerConfig,
     scrub_cache: Option<ScrubRulesCache>,
     alert_observer: Option<Arc<dyn AlertSignalObserver>>,
+    sourcemap_resolver: Option<SourceMapResolver>,
 ) -> JoinHandle<()> {
     let flush_interval = worker_config
         .flush_interval
@@ -124,10 +128,12 @@ pub fn spawn_ingest_worker_with_hooks(
             append_envelope_items(
                 first,
                 scrub_cache.as_ref(),
+                sourcemap_resolver.as_ref(),
                 trace_sampling,
                 &mut pending,
                 &mut pending_txs,
-            );
+            )
+            .await;
 
             let deadline = tokio::time::Instant::now() + flush_interval;
             while pending.len() + pending_txs.len() < max_batch_events {
@@ -136,10 +142,12 @@ pub fn spawn_ingest_worker_with_hooks(
                         append_envelope_items(
                             envelope,
                             scrub_cache.as_ref(),
+                            sourcemap_resolver.as_ref(),
                             trace_sampling,
                             &mut pending,
                             &mut pending_txs,
-                        );
+                        )
+                        .await;
                     }
                     Ok(None) | Err(_) => break,
                 }
@@ -181,9 +189,10 @@ pub fn spawn_ingest_worker_with_hooks(
     })
 }
 
-fn append_envelope_items(
+async fn append_envelope_items(
     envelope: QueuedEnvelope,
     scrub_cache: Option<&ScrubRulesCache>,
+    sourcemap_resolver: Option<&SourceMapResolver>,
     trace_sampling: TraceSamplingPolicy,
     out_events: &mut Vec<ProcessedEvent>,
     out_txs: &mut Vec<ProcessedTransaction>,
@@ -199,7 +208,13 @@ fn append_envelope_items(
         .unwrap_or_default();
 
     for raw_ev in envelope.events {
-        match process_queued_event_with_rules(raw_ev, &custom_rules) {
+        match process_queued_event_with_rules_and_sourcemaps(
+            raw_ev,
+            &custom_rules,
+            sourcemap_resolver,
+        )
+        .await
+        {
             Ok(processed) => out_events.push(processed),
             Err(err) => {
                 warn!(

@@ -33,6 +33,41 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F013: Phase 4: React Source Maps upload per release and bounded LRU ingest-time resolution
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0006_phase4_sourcemaps.sql` adding `source_maps` (leading `(tenant_id, project_id)` primary key, unique `(tenant_id, project_id, release_version, filename)`, partial index on `(tenant_id, project_id, debug_id)`, zstd-compressed `content_zstd BYTEA`, SHA-256 digest, raw/compressed sizes) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Extended `crates/platform/src/config.rs` (and `.env.example`) with validated `SOURCEMAP_MAX_UPLOAD_BYTES` (default `16 MiB`), `SOURCEMAP_CACHE_MAX_BYTES` (default `64 MiB`), and `SOURCEMAP_CACHE_MAX_ENTRIES` (default `128`)
+- Created vertical-slice crate `crates/sourcemaps` (`maxi-loop-sourcemaps`):
+  - `codec.rs`: canonical JS bundle filename/URL normalization with strict path-traversal rejection (`..`, `.`, control chars, backslashes), Source Map v3 / Indexed Source Map content validation via `sourcemap::decode_slice`, automatic embedded `debugId` extraction, zstd compression, and bounded streaming decompression (`Read::take(max_raw_bytes + 1)`)
+  - `cache.rs`: thread-safe `SourceMapLruCache` bounded by BOTH memory weight (`max_bytes`, conservatively 2x raw JSON size) AND entry count (`max_entries`), with negative caching, per-project invalidation on upload/delete, and hit/miss/eviction telemetry
+  - `resolver.rs`: `SourceMapResolver` matching frames by `debug_id` (from `frame.debug_id` or `debug_meta.images`) first and `release + filename` (normalized path + basename fallback) second, resolving original TypeScript/React filenames, lines/cols, original function names, `pre_context`/`context_line`/`post_context` from embedded `sourcesContent`, and `in_app` (`false` for `node_modules/`)
+  - `service.rs` & `http.rs`: RLS-enforced CRUD (`GET`/`POST /api/v1/sourcemaps`, `DELETE /api/v1/sourcemaps/{id}`, raw CI upload `POST /api/v1/projects/{slug}/releases/{version}/sourcemaps`, and slug-scoped list) with `can_triage_issues()` authorization, auto-registration of release rows, and live cache invalidation
+- Wired `SourceMapResolver` into `crates/ingest` (`fingerprint.rs` + `worker.rs`) so minified JS/React stack frames are resolved **after PII scrubbing and BEFORE fingerprinting**, ensuring different minified bundle hashes for the same React component crash group into one issue
+- Updated MaxiBoard UI `web/src/modules/releases/ReleasesView.tsx` and `web/src/lib/api.ts` with a **Source Maps** sub-tab (file picker `.js.map` upload, release/filename/Debug ID fields, zstd compression telemetry, and delete action)
+- Added PostgreSQL 16 integration test `crates/server/tests/phase4_sourcemaps.rs` verifying RBAC (`viewer` `403`), invalid/traversal upload rejection (`400`), JSON + raw CI upload routes, grouping two distinct minified builds (`bundle-v1.js` + `bundle-v2.js`) into one single issue via pre-fingerprint resolution, release-independent `debug_id` resolution, bounded LRU cache hits, and Tenant A vs Tenant B cross-tenant isolation (API + ingest resolution)
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (73/73 passed, incl. 7 `maxi-loop-sourcemaps` unit tests & `phase4_sourcemaps` Postgres 16 integration test)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified unauth `401`, uploaded `.js.map` via `/api/v1/sourcemaps`, ingested minified React error envelope, confirmed resolved `src/App.tsx:2 in handleClick` + `context_line`, deleted smoke artifact) → PASS
+
+**Security notes:**
+- Self-review passed: uploaded source maps are validated by actual Source Map v3 parsing (`sourcemap::decode_slice`) and bounded by `SOURCEMAP_MAX_UPLOAD_BYTES` (`413` on oversize); filenames reject `..`/`.`/control/backslash characters; debug IDs restricted to 8..=64 hex/hyphen chars; all uploads/deletes require `AuthSession` + CSRF + `can_triage_issues()` (`viewer` rejected `403`); stored in PostgreSQL as zstd `BYTEA` with RLS (`maxi_loop_app` + `maxi_loop_worker`) rather than host filesystem paths; decompression bounded at `max_raw_bytes` against zip-bombs; LRU cache keys include `(tenant_id, project_id)` so cached maps never leak across tenants; negative tests cover `viewer` upload (`403`), malformed map (`400`), path traversal (`400`), oversized map (`413`), and cross-tenant list/delete/ingest isolation
+- New dependency: `sourcemap` v9.3.2 (maintained by Sentry/getsentry, explicitly specified in PRD §11 and Design §5.7/§5.9 for Source Map v3 / Indexed Source Map parsing). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Implemented a zero-dependency memory-byte-bounded + entry-bounded `SourceMapLruCache` storing `Arc<DecodedMap>` (evicting when estimated RAM exceeds `SOURCEMAP_CACHE_MAX_BYTES`, skipping caching for single maps larger than the total budget) to directly mitigate the Design §5.7 large-sourcemap memory risk
+
+**Not finished / blockers:**
+- Ready to begin Phase 5 — `F014` (Go & Rust SDK verification, multi-user RBAC, inherited settings, per-project API tokens, and aggregate tenant rate limits)
+
 ### 2026-11-22 — Antigravity — F012: Phase 3: Performance monitoring (transactions, spans, histograms, sampled zstd traces, waterfall, MCP tools)
 
 **Status at end of session:** done
@@ -296,33 +331,3 @@
 
 **Not finished / blockers:**
 - Ready to begin F006 (Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests)
-
-### 2026-11-21 — Antigravity — F004: Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel
-
-**Status at end of session:** done
-
-**Done:**
-- Created `crates/ingest` (`maxi-loop-ingest`):
-  - `cache.rs`: thread-safe in-memory `DsnCache` preloaded from PostgreSQL at startup and updated live via `ProjectDsnObserver` on project creation/DSN rotation, with constant-time `subtle::ConstantTimeEq` key verification (0 per-envelope DB queries) and per-project `governor` GCRA rate limiters
-  - `decompress.rs`: streaming decompression for `gzip`, `deflate` (RFC 1950 zlib + raw RFC 1951 fallback), and `br` (brotli) with bounded `Read::take` enforcement of `MAX_ENVELOPE_COMPRESSED_BYTES` and `MAX_ENVELOPE_DECOMPRESSED_BYTES` (zip-bomb protection)
-  - `envelope.rs`: Sentry Envelope parser supporting `X-Sentry-Auth`, `?sentry_key=`, and envelope header `dsn` authentication, early dropping of unsupported item types (`session`, `replay_*`, `profile`, `attachment`, etc.) without deserializing their payloads, `MAX_EVENT_PAYLOAD_BYTES` enforcement, and lightweight event metadata extraction
-  - `http.rs`: `POST /api/{project_id}/envelope/` (and `/api/{project_id}/envelope`) handler pushing accepted `QueuedEnvelope` batches into a bounded `tokio::sync::mpsc` channel and returning `429 Too Many Requests` with `Retry-After` and `X-Sentry-Rate-Limits` headers on per-project quota exhaustion or full-channel backpressure
-- Wired `DsnCache` and `crates/ingest` router into `crates/server` and connected `crates/org` project create/rotate handlers via `ProjectDsnObserver`
-- Added PostgreSQL 16 integration test `crates/server/tests/envelope_ingest.rs` verifying in-memory DSN auth (0 DB queries, live DSN rotation invalidation), gzip/deflate/brotli decompression, zip-bomb & oversized event rejections (`413`), early drop of unsupported items, per-project `governor` rate limiting (`429`), and bounded channel full backpressure (`429`)
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (29 passed: 7 server unit + 2 server integration + 5 auth unit + 5 ingest unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
-- `cargo build --workspace` → PASS
-- Manual smoke check (live `maxi-loop` server preloading DSN cache + gzipped mixed envelope `POST /api/{project_id}/envelope/` returning `{"accepted_items":1,"dropped_items":1}` + clean SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: fast-path `X-Sentry-Auth` / `?sentry_key=` authentication runs in memory before decompression so unauthorized callers cannot burn decompression CPU or trigger DB queries; streaming `Read::take(max_decompressed_bytes + 1)` prevents gzip/deflate/brotli decompression bombs; `MAX_EVENT_PAYLOAD_BYTES` checked before slicing/parsing event JSON; constant-time DSN key check; negative tests cover invalid/rotated DSN keys, unknown project IDs, gzip decompression bombs (`413`), oversized event items (`413`), per-project rate limit (`429`), and full-channel backpressure (`429`)
-- New dependencies: `flate2` v1.1 (maintained by rust-lang, required by PRD F-ING-2 for gzip/deflate decompression), `brotli` v7.0 (standard pure-Rust Brotli implementation, required by PRD F-ING-2 for `Content-Encoding: br`), and `governor` v0.8 (GCRA rate limiter explicitly specified in PRD §11, Design §5.1/5.9, and F004 acceptance criteria). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Introduced `ProjectDsnObserver` in `crates/platform` so `crates/org` notifies `DsnCache` in memory whenever a project is created or its DSN is rotated, keeping `crates/org` decoupled from `crates/ingest` while guaranteeing 0 DB queries on the ingest hot path
-
-**Not finished / blockers:**
-- Ready to begin F005 (Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert)

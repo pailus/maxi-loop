@@ -969,3 +969,64 @@ export async function fetchTraceWaterfall(traceId: string): Promise<TraceWaterfa
     `/api/v1/performance/traces/${encodeURIComponent(traceId)}`,
   );
 }
+
+// --- Phase 4: React / JS Source Maps ---
+
+export interface SourceMapView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number;
+  workspace_slug: string;
+  project_id: number;
+  project_slug: string;
+  release_version: string;
+  filename: string;
+  debug_id: string | null;
+  sha256: string;
+  raw_size_bytes: number;
+  compressed_size_bytes: number;
+  uploaded_by_user_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UploadSourceMapInput {
+  project_slug: string;
+  release_version: string;
+  filename: string;
+  debug_id?: string;
+  content: string;
+}
+
+export async function fetchSourceMaps(
+  projectSlug?: string,
+  releaseVersion?: string,
+): Promise<SourceMapView[]> {
+  const params = new URLSearchParams();
+  if (projectSlug) params.set("project_slug", projectSlug);
+  if (releaseVersion) params.set("release_version", releaseVersion);
+  const qs = params.toString();
+  return requestJson<SourceMapView[]>(`/api/v1/sourcemaps${qs ? `?${qs}` : ""}`);
+}
+
+export async function uploadSourceMap(
+  input: UploadSourceMapInput,
+): Promise<SourceMapView> {
+  return requestJson<SourceMapView>("/api/v1/sourcemaps", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSourceMap(sourcemapId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/sourcemaps/${sourcemapId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to delete source map (${res.status})`);
+  }
+}

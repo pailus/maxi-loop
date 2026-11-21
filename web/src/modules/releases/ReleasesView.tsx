@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitCommit, Plus, RefreshCw, Tag } from "lucide-react";
+import {
+  FileCode2,
+  GitCommit,
+  Plus,
+  RefreshCw,
+  Tag,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import {
   ApiError,
   type ProjectView,
   type ReleaseView,
+  type SourceMapView,
+  deleteSourceMap,
   fetchReleases,
+  fetchSourceMaps,
+  uploadSourceMap,
   upsertRelease,
 } from "../../lib/api";
 
@@ -16,6 +28,14 @@ interface ReleasesViewProps {
   onShowToast: (message: string) => void;
 }
 
+type ReleasesSubTab = "releases" | "sourcemaps";
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 export function ReleasesView({
   workspaceName,
   projects,
@@ -23,11 +43,14 @@ export function ReleasesView({
   onOpenReleaseIssues,
   onShowToast,
 }: ReleasesViewProps) {
+  const [activeTab, setActiveTab] = useState<ReleasesSubTab>("releases");
   const [filterProject, setFilterProject] = useState("");
   const [releases, setReleases] = useState<ReleaseView[]>([]);
+  const [sourceMaps, setSourceMaps] = useState<SourceMapView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Release form state
   const [projectSlug, setProjectSlug] = useState(projects[0]?.slug ?? "");
   const [version, setVersion] = useState("");
   const [commitSha, setCommitSha] = useState("");
@@ -35,30 +58,48 @@ export function ReleasesView({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Source map upload form state
+  const [smProjectSlug, setSmProjectSlug] = useState(projects[0]?.slug ?? "");
+  const [smRelease, setSmRelease] = useState("");
+  const [smFilename, setSmFilename] = useState("");
+  const [smDebugId, setSmDebugId] = useState("");
+  const [smContent, setSmContent] = useState("");
+  const [smFileNameDisplay, setSmFileNameDisplay] = useState("");
+  const [smSubmitting, setSmSubmitting] = useState(false);
+
   useEffect(() => {
     if (!projectSlug && projects.length > 0) {
       setProjectSlug(projects[0].slug);
     }
-  }, [projects, projectSlug]);
+    if (!smProjectSlug && projects.length > 0) {
+      setSmProjectSlug(projects[0].slug);
+    }
+  }, [projects, projectSlug, smProjectSlug]);
 
-  const loadReleases = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const items = await fetchReleases(filterProject || undefined);
-      setReleases(items);
+      const [relItems, smItems] = await Promise.all([
+        fetchReleases(filterProject || undefined),
+        fetchSourceMaps(filterProject || undefined),
+      ]);
+      setReleases(relItems);
+      setSourceMaps(smItems);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load releases");
+      setError(
+        err instanceof ApiError ? err.message : "Failed to load releases & source maps",
+      );
     } finally {
       setLoading(false);
     }
   }, [filterProject]);
 
   useEffect(() => {
-    void loadReleases();
-  }, [loadReleases]);
+    void loadData();
+  }, [loadData]);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmitRelease(e: React.FormEvent) {
     e.preventDefault();
     if (!projectSlug || !version.trim()) return;
     setSubmitting(true);
@@ -75,7 +116,7 @@ export function ReleasesView({
       setCommitSha("");
       setNotes("");
       onShowToast("Release recorded");
-      await loadReleases();
+      await loadData();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save release");
     } finally {
@@ -83,42 +124,128 @@ export function ReleasesView({
     }
   }
 
+  function handleSelectMapFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSmFileNameDisplay(file.name);
+    if (!smFilename.trim()) {
+      const inferred = file.name.endsWith(".map")
+        ? `~/assets/${file.name.slice(0, -4)}`
+        : `~/assets/${file.name}`;
+      setSmFilename(inferred);
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setSmContent(reader.result);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleUploadSourceMap(e: React.FormEvent) {
+    e.preventDefault();
+    if (!smProjectSlug || !smRelease.trim() || !smFilename.trim() || !smContent.trim()) {
+      return;
+    }
+    setSmSubmitting(true);
+    setError(null);
+    try {
+      await uploadSourceMap({
+        project_slug: smProjectSlug,
+        release_version: smRelease.trim(),
+        filename: smFilename.trim(),
+        debug_id: smDebugId.trim() || undefined,
+        content: smContent,
+      });
+      setSmFilename("");
+      setSmDebugId("");
+      setSmContent("");
+      setSmFileNameDisplay("");
+      onShowToast("Source map uploaded & cached for ingest resolution");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to upload source map");
+    } finally {
+      setSmSubmitting(false);
+    }
+  }
+
+  async function handleDeleteSourceMap(id: number) {
+    setError(null);
+    try {
+      await deleteSourceMap(id);
+      onShowToast("Source map deleted");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete source map");
+    }
+  }
+
   return (
     <div className="flex-1 min-w-0 flex overflow-hidden bg-[var(--color-bg)]">
-      {/* Main Releases Table */}
+      {/* Main Releases & Source Maps Area */}
       <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[11px] font-medium text-[var(--color-text-dim)]">
-              {workspaceName} / Releases
+        <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-medium text-[var(--color-text-dim)]">
+                {workspaceName} / Releases &amp; Source Maps
+              </div>
+              <h1 className="text-lg font-bold text-[var(--color-text)] flex items-center gap-2">
+                <Tag size={18} className="text-[var(--color-primary)]" />
+                <span>Release Tracking &amp; React Source Maps</span>
+              </h1>
             </div>
-            <h1 className="text-lg font-bold text-[var(--color-text)] flex items-center gap-2">
-              <Tag size={18} className="text-[var(--color-primary)]" />
-              <span>Release Tracking</span>
-            </h1>
+
+            <div className="flex items-center gap-2">
+              <select
+                value={filterProject}
+                onChange={(e) => setFilterProject(e.target.value)}
+                aria-label="Filter by project"
+                className="pm-input h-8 text-xs w-44"
+              >
+                <option value="">All projects</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.slug}>
+                    {p.slug}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void loadData()}
+                className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw size={13} />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <select
-              value={filterProject}
-              onChange={(e) => setFilterProject(e.target.value)}
-              aria-label="Filter releases by project"
-              className="pm-input h-8 text-xs w-44"
-            >
-              <option value="">All projects</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.slug}>
-                  {p.slug}
-                </option>
-              ))}
-            </select>
+          <div className="mt-3 flex items-center gap-4">
             <button
               type="button"
-              onClick={() => void loadReleases()}
-              className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+              onClick={() => setActiveTab("releases")}
+              className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+                activeTab === "releases"
+                  ? "pm-tab-active text-[var(--color-primary)]"
+                  : "text-[var(--color-text-muted)]"
+              }`}
             >
-              <RefreshCw size={13} />
-              <span>Refresh</span>
+              Releases ({releases.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("sourcemaps")}
+              className={`pm-tab pb-2 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 ${
+                activeTab === "sourcemaps"
+                  ? "pm-tab-active text-[var(--color-primary)]"
+                  : "text-[var(--color-text-muted)]"
+              }`}
+            >
+              <FileCode2 size={13} />
+              <span>Source Maps ({sourceMaps.length})</span>
             </button>
           </div>
         </div>
@@ -131,16 +258,98 @@ export function ReleasesView({
 
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
-            <div className="text-xs text-[var(--color-text-dim)]">Loading releases...</div>
-          ) : releases.length === 0 ? (
+            <div className="text-xs text-[var(--color-text-dim)]">Loading...</div>
+          ) : activeTab === "releases" ? (
+            releases.length === 0 ? (
+              <div className="pm-card-panel p-6 text-center space-y-1">
+                <div className="text-sm font-semibold text-[var(--color-text)]">
+                  No releases tracked yet
+                </div>
+                <p className="text-xs text-[var(--color-text-dim)]">
+                  Releases appear automatically when Sentry SDK events include a{" "}
+                  <code className="pm-mono">release</code> tag, or you can register one with its
+                  Git commit SHA on the right.
+                </p>
+              </div>
+            ) : (
+              <div className="border border-[var(--color-border)] rounded-lg overflow-hidden bg-[var(--color-bg)]">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
+                      <th className="py-2.5 px-3">Release</th>
+                      <th className="py-2.5 px-3">Project</th>
+                      <th className="py-2.5 px-3">Commit SHA</th>
+                      <th className="py-2.5 px-3">Env</th>
+                      <th className="py-2.5 px-3 text-right">Events</th>
+                      <th className="py-2.5 px-3 text-right">New / Linked Issues</th>
+                      <th className="py-2.5 px-3 text-right">Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border)] text-xs">
+                    {releases.map((rel) => (
+                      <tr
+                        key={rel.id}
+                        onClick={() => onOpenReleaseIssues(rel.project_slug, rel.version)}
+                        className="hover:bg-[var(--color-bg-hover)] cursor-pointer transition"
+                      >
+                        <td className="py-2.5 px-3 font-semibold text-[var(--color-text)] pm-mono">
+                          <div>{rel.version}</div>
+                          {rel.notes && (
+                            <div className="font-sans font-normal text-[11px] text-[var(--color-text-dim)] truncate max-w-[260px]">
+                              {rel.notes}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className="pm-lozenge">{rel.project_slug}</span>
+                        </td>
+                        <td className="py-2.5 px-3 pm-mono text-[11px] text-[var(--color-text-muted)]">
+                          {rel.commit_sha ? (
+                            <span className="inline-flex items-center gap-1">
+                              <GitCommit size={12} />
+                              {rel.commit_sha.slice(0, 10)}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {rel.environment ? (
+                            <span className="pm-lozenge pm-lozenge-info">{rel.environment}</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-semibold pm-mono">
+                          {rel.event_count.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3 text-right pm-mono">
+                          <span className="text-[#ae2e24] font-semibold">
+                            +{rel.new_issues_count}
+                          </span>{" "}
+                          <span className="text-[var(--color-text-dim)]">
+                            / {rel.linked_issues_count}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-[var(--color-text-dim)]">
+                          {new Date(rel.last_seen).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : sourceMaps.length === 0 ? (
             <div className="pm-card-panel p-6 text-center space-y-1">
               <div className="text-sm font-semibold text-[var(--color-text)]">
-                No releases tracked yet
+                No source maps uploaded yet
               </div>
-              <p className="text-xs text-[var(--color-text-dim)]">
-                Releases appear automatically when Sentry SDK events include a{" "}
-                <code className="pm-mono">release</code> tag, or you can register one with its Git
-                commit SHA on the right.
+              <p className="text-xs text-[var(--color-text-dim)] max-w-md mx-auto">
+                Upload Vite/Webpack <code className="pm-mono">.js.map</code> artifacts per release
+                (matched by <code className="pm-mono">release + filename</code> or{" "}
+                <code className="pm-mono">debug_id</code>). Ingest resolves minified React frames
+                via a memory-bounded LRU cache before fingerprinting.
               </p>
             </div>
           ) : (
@@ -148,64 +357,52 @@ export function ReleasesView({
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
+                    <th className="py-2.5 px-3">Bundle Filename</th>
                     <th className="py-2.5 px-3">Release</th>
                     <th className="py-2.5 px-3">Project</th>
-                    <th className="py-2.5 px-3">Commit SHA</th>
-                    <th className="py-2.5 px-3">Env</th>
-                    <th className="py-2.5 px-3 text-right">Events</th>
-                    <th className="py-2.5 px-3 text-right">New / Linked Issues</th>
-                    <th className="py-2.5 px-3 text-right">Last seen</th>
+                    <th className="py-2.5 px-3">Debug ID</th>
+                    <th className="py-2.5 px-3 text-right">Size (zstd)</th>
+                    <th className="py-2.5 px-3 text-right">Updated</th>
+                    {canTriage && <th className="py-2.5 px-3 text-right">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--color-border)] text-xs">
-                  {releases.map((rel) => (
-                    <tr
-                      key={rel.id}
-                      onClick={() => onOpenReleaseIssues(rel.project_slug, rel.version)}
-                      className="hover:bg-[var(--color-bg-hover)] cursor-pointer transition"
-                    >
-                      <td className="py-2.5 px-3 font-semibold text-[var(--color-text)] pm-mono">
-                        <div>{rel.version}</div>
-                        {rel.notes && (
-                          <div className="font-sans font-normal text-[11px] text-[var(--color-text-dim)] truncate max-w-[260px]">
-                            {rel.notes}
-                          </div>
-                        )}
+                  {sourceMaps.map((sm) => (
+                    <tr key={sm.id} className="hover:bg-[var(--color-bg-hover)]">
+                      <td className="py-2.5 px-3 pm-mono font-semibold text-[var(--color-text)]">
+                        <div>{sm.filename}</div>
+                        <div className="text-[10px] font-normal text-[var(--color-text-dim)]">
+                          sha256: {sm.sha256.slice(0, 12)}
+                        </div>
                       </td>
+                      <td className="py-2.5 px-3 pm-mono text-[11px]">{sm.release_version}</td>
                       <td className="py-2.5 px-3">
-                        <span className="pm-lozenge">{rel.project_slug}</span>
+                        <span className="pm-lozenge">{sm.project_slug}</span>
                       </td>
                       <td className="py-2.5 px-3 pm-mono text-[11px] text-[var(--color-text-muted)]">
-                        {rel.commit_sha ? (
-                          <span className="inline-flex items-center gap-1">
-                            <GitCommit size={12} />
-                            {rel.commit_sha.slice(0, 10)}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
+                        {sm.debug_id ? sm.debug_id.slice(0, 18) : "—"}
                       </td>
-                      <td className="py-2.5 px-3">
-                        {rel.environment ? (
-                          <span className="pm-lozenge pm-lozenge-info">{rel.environment}</span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-semibold pm-mono">
-                        {rel.event_count.toLocaleString()}
-                      </td>
-                      <td className="py-2.5 px-3 text-right pm-mono">
-                        <span className="text-[#ae2e24] font-semibold">
-                          +{rel.new_issues_count}
-                        </span>{" "}
-                        <span className="text-[var(--color-text-dim)]">
-                          / {rel.linked_issues_count}
-                        </span>
+                      <td className="py-2.5 px-3 text-right pm-mono text-[11px]">
+                        <div>{formatBytes(sm.raw_size_bytes)}</div>
+                        <div className="text-[10px] text-[var(--color-text-dim)]">
+                          zstd: {formatBytes(sm.compressed_size_bytes)}
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right text-[var(--color-text-dim)]">
-                        {new Date(rel.last_seen).toLocaleString()}
+                        {new Date(sm.updated_at).toLocaleString()}
                       </td>
+                      {canTriage && (
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteSourceMap(sm.id)}
+                            className="p-1.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-danger)] hover:bg-[#ffeceb] cursor-pointer"
+                            title="Delete source map"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -215,98 +412,199 @@ export function ReleasesView({
         </div>
       </section>
 
-      {/* Right Drawer: Register / Annotate Release */}
+      {/* Right Drawer: Register Release OR Upload Source Map */}
       {canTriage && (
-        <aside className="w-[340px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
-          <h2 className="text-sm font-bold text-[var(--color-text)] flex items-center gap-1.5 mb-1">
-            <Plus size={15} />
-            <span>Register or annotate release</span>
-          </h2>
-          <p className="text-xs text-[var(--color-text-dim)] mb-4">
-            Map a release version to its Git commit SHA and deployment notes (also used by MCP AI
-            triage).
-          </p>
+        <aside className="w-[360px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
+          {activeTab === "releases" ? (
+            <>
+              <h2 className="text-sm font-bold text-[var(--color-text)] flex items-center gap-1.5 mb-1">
+                <Plus size={15} />
+                <span>Register or annotate release</span>
+              </h2>
+              <p className="text-xs text-[var(--color-text-dim)] mb-4">
+                Map a release version to its Git commit SHA and deployment notes (also used by MCP
+                AI triage).
+              </p>
 
-          <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
-                Project
-              </label>
-              <select
-                value={projectSlug}
-                onChange={(e) => setProjectSlug(e.target.value)}
-                required
-                className="pm-input h-9 text-xs"
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.slug}>
-                    {p.name} ({p.slug})
-                  </option>
-                ))}
-              </select>
-            </div>
+              <form onSubmit={(e) => void handleSubmitRelease(e)} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Project
+                  </label>
+                  <select
+                    value={projectSlug}
+                    onChange={(e) => setProjectSlug(e.target.value)}
+                    required
+                    className="pm-input h-9 text-xs"
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.slug}>
+                        {p.name} ({p.slug})
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
-                Version
-              </label>
-              <input
-                type="text"
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-                placeholder="e.g. api@2.4.0 or a1b2c3d"
-                required
-                className="pm-input h-9 text-xs pm-mono"
-              />
-            </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Version
+                  </label>
+                  <input
+                    type="text"
+                    value={version}
+                    onChange={(e) => setVersion(e.target.value)}
+                    placeholder="e.g. web@2.4.0 or a1b2c3d"
+                    required
+                    className="pm-input h-9 text-xs pm-mono"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
-                Commit SHA (optional)
-              </label>
-              <input
-                type="text"
-                value={commitSha}
-                onChange={(e) => setCommitSha(e.target.value)}
-                placeholder="7-40 hex chars (auto-inferred if hex)"
-                className="pm-input h-9 text-xs pm-mono"
-              />
-            </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Commit SHA (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={commitSha}
+                    onChange={(e) => setCommitSha(e.target.value)}
+                    placeholder="7-40 hex chars (auto-inferred if hex)"
+                    className="pm-input h-9 text-xs pm-mono"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
-                Environment
-              </label>
-              <input
-                type="text"
-                value={environment}
-                onChange={(e) => setEnvironment(e.target.value)}
-                placeholder="production"
-                className="pm-input h-9 text-xs"
-              />
-            </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Environment
+                  </label>
+                  <input
+                    type="text"
+                    value={environment}
+                    onChange={(e) => setEnvironment(e.target.value)}
+                    placeholder="production"
+                    className="pm-input h-9 text-xs"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
-                Deployment notes
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                placeholder="Summary of changes in this release..."
-                className="pm-input text-xs py-2"
-              />
-            </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Deployment notes
+                  </label>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={3}
+                    placeholder="Summary of changes in this release..."
+                    className="pm-input text-xs py-2"
+                  />
+                </div>
 
-            <button
-              type="submit"
-              disabled={submitting || projects.length === 0}
-              className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
-            >
-              {submitting ? "Saving..." : "Save release"}
-            </button>
-          </form>
+                <button
+                  type="submit"
+                  disabled={submitting || projects.length === 0}
+                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                >
+                  {submitting ? "Saving..." : "Save release"}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <h2 className="text-sm font-bold text-[var(--color-text)] flex items-center gap-1.5 mb-1">
+                <Upload size={15} />
+                <span>Upload React / JS Source Map</span>
+              </h2>
+              <p className="text-xs text-[var(--color-text-dim)] mb-4">
+                Attach a Source Map v3 (<code className="pm-mono">.js.map</code>) to a release.
+                Stored zstd-compressed and resolved lazily via bounded LRU during ingest.
+              </p>
+
+              <form onSubmit={(e) => void handleUploadSourceMap(e)} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Project
+                  </label>
+                  <select
+                    value={smProjectSlug}
+                    onChange={(e) => setSmProjectSlug(e.target.value)}
+                    required
+                    className="pm-input h-9 text-xs"
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.slug}>
+                        {p.name} ({p.slug})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Release version
+                  </label>
+                  <input
+                    type="text"
+                    value={smRelease}
+                    onChange={(e) => setSmRelease(e.target.value)}
+                    placeholder="e.g. web@2.4.0"
+                    required
+                    className="pm-input h-9 text-xs pm-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Source Map file (.map)
+                  </label>
+                  <input
+                    type="file"
+                    accept=".map,.json,application/json"
+                    onChange={handleSelectMapFile}
+                    className="block w-full text-xs text-[var(--color-text-muted)] file:mr-2 file:py-1.5 file:px-3 file:rounded file:border file:border-[var(--color-border-strong)] file:text-xs file:font-semibold file:bg-[var(--color-bg)] file:cursor-pointer"
+                  />
+                  {smFileNameDisplay && (
+                    <div className="mt-1 text-[11px] text-[var(--color-text-dim)] pm-mono truncate">
+                      Loaded: {smFileNameDisplay} ({formatBytes(smContent.length)})
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Bundle filename / URL path
+                  </label>
+                  <input
+                    type="text"
+                    value={smFilename}
+                    onChange={(e) => setSmFilename(e.target.value)}
+                    placeholder="~/assets/index-abc123.js"
+                    required
+                    className="pm-input h-9 text-xs pm-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--color-text)] mb-1">
+                    Debug ID (optional — auto-detected from map)
+                  </label>
+                  <input
+                    type="text"
+                    value={smDebugId}
+                    onChange={(e) => setSmDebugId(e.target.value)}
+                    placeholder="UUID from Sentry bundler plugin"
+                    className="pm-input h-9 text-xs pm-mono"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={smSubmitting || !smContent || projects.length === 0}
+                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                >
+                  {smSubmitting ? "Uploading..." : "Upload source map"}
+                </button>
+              </form>
+            </>
+          )}
         </aside>
       )}
     </div>

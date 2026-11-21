@@ -5,6 +5,36 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F004: Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel
+
+**Status at end of session:** done
+
+**Done:**
+- Created `crates/ingest` (`maxi-loop-ingest`):
+  - `cache.rs`: thread-safe in-memory `DsnCache` preloaded from PostgreSQL at startup and updated live via `ProjectDsnObserver` on project creation/DSN rotation, with constant-time `subtle::ConstantTimeEq` key verification (0 per-envelope DB queries) and per-project `governor` GCRA rate limiters
+  - `decompress.rs`: streaming decompression for `gzip`, `deflate` (RFC 1950 zlib + raw RFC 1951 fallback), and `br` (brotli) with bounded `Read::take` enforcement of `MAX_ENVELOPE_COMPRESSED_BYTES` and `MAX_ENVELOPE_DECOMPRESSED_BYTES` (zip-bomb protection)
+  - `envelope.rs`: Sentry Envelope parser supporting `X-Sentry-Auth`, `?sentry_key=`, and envelope header `dsn` authentication, early dropping of unsupported item types (`session`, `replay_*`, `profile`, `attachment`, etc.) without deserializing their payloads, `MAX_EVENT_PAYLOAD_BYTES` enforcement, and lightweight event metadata extraction
+  - `http.rs`: `POST /api/{project_id}/envelope/` (and `/api/{project_id}/envelope`) handler pushing accepted `QueuedEnvelope` batches into a bounded `tokio::sync::mpsc` channel and returning `429 Too Many Requests` with `Retry-After` and `X-Sentry-Rate-Limits` headers on per-project quota exhaustion or full-channel backpressure
+- Wired `DsnCache` and `crates/ingest` router into `crates/server` and connected `crates/org` project create/rotate handlers via `ProjectDsnObserver`
+- Added PostgreSQL 16 integration test `crates/server/tests/envelope_ingest.rs` verifying in-memory DSN auth (0 DB queries, live DSN rotation invalidation), gzip/deflate/brotli decompression, zip-bomb & oversized event rejections (`413`), early drop of unsupported items, per-project `governor` rate limiting (`429`), and bounded channel full backpressure (`429`)
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (29 passed: 7 server unit + 2 server integration + 5 auth unit + 5 ingest unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
+- `cargo build --workspace` → PASS
+- Manual smoke check (live `maxi-loop` server preloading DSN cache + gzipped mixed envelope `POST /api/{project_id}/envelope/` returning `{"accepted_items":1,"dropped_items":1}` + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: fast-path `X-Sentry-Auth` / `?sentry_key=` authentication runs in memory before decompression so unauthorized callers cannot burn decompression CPU or trigger DB queries; streaming `Read::take(max_decompressed_bytes + 1)` prevents gzip/deflate/brotli decompression bombs; `MAX_EVENT_PAYLOAD_BYTES` checked before slicing/parsing event JSON; constant-time DSN key check; negative tests cover invalid/rotated DSN keys, unknown project IDs, gzip decompression bombs (`413`), oversized event items (`413`), per-project rate limit (`429`), and full-channel backpressure (`429`)
+- New dependencies: `flate2` v1.1 (maintained by rust-lang, required by PRD F-ING-2 for gzip/deflate decompression), `brotli` v7.0 (standard pure-Rust Brotli implementation, required by PRD F-ING-2 for `Content-Encoding: br`), and `governor` v0.8 (GCRA rate limiter explicitly specified in PRD §11, Design §5.1/5.9, and F004 acceptance criteria). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Introduced `ProjectDsnObserver` in `crates/platform` so `crates/org` notifies `DsnCache` in memory whenever a project is created or its DSN is rotated, keeping `crates/org` decoupled from `crates/ingest` while guaranteeing 0 DB queries on the ingest hot path
+
+**Not finished / blockers:**
+- Ready to begin F005 (Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert)
+
 ### 2026-11-21 — Antigravity — F003: Session auth (Argon2id + CSRF) and Tenant/Workspace/Project/DSN management API
 
 **Status at end of session:** done
