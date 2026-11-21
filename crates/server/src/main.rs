@@ -6,7 +6,10 @@ use maxi_loop::cli::{Command, parse_args};
 use maxi_loop::http::build_router;
 use maxi_loop_platform::bootstrap::{BootstrapSpec, bootstrap_defaults};
 use maxi_loop_platform::config::{Config, LogFormat};
-use maxi_loop_platform::db::{connect_db, ensure_upcoming_events_partitions, run_migrations};
+use maxi_loop_platform::db::{
+    connect_db, ensure_upcoming_events_partitions, ensure_upcoming_traces_partitions,
+    run_migrations,
+};
 use maxi_loop_retention::model::RetentionConfig;
 use maxi_loop_retention::service::spawn_retention_scheduler;
 use tokio::net::TcpListener;
@@ -52,6 +55,10 @@ async fn main() {
     let today_utc = Utc::now().date_naive();
     if let Err(err) = ensure_upcoming_events_partitions(&db, today_utc, 7).await {
         error!(error = %err, "failed to ensure upcoming events partitions");
+        std::process::exit(1);
+    }
+    if let Err(err) = ensure_upcoming_traces_partitions(&db, today_utc, 7).await {
+        error!(error = %err, "failed to ensure upcoming traces partitions");
         std::process::exit(1);
     }
 

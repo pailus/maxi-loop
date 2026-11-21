@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use maxi_loop_performance::model::QueuedTransaction;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub struct QueuedEnvelope {
     pub envelope_id: String,
     pub received_at: DateTime<Utc>,
     pub events: Vec<QueuedEvent>,
+    pub transactions: Vec<QueuedTransaction>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

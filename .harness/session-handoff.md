@@ -8,24 +8,25 @@
 ## Last session
 - Date: 2026-11-22
 - Assistant: Antigravity
-- Feature worked on: F011 (Phase 2b: Embedded MCP server `/mcp` Streamable HTTP for AI issue analysis and triage) — done
+- Feature worked on: F012 (Phase 3: Performance monitoring — transactions, spans, 1-minute duration histograms, sampled zstd traces, distributed waterfall, MCP `list_transactions` / `get_trace`) — done
 
 ## Current state
 - What works and is verified:
-  - **Phase 1 (`F001`–`F009`), Phase 2 (`F010`), and Phase 2b (`F011`) are complete.**
-  - Added migration `migrations/0004_phase2b_mcp.sql` (`mcp_tokens`, `mcp_audit_logs`, `issue_notes` + RLS).
-  - Moved pure PII scrubbing to `crates/platform/src/scrub.rs` (re-exported by `crates/ingest/src/scrub.rs`) for ingest-parity MCP output scrubbing without coupling `crates/mcp` to `crates/ingest` or `sqlx`.
-  - Extended `crates/auth/src/mcp.rs` (`McpAuthService`, `/api/v1/mcp/tokens`, `/api/v1/mcp/audit-logs`), `crates/org/src/service.rs` (`OrgService`), and `crates/issues` (`notes.rs`, `IssuesService`, `/api/v1/issues/{id}/notes`, `since`/`until`/`sort=regressed`, `resolve_release_commit_sha`).
-  - Created `crates/mcp` (`maxi-loop-mcp`, **zero `sqlx` dependency** per `D006`) serving Streamable HTTP JSON-RPC 2.0 on `POST /mcp` with all 7 tools (`list_projects`, `list_issues`, `get_issue`, `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note`), per-token `governor` rate limiting (`429`), output PII scrubbing, untrusted-data wrapping, truncation markers, release-to-`commit_sha` mapping, and full audit logging.
-  - Added MaxiBoard UI `web/src/modules/mcp/McpView.tsx` (**MCP & AI** sidebar tab) and **Notes & AI Triage** tab in `IssueDetailFullView.tsx`, rebuilt embedded SPA.
-  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (55/55 passed), `cargo build --workspace`, `cargo build --release -p maxi-loop`, and live smoke check against restarted `maxi-loop-dev.service` on port `8080`.
+  - **Phase 1 (`F001`–`F009`), Phase 2 (`F010`), Phase 2b (`F011`), and Phase 3 (`F012`) are complete.**
+  - Added migration `migrations/0005_phase3_performance.sql`: immutable `merge_histogram_buckets` + `sum_histogram_buckets` aggregate, `transaction_minute_metrics`, daily-partitioned `traces` (`spans_zstd BYTEA`), `ensure_traces_partition`, `drop_expired_traces_partitions`, and RLS (`maxi_loop_app` + `maxi_loop_worker`).
+  - Created vertical-slice crate `crates/performance` (`maxi-loop-performance`) with 76-bucket log-scale duration histograms (`histogram.rs`), bounded zstd trace blob codec (`codec.rs`), Sentry transaction parser + PII scrubber + head-consistent sampling (`error`/`slow`/1–5% deterministic `trace_id` hash) + batch writer (`ingest_proc.rs`), distributed cross-service trace waterfall assembler (`waterfall.rs`), RLS-enforced `PerformanceService` (`service.rs`), and `/api/v1/performance/*` HTTP API (`http.rs`).
+  - Extended `crates/ingest` to accept `"transaction"` Sentry envelope items alongside `"event"` items and flush 1-minute histograms + sampled zstd traces in 100ms worker batches.
+  - Extended `crates/retention` to pre-create & `DROP TABLE` expired `traces_YYYY_MM_DD` partitions and batch-delete override/global expired `traces` & `transaction_minute_metrics`.
+  - Extended `crates/mcp` (still **zero direct `sqlx` dependency**, `D006`) with `list_transactions` (`F-MCP-12`) and `get_trace` (`F-MCP-13`) with scope enforcement, output PII scrubbing, untrusted-data wrapping, truncation markers, and slow-span flagging.
+  - Added MaxiBoard UI `web/src/modules/performance/PerformanceView.tsx` and `TraceWaterfallView.tsx` (**Performance** sidebar nav item + `?view=performance&trace=...` deep links), rebuilt embedded SPA.
+  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (65/65 passed, incl. `phase3_performance` integration test & 8 `maxi-loop-performance` unit tests), `cargo build --workspace`, `cargo build --release -p maxi-loop`, and live smoke check against restarted `maxi-loop-dev.service` on port `8080`.
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only gitignored `.env`, `.env.local`, and `tests/e2e/python/.venv/`)
 
 ## What the next session MUST watch out for
-- Running service: `maxi-loop-dev.service` (systemd user unit) is running on `127.0.0.1:8080` for the user's Agentway tunnel preview.
+- Running service: `maxi-loop-dev.service` (systemd user unit) is running the updated `F012` release binary on `127.0.0.1:8080` for the user's Agentway tunnel preview.
 - Test hygiene note: `crates/server/tests/phase2_pii_releases_alerts.rs` calls global `evaluate_spike_rules(&pool, ...)` across all tenants in the shared dev DB; if older test tenants' 15-minute cooldown expires within their 60-minute spike window, the first run can count those older rules until cooldown resets.
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host.
 
 ## Suggested next steps
-1. Start **Phase 3 — `F012`**: Performance monitoring (transactions, spans, 1-minute duration histograms for p50/p95/p99, throughput & error rate, sampled zstd-compressed full traces, distributed trace waterfall UI, and MCP `list_transactions` + `get_trace` tools).
+1. Start **Phase 4 — `F013`**: React Source Maps upload per release (matched by release + filename or debug id) and bounded LRU ingest-time stack frame resolution before fingerprinting (`sourcemap` crate).

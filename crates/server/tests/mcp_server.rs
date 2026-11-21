@@ -545,7 +545,7 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     .await;
     assert_eq!(st, StatusCode::ACCEPTED);
 
-    // Read-only token sees only the 5 read tools (least privilege).
+    // Read-only token sees only the 7 read tools (least privilege; includes Phase 3 performance read tools).
     let (st, _, list_resp) = send_mcp(
         &app,
         Some(&read_token_raw),
@@ -566,7 +566,9 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
             "list_issues",
             "get_issue",
             "get_event",
-            "get_issue_stats"
+            "get_issue_stats",
+            "list_transactions",
+            "get_trace"
         ]
     );
 
@@ -757,7 +759,7 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     assert_eq!(st, StatusCode::CREATED);
     let triage_token_raw = triage_tok_resp["raw_token"].as_str().unwrap().to_owned();
 
-    // Triage token sees all 7 tools in `tools/list`.
+    // Triage token sees all 9 tools in `tools/list` (7 read + 2 triage).
     let (st, _, triage_list) = send_mcp(
         &app,
         Some(&triage_token_raw),
@@ -765,7 +767,7 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    assert_eq!(triage_list["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(triage_list["result"]["tools"].as_array().unwrap().len(), 9);
 
     // Call 2: `add_issue_note` succeeds and attaches a `source = "mcp"` note.
     let (st, _, note_res) = send_mcp(

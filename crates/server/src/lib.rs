@@ -19,6 +19,7 @@ use maxi_loop_issues::service::IssuesService;
 use maxi_loop_mcp::http::McpState;
 use maxi_loop_mcp::rate_limit::McpRateLimiter;
 use maxi_loop_org::service::OrgService;
+use maxi_loop_performance::service::PerformanceService;
 use maxi_loop_platform::config::Config;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -143,6 +144,7 @@ impl FromRef<AppState> for McpState {
             McpAuthService::new(state.db.clone()),
             OrgService::new(state.db.clone(), Arc::clone(&state.config)),
             IssuesService::new(state.db.clone()),
+            PerformanceService::new(state.db.clone()),
             state.mcp_limiter.clone(),
         )
     }

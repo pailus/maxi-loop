@@ -42,6 +42,8 @@ pub struct Config {
     pub db_max_connections: u32,
     pub retention_default_days: u16,
     pub max_full_events_per_issue: u32,
+    pub trace_slow_threshold_ms: u32,
+    pub trace_random_sample_rate: f64,
     pub max_envelope_compressed_bytes: usize,
     pub max_envelope_decompressed_bytes: usize,
     pub max_event_payload_bytes: usize,
@@ -72,6 +74,8 @@ impl fmt::Debug for Config {
             .field("db_max_connections", &self.db_max_connections)
             .field("retention_default_days", &self.retention_default_days)
             .field("max_full_events_per_issue", &self.max_full_events_per_issue)
+            .field("trace_slow_threshold_ms", &self.trace_slow_threshold_ms)
+            .field("trace_random_sample_rate", &self.trace_random_sample_rate)
             .field(
                 "max_envelope_compressed_bytes",
                 &self.max_envelope_compressed_bytes,
@@ -154,6 +158,22 @@ impl Config {
             1,
             1000,
             "MAX_FULL_EVENTS_PER_ISSUE",
+        )?;
+
+        let trace_slow_threshold_ms = parse_u32_range(
+            lookup("TRACE_SLOW_THRESHOLD_MS").as_deref(),
+            500,
+            1,
+            600_000,
+            "TRACE_SLOW_THRESHOLD_MS",
+        )?;
+
+        let trace_random_sample_rate = parse_f64_range(
+            lookup("TRACE_RANDOM_SAMPLE_RATE").as_deref(),
+            0.05,
+            0.0,
+            1.0,
+            "TRACE_RANDOM_SAMPLE_RATE",
         )?;
 
         let max_envelope_compressed_bytes = parse_u32_range(
@@ -297,6 +317,8 @@ impl Config {
             db_max_connections,
             retention_default_days,
             max_full_events_per_issue,
+            trace_slow_threshold_ms,
+            trace_random_sample_rate,
             max_envelope_compressed_bytes,
             max_envelope_decompressed_bytes,
             max_event_payload_bytes,
@@ -511,6 +533,28 @@ fn parse_u32_range(
             .map_err(|_| ConfigError::InvalidValue(name, "must be a valid integer"))?,
     };
     if value < min || value > max {
+        return Err(ConfigError::InvalidValue(
+            name,
+            "value out of allowed range",
+        ));
+    }
+    Ok(value)
+}
+
+fn parse_f64_range(
+    raw: Option<&str>,
+    default: f64,
+    min: f64,
+    max: f64,
+    name: &'static str,
+) -> Result<f64, ConfigError> {
+    let value = match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => default,
+        Some(s) => s
+            .parse::<f64>()
+            .map_err(|_| ConfigError::InvalidValue(name, "must be a valid number"))?,
+    };
+    if !value.is_finite() || value < min || value > max {
         return Err(ConfigError::InvalidValue(
             name,
             "value out of allowed range",

@@ -13,6 +13,7 @@ flate2.workspace = true
 governor.workspace = true
 hex.workspace = true
 http.workspace = true
+maxi-loop-performance.workspace = true
 maxi-loop-platform.workspace = true
 password-hash.workspace = true
 serde.workspace = true

@@ -8,7 +8,7 @@ publish.workspace = true
 
 # Architectural invariant (D006): `maxi-loop-mcp` MUST NOT depend on `sqlx`.
 # All database access flows strictly through the shared internal service facades
-# in `maxi-loop-auth`, `maxi-loop-org`, and `maxi-loop-issues`.
+# in `maxi-loop-auth`, `maxi-loop-org`, `maxi-loop-issues`, and `maxi-loop-performance`.
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
@@ -17,6 +17,7 @@ http.workspace = true
 maxi-loop-auth.workspace = true
 maxi-loop-issues.workspace = true
 maxi-loop-org.workspace = true
+maxi-loop-performance.workspace = true
 maxi-loop-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true

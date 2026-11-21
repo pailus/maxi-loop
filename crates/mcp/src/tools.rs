@@ -4,18 +4,21 @@ use maxi_loop_issues::model::{IssueListFilter, UpdateIssueStatusInput};
 use maxi_loop_issues::notes::{CreateIssueNoteInput, NoteActor};
 use maxi_loop_issues::service::{IssueScope, IssuesService};
 use maxi_loop_org::service::OrgService;
+use maxi_loop_performance::model::{PerformanceScope, TransactionListFilter};
+use maxi_loop_performance::service::PerformanceService;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::sanitize::{
-    UNTRUSTED_SECURITY_NOTICE, format_stack_frames, issue_ui_url, project_ui_url,
-    scrub_and_bound_json, wrap_untrusted_text,
+    UNTRUSTED_SECURITY_NOTICE, format_stack_frames, issue_ui_url, performance_ui_url,
+    project_ui_url, scrub_and_bound_json, trace_ui_url, wrap_untrusted_text,
 };
 
 pub struct ToolServices<'a> {
     pub org: &'a OrgService,
     pub issues: &'a IssuesService,
+    pub performance: &'a PerformanceService,
     pub public_base_url: &'a str,
 }
 
@@ -137,6 +140,53 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
                 "idempotentHint": true
             }
         }));
+
+        tools.push(json!({
+            "name": "list_transactions",
+            "description": "List aggregated performance transactions with p50/p95/p99 latency (ms), throughput (rpm), and error rate from 1-minute duration histograms. Filter by project, environment, release, op, query, and time window.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_slug": { "type": "string", "description": "Optional project slug filter." },
+                    "environment": { "type": "string", "description": "Optional environment filter (e.g. production)." },
+                    "release": { "type": "string", "description": "Optional release version filter." },
+                    "op": { "type": "string", "description": "Optional span operation filter (e.g. http.server, pageload)." },
+                    "query": { "type": "string", "description": "Substring search on transaction name." },
+                    "since": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC window start." },
+                    "until": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC window end." },
+                    "hours": { "type": "integer", "minimum": 1, "maximum": 2160, "default": 24 },
+                    "sort": { "type": "string", "enum": ["p95", "p99", "p50", "throughput", "error_rate", "avg", "name"], "default": "p95" },
+                    "page": { "type": "integer", "minimum": 1, "default": 1 },
+                    "per_page": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
+
+        tools.push(json!({
+            "name": "get_trace",
+            "description": "Get a compact distributed trace waterfall by trace_id across services/projects in your authorized scope, with slowest spans explicitly flagged (`is_slow: true` + `slowest_spans`), PII scrubbed, and untrusted span content wrapped.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["trace_id"],
+                "properties": {
+                    "trace_id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Distributed trace ID (hex string)." },
+                    "max_spans": { "type": "integer", "minimum": 1, "maximum": 200, "default": 60 },
+                    "slow_only": { "type": "boolean", "default": false, "description": "When true, return only slow/error spans and transaction roots." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
     }
 
     if can_triage {
@@ -193,6 +243,8 @@ pub fn is_known_tool(name: &str) -> bool {
             | "get_issue"
             | "get_event"
             | "get_issue_stats"
+            | "list_transactions"
+            | "get_trace"
             | "update_issue_status"
             | "add_issue_note"
     )
@@ -228,6 +280,16 @@ pub async fn execute_tool(
             require_read(auth)?;
             let args: GetIssueStatsArgs = parse_args(arguments)?;
             tool_get_issue_stats(services, auth, args).await
+        }
+        "list_transactions" => {
+            require_read(auth)?;
+            let args: ListTransactionsArgs = parse_args(arguments)?;
+            tool_list_transactions(services, auth, args).await
+        }
+        "get_trace" => {
+            require_read(auth)?;
+            let args: GetTraceArgs = parse_args(arguments)?;
+            tool_get_trace(services, auth, args).await
         }
         "update_issue_status" => {
             require_triage(auth)?;
@@ -826,4 +888,270 @@ fn extract_compact_event_fields(
         }
     }
     scrub_and_bound_json(Value::Object(picked), rules, 260, 20, 25)
+}
+
+fn build_performance_scope<'a>(
+    auth: &'a McpAuthContext,
+    requested_project_slug: Option<&'a str>,
+) -> Result<PerformanceScope<'a>, AppError> {
+    match &auth.access_scope {
+        McpAccessScope::Tenant => Ok(PerformanceScope {
+            tenant_slug: &auth.tenant_slug,
+            workspace_slug: None,
+            project_slug: requested_project_slug,
+        }),
+        McpAccessScope::Workspace { workspace_slug, .. } => Ok(PerformanceScope {
+            tenant_slug: &auth.tenant_slug,
+            workspace_slug: Some(workspace_slug.as_str()),
+            project_slug: requested_project_slug,
+        }),
+        McpAccessScope::Project {
+            workspace_slug,
+            project_slug,
+            ..
+        } => {
+            if let Some(req_slug) = requested_project_slug
+                && req_slug.trim() != project_slug.as_str()
+            {
+                return Err(AppError::Forbidden(
+                    "token is scoped to a different project",
+                ));
+            }
+            Ok(PerformanceScope {
+                tenant_slug: &auth.tenant_slug,
+                workspace_slug: Some(workspace_slug.as_str()),
+                project_slug: Some(project_slug.as_str()),
+            })
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListTransactionsArgs {
+    project_slug: Option<String>,
+    environment: Option<String>,
+    release: Option<String>,
+    op: Option<String>,
+    query: Option<String>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    hours: Option<u32>,
+    sort: Option<String>,
+    page: Option<u32>,
+    per_page: Option<u32>,
+}
+
+async fn tool_list_transactions(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: ListTransactionsArgs,
+) -> Result<ToolOutput, AppError> {
+    let per_page = args.per_page.unwrap_or(20);
+    if !(1..=50).contains(&per_page) {
+        return Err(AppError::Validation(
+            "per_page must be between 1 and 50 for MCP responses".to_owned(),
+        ));
+    }
+
+    let req_proj_slug = args
+        .project_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let scope = build_performance_scope(auth, req_proj_slug)?;
+
+    let filter = TransactionListFilter {
+        workspace_slug: scope.workspace_slug.map(str::to_owned),
+        project_id: auth.access_scope.project_id(),
+        project_slug: scope.project_slug.map(str::to_owned),
+        environment: args.environment,
+        release: args.release,
+        op: args.op,
+        query: args.query,
+        since: args.since,
+        until: args.until,
+        hours: args.hours,
+        sort: args.sort,
+        page: args.page,
+        per_page: Some(per_page),
+    };
+
+    let page_resp = services
+        .performance
+        .list_transactions(auth.tenant_ctx, scope, filter)
+        .await?;
+
+    let rules = services
+        .org
+        .list_effective_pii_rules(
+            auth.tenant_ctx,
+            auth.access_scope.workspace_id(),
+            auth.access_scope.project_id(),
+        )
+        .await?;
+
+    let mut any_truncated = page_resp.page < page_resp.total_pages;
+    let mut items = Vec::with_capacity(page_resp.items.len());
+    for tx in page_resp.items {
+        let (tx_name_wrapped, t_name) = wrap_untrusted_text(&tx.transaction_name, &rules, 240);
+        any_truncated |= t_name;
+        items.push(json!({
+            "project_slug": tx.project_slug,
+            "workspace_slug": tx.workspace_slug,
+            "op": tx.op,
+            "total_count": tx.total_count,
+            "error_count": tx.error_count,
+            "error_rate": tx.error_rate,
+            "throughput_rpm": tx.throughput_rpm,
+            "p50_ms": tx.p50_ms,
+            "p95_ms": tx.p95_ms,
+            "p99_ms": tx.p99_ms,
+            "avg_ms": tx.avg_ms,
+            "min_ms": tx.min_ms,
+            "max_ms": tx.max_ms,
+            "last_seen": tx.last_seen,
+            "ui_url": performance_ui_url(services.public_base_url, &tx.project_slug),
+            "untrusted_event_data": {
+                "transaction_name": tx_name_wrapped,
+            }
+        }));
+    }
+
+    Ok(ToolOutput::from_json(json!({
+        "security_notice": UNTRUSTED_SECURITY_NOTICE,
+        "window_minutes": page_resp.window_minutes,
+        "since": page_resp.since,
+        "until": page_resp.until,
+        "page": page_resp.page,
+        "per_page": page_resp.per_page,
+        "total": page_resp.total,
+        "total_pages": page_resp.total_pages,
+        "has_more": page_resp.page < page_resp.total_pages,
+        "truncated": any_truncated,
+        "items": items,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetTraceArgs {
+    trace_id: String,
+    max_spans: Option<u32>,
+    slow_only: Option<bool>,
+}
+
+async fn tool_get_trace(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: GetTraceArgs,
+) -> Result<ToolOutput, AppError> {
+    let max_spans = usize::try_from(args.max_spans.unwrap_or(60).clamp(1, 200)).unwrap_or(60);
+    let slow_only = args.slow_only.unwrap_or(false);
+    let scope = build_performance_scope(auth, None)?;
+
+    let rules = services
+        .org
+        .list_effective_pii_rules(
+            auth.tenant_ctx,
+            auth.access_scope.workspace_id(),
+            auth.access_scope.project_id(),
+        )
+        .await?;
+
+    let wf = services
+        .performance
+        .get_trace(auth.tenant_ctx, scope, &args.trace_id, &rules)
+        .await?;
+
+    let (root_tx_wrapped, mut truncated) = wrap_untrusted_text(&wf.root_transaction, &rules, 240);
+
+    let filtered_spans: Vec<_> = if slow_only {
+        wf.spans
+            .iter()
+            .filter(|s| s.is_slow || s.is_error || s.is_transaction_root)
+            .collect()
+    } else {
+        wf.spans.iter().collect()
+    };
+
+    let omitted_spans = filtered_spans.len().saturating_sub(max_spans);
+    if omitted_spans > 0 {
+        truncated = true;
+    }
+
+    let mut compact_spans = Vec::with_capacity(filtered_spans.len().min(max_spans));
+    for span in filtered_spans.into_iter().take(max_spans) {
+        let (desc_wrapped, t_desc) = wrap_untrusted_text(&span.description, &rules, 240);
+        let (tags_bounded, t_tags) = scrub_and_bound_json(span.tags.clone(), &rules, 160, 15, 20);
+        let (data_bounded, t_data) = scrub_and_bound_json(span.data.clone(), &rules, 200, 15, 20);
+        truncated |= t_desc || t_tags || t_data;
+
+        compact_spans.push(json!({
+            "span_id": span.span_id,
+            "parent_span_id": span.parent_span_id,
+            "project_slug": span.project_slug,
+            "platform": span.platform,
+            "op": span.op,
+            "status": span.status,
+            "is_error": span.is_error,
+            "is_transaction_root": span.is_transaction_root,
+            "is_slow": span.is_slow,
+            "depth": span.depth,
+            "offset_ms": span.offset_ms,
+            "duration_ms": span.duration_ms,
+            "self_duration_ms": span.self_duration_ms,
+            "pct_of_trace": span.pct_of_trace,
+            "untrusted_event_data": {
+                "description": desc_wrapped,
+                "tags": tags_bounded,
+                "data": data_bounded,
+            }
+        }));
+    }
+
+    let slowest_spans: Vec<Value> = wf
+        .slowest_spans
+        .iter()
+        .map(|s| {
+            let (desc_wrapped, t_desc) = wrap_untrusted_text(&s.description, &rules, 200);
+            truncated |= t_desc;
+            json!({
+                "span_id": s.span_id,
+                "project_slug": s.project_slug,
+                "op": s.op,
+                "duration_ms": s.duration_ms,
+                "self_duration_ms": s.self_duration_ms,
+                "pct_of_trace": s.pct_of_trace,
+                "is_error": s.is_error,
+                "untrusted_event_data": {
+                    "description": desc_wrapped,
+                }
+            })
+        })
+        .collect();
+
+    Ok(ToolOutput::from_json(json!({
+        "security_notice": UNTRUSTED_SECURITY_NOTICE,
+        "truncated": truncated,
+        "omitted_spans": omitted_spans,
+        "ui_url": trace_ui_url(services.public_base_url, &wf.trace_id),
+        "trace": {
+            "trace_id": wf.trace_id,
+            "status": wf.status,
+            "is_error": wf.is_error,
+            "projects": wf.projects,
+            "services_count": wf.services_count,
+            "sample_reasons": wf.sample_reasons,
+            "start_timestamp": wf.start_timestamp,
+            "end_timestamp": wf.end_timestamp,
+            "total_duration_ms": wf.total_duration_ms,
+            "total_spans": wf.span_count,
+            "untrusted_event_data": {
+                "root_transaction": root_tx_wrapped,
+            }
+        },
+        "slowest_spans": slowest_spans,
+        "waterfall": compact_spans,
+    })))
 }

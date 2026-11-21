@@ -129,9 +129,16 @@ async fn ingest_envelope_handler(
         },
     )?;
 
-    let accepted_items = parsed.envelope.events.len();
+    let accepted_events = parsed.envelope.events.len();
+    let accepted_txs = parsed.envelope.transactions.len();
+    let accepted_items = accepted_events + accepted_txs;
     let dropped_items = parsed.dropped_items;
     let envelope_id = parsed.envelope.envelope_id.clone();
+    let limit_category = if accepted_events == 0 && accepted_txs > 0 {
+        "transaction"
+    } else {
+        "error"
+    };
 
     // If all items were unsupported (session, replay, profile, attachment) and dropped early,
     // acknowledge immediately without consuming project rate quota or worker queue capacity.
@@ -153,7 +160,11 @@ async fn ingest_envelope_handler(
         .dsn_cache
         .check_rate_limit(&cached_project, item_count_u32)
     {
-        return Ok(rate_limit_response(retry_after_secs, "error", "project"));
+        return Ok(rate_limit_response(
+            retry_after_secs,
+            limit_category,
+            "project",
+        ));
     }
 
     // Push into bounded tokio::mpsc worker channel with non-blocking backpressure.
@@ -173,7 +184,7 @@ async fn ingest_envelope_handler(
                 tenant_id = cached_project.tenant_id,
                 "ingest bounded channel is full; dropping envelope with 429 backpressure"
             );
-            Ok(rate_limit_response(5, "error", "organization"))
+            Ok(rate_limit_response(5, limit_category, "organization"))
         }
         Err(TrySendError::Closed(_)) => Err(AppError::DatabaseConnect(
             "ingest worker channel closed".to_owned(),

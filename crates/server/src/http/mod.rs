@@ -17,6 +17,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(maxi_loop_org::http::router::<AppState>())
         .merge(maxi_loop_issues::http::router::<AppState>())
         .merge(maxi_loop_alerts::http::router::<AppState>())
+        .merge(maxi_loop_performance::http::router::<AppState>())
         .fallback(api_not_found);
 
     Router::new()
@@ -70,6 +71,8 @@ mod tests {
             db_max_connections: 1,
             retention_default_days: 30,
             max_full_events_per_issue: 50,
+            trace_slow_threshold_ms: 500,
+            trace_random_sample_rate: 0.05,
             max_envelope_compressed_bytes: 1_048_576,
             max_envelope_decompressed_bytes: 2_097_152,
             max_event_payload_bytes: 524_288,

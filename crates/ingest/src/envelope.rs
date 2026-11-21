@@ -1,5 +1,6 @@
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
+use maxi_loop_performance::model::QueuedTransaction;
 use maxi_loop_platform::error::AppError;
 use password_hash::rand_core::{OsRng, RngCore};
 use serde::Deserialize;
@@ -144,6 +145,7 @@ pub fn parse_envelope_items(
         .unwrap_or_else(generate_event_id_hex);
 
     let mut events = Vec::new();
+    let mut transactions = Vec::new();
     let mut dropped_items = 0usize;
     let mut total_items = 0usize;
 
@@ -172,11 +174,13 @@ pub fn parse_envelope_items(
         total_items += 1;
 
         let item_type = item_header.item_type.trim();
-        let is_supported_event = item_type == "event";
+        let is_event = item_type == "event";
+        let is_transaction = item_type == "transaction";
+        let is_supported = is_event || is_transaction;
 
-        // If `length` is declared on a supported event and exceeds `max_event_payload_bytes`,
+        // If `length` is declared on a supported item and exceeds `max_event_payload_bytes`,
         // reject immediately with 413 before even reading or slicing the payload.
-        if is_supported_event
+        if is_supported
             && let Some(declared_len) = item_header.length
             && declared_len > max_event_payload_bytes
         {
@@ -220,7 +224,7 @@ pub fn parse_envelope_items(
         };
 
         // Drop unsupported item types (session, replay_*, profile, attachment, client_report, etc.) early!
-        if !is_supported_event {
+        if !is_supported {
             dropped_items += 1;
             continue;
         }
@@ -246,14 +250,13 @@ pub fn parse_envelope_items(
             .filter(|s| !s.is_empty() && s.len() <= 128)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| {
-                if events.is_empty() {
+                if events.is_empty() && transactions.is_empty() {
                     envelope_id.clone()
                 } else {
                     generate_event_id_hex()
                 }
             });
 
-        let level = normalize_level(minimal.level.as_deref());
         let environment = minimal
             .environment
             .as_deref()
@@ -275,18 +278,33 @@ pub fn parse_envelope_items(
             .unwrap_or("other")
             .to_owned();
 
-        events.push(QueuedEvent {
-            tenant_id: target.tenant_id,
-            workspace_id: target.workspace_id,
-            project_id: target.project_id,
-            event_id,
-            received_at: target.received_at,
-            level,
-            environment,
-            release,
-            platform,
-            raw_payload: payload_slice.to_vec(),
-        });
+        if is_transaction {
+            transactions.push(QueuedTransaction {
+                tenant_id: target.tenant_id,
+                workspace_id: target.workspace_id,
+                project_id: target.project_id,
+                event_id,
+                received_at: target.received_at,
+                environment,
+                release,
+                platform,
+                raw_payload: payload_slice.to_vec(),
+            });
+        } else {
+            let level = normalize_level(minimal.level.as_deref());
+            events.push(QueuedEvent {
+                tenant_id: target.tenant_id,
+                workspace_id: target.workspace_id,
+                project_id: target.project_id,
+                event_id,
+                received_at: target.received_at,
+                level,
+                environment,
+                release,
+                platform,
+                raw_payload: payload_slice.to_vec(),
+            });
+        }
     }
 
     if total_items == 0 {
@@ -303,6 +321,7 @@ pub fn parse_envelope_items(
             envelope_id,
             received_at: target.received_at,
             events,
+            transactions,
         },
         dropped_items,
     })
@@ -409,6 +428,44 @@ mod tests {
         assert_eq!(ev.environment, "staging");
         assert_eq!(ev.release.as_deref(), Some("abc1234"));
         assert_eq!(ev.platform, "python");
+        assert!(parsed.envelope.transactions.is_empty());
+    }
+
+    #[test]
+    fn parses_mixed_event_and_transaction_envelope_items() {
+        let raw = concat!(
+            "{\"event_id\":\"9ec79c33ec9942ab8353589fcb2e04dc\"}\n",
+            "{\"type\":\"session\"}\n",
+            "{\"sid\":\"dropped\"}\n",
+            "{\"type\":\"transaction\"}\n",
+            "{\"event_id\":\"tx01\",\"type\":\"transaction\",\"transaction\":\"GET /health\",\"environment\":\"production\",\"release\":\"v1.2.3\",\"platform\":\"python\"}\n",
+            "{\"type\":\"event\"}\n",
+            "{\"event_id\":\"ev01\",\"level\":\"error\",\"environment\":\"production\",\"platform\":\"python\"}\n"
+        );
+
+        let (header, cursor) = parse_envelope_header_line(raw.as_bytes()).expect("header ok");
+        let parsed = parse_envelope_items(
+            header,
+            raw.as_bytes(),
+            cursor,
+            8192,
+            EnvelopeTarget {
+                tenant_id: 1,
+                workspace_id: 1,
+                project_id: 5,
+                received_at: Utc::now(),
+            },
+        )
+        .expect("mixed items ok");
+
+        assert_eq!(parsed.dropped_items, 1);
+        assert_eq!(parsed.envelope.events.len(), 1);
+        assert_eq!(parsed.envelope.transactions.len(), 1);
+        assert_eq!(parsed.envelope.transactions[0].event_id, "tx01");
+        assert_eq!(
+            parsed.envelope.transactions[0].release.as_deref(),
+            Some("v1.2.3")
+        );
     }
 
     #[test]

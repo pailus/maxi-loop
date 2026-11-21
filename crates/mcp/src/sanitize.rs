@@ -21,6 +21,18 @@ pub fn project_ui_url(public_base_url: &str, project_slug: &str) -> String {
     format!("{base}/?project={project_slug}")
 }
 
+/// Build a direct deep link to a project's performance view in the MaxiLoop UI (`F-MCP-12`).
+pub fn performance_ui_url(public_base_url: &str, project_slug: &str) -> String {
+    let base = public_base_url.trim_end_matches('/');
+    format!("{base}/?view=performance&project={project_slug}")
+}
+
+/// Build a direct deep link to a distributed trace waterfall in the MaxiLoop UI (`F-MCP-13`).
+pub fn trace_ui_url(public_base_url: &str, trace_id: &str) -> String {
+    let base = public_base_url.trim_end_matches('/');
+    format!("{base}/?view=performance&trace={trace_id}")
+}
+
 /// Scrub PII from an untrusted text field, bound its length with an explicit truncation marker,
 /// and wrap it in untrusted-data delimiters (`F-MCP-8`, `F-MCP-10`).
 pub fn wrap_untrusted_text(

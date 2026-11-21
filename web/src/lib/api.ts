@@ -749,3 +749,223 @@ export async function revokeMcpToken(tokenId: number): Promise<void> {
 export async function fetchMcpAuditLogs(limit = 100): Promise<McpAuditLogView[]> {
   return requestJson<McpAuditLogView[]>(`/api/v1/mcp/audit-logs?limit=${limit}`);
 }
+
+// --- Phase 3: Performance Monitoring (Transactions, Histograms, Sampled Traces & Waterfall) ---
+
+export type TransactionSort =
+  | "p95"
+  | "p99"
+  | "p50"
+  | "throughput"
+  | "error_rate"
+  | "avg"
+  | "name";
+
+export interface TransactionListFilter {
+  workspace_slug?: string;
+  project_slug?: string;
+  environment?: string;
+  release?: string;
+  op?: string;
+  query?: string;
+  hours?: number;
+  sort?: TransactionSort;
+  page?: number;
+  per_page?: number;
+}
+
+export interface TransactionSummaryView {
+  project_id: number;
+  project_slug: string;
+  workspace_id: number;
+  workspace_slug: string;
+  transaction_name: string;
+  op: string;
+  total_count: number;
+  error_count: number;
+  error_rate: number;
+  throughput_rpm: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  avg_ms: number;
+  min_ms: number;
+  max_ms: number;
+  last_seen: string;
+}
+
+export interface PaginatedTransactionsResponse {
+  items: TransactionSummaryView[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+  window_minutes: number;
+  since: string;
+  until: string;
+}
+
+export interface TransactionTimeBucket {
+  bucket: string;
+  total_count: number;
+  error_count: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  avg_ms: number;
+}
+
+export interface TraceSummaryView {
+  trace_id: string;
+  event_id: string;
+  project_id: number;
+  project_slug: string;
+  workspace_slug: string;
+  transaction_name: string;
+  op: string;
+  status: string;
+  is_error: boolean;
+  sample_reason: "slow" | "error" | "random" | string;
+  environment: string;
+  release: string | null;
+  platform: string;
+  duration_ms: number;
+  span_count: number;
+  start_timestamp: string;
+  received_at: string;
+}
+
+export interface TransactionDetailView {
+  summary: TransactionSummaryView;
+  interval: string;
+  series: TransactionTimeBucket[];
+  recent_traces: TraceSummaryView[];
+}
+
+export interface WaterfallSpanNode {
+  span_id: string;
+  parent_span_id: string | null;
+  project_id: number;
+  project_slug: string;
+  platform: string;
+  environment: string;
+  release: string | null;
+  op: string;
+  description: string;
+  status: string;
+  is_error: boolean;
+  is_transaction_root: boolean;
+  depth: number;
+  start_timestamp_ms: number;
+  end_timestamp_ms: number;
+  offset_ms: number;
+  duration_ms: number;
+  self_duration_ms: number;
+  pct_of_trace: number;
+  is_slow: boolean;
+  tags: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+export interface SlowSpanHighlight {
+  span_id: string;
+  project_slug: string;
+  op: string;
+  description: string;
+  duration_ms: number;
+  self_duration_ms: number;
+  pct_of_trace: number;
+  is_error: boolean;
+}
+
+export interface TraceWaterfallView {
+  trace_id: string;
+  root_transaction: string;
+  status: string;
+  is_error: boolean;
+  projects: string[];
+  services_count: number;
+  sample_reasons: string[];
+  start_timestamp: string;
+  end_timestamp: string;
+  total_duration_ms: number;
+  span_count: number;
+  slowest_spans: SlowSpanHighlight[];
+  spans: WaterfallSpanNode[];
+}
+
+export interface TraceListFilter {
+  project_slug?: string;
+  transaction_name?: string;
+  environment?: string;
+  release?: string;
+  sample_reason?: string;
+  is_error?: boolean;
+  hours?: number;
+  limit?: number;
+}
+
+export async function fetchTransactions(
+  filter: TransactionListFilter = {},
+): Promise<PaginatedTransactionsResponse> {
+  const params = new URLSearchParams();
+  if (filter.workspace_slug) params.set("workspace_slug", filter.workspace_slug);
+  if (filter.project_slug) params.set("project_slug", filter.project_slug);
+  if (filter.environment) params.set("environment", filter.environment);
+  if (filter.release) params.set("release", filter.release);
+  if (filter.op) params.set("op", filter.op);
+  if (filter.query && filter.query.trim()) params.set("query", filter.query.trim());
+  if (filter.hours !== undefined) params.set("hours", String(filter.hours));
+  if (filter.sort) params.set("sort", filter.sort);
+  if (filter.page !== undefined) params.set("page", String(filter.page));
+  if (filter.per_page !== undefined) params.set("per_page", String(filter.per_page));
+  const qs = params.toString();
+  return requestJson<PaginatedTransactionsResponse>(
+    `/api/v1/performance/transactions${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function fetchTransactionDetail(params: {
+  project_slug: string;
+  transaction_name: string;
+  op?: string;
+  environment?: string;
+  release?: string;
+  hours?: number;
+}): Promise<TransactionDetailView> {
+  const qs = new URLSearchParams({
+    project_slug: params.project_slug,
+    transaction_name: params.transaction_name,
+  });
+  if (params.op) qs.set("op", params.op);
+  if (params.environment) qs.set("environment", params.environment);
+  if (params.release) qs.set("release", params.release);
+  if (params.hours !== undefined) qs.set("hours", String(params.hours));
+  return requestJson<TransactionDetailView>(
+    `/api/v1/performance/transactions/detail?${qs.toString()}`,
+  );
+}
+
+export async function fetchTraces(
+  filter: TraceListFilter = {},
+): Promise<TraceSummaryView[]> {
+  const params = new URLSearchParams();
+  if (filter.project_slug) params.set("project_slug", filter.project_slug);
+  if (filter.transaction_name) params.set("transaction_name", filter.transaction_name);
+  if (filter.environment) params.set("environment", filter.environment);
+  if (filter.release) params.set("release", filter.release);
+  if (filter.sample_reason) params.set("sample_reason", filter.sample_reason);
+  if (filter.is_error !== undefined) params.set("is_error", String(filter.is_error));
+  if (filter.hours !== undefined) params.set("hours", String(filter.hours));
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  const qs = params.toString();
+  return requestJson<TraceSummaryView[]>(
+    `/api/v1/performance/traces${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function fetchTraceWaterfall(traceId: string): Promise<TraceWaterfallView> {
+  return requestJson<TraceWaterfallView>(
+    `/api/v1/performance/traces/${encodeURIComponent(traceId)}`,
+  );
+}

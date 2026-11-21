@@ -228,7 +228,7 @@
     {
       "id": "F012",
       "title": "Phase 3: Performance monitoring (transactions, spans, histograms, sampled zstd traces, waterfall, MCP tools)",
-      "status": "todo",
+      "status": "done",
       "priority": "medium",
       "acceptance_criteria": [
         "Ingests transactions and spans, aggregates 1-minute duration histograms for p50/p95/p99, throughput, and error rate",

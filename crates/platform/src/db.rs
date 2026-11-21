@@ -71,3 +71,30 @@ pub async fn ensure_upcoming_events_partitions(
     })?;
     Ok(created)
 }
+
+/// Ensure daily trace partitions `traces_YYYY_MM_DD` exist for `[base_date, base_date + days_ahead]`.
+pub async fn ensure_upcoming_traces_partitions(
+    pool: &PgPool,
+    base_date: NaiveDate,
+    days_ahead: u16,
+) -> Result<Vec<String>, AppError> {
+    let mut tx = begin_worker_tx(pool).await?;
+    let mut created = Vec::with_capacity(usize::from(days_ahead) + 1);
+    for offset in 0..=u64::from(days_ahead) {
+        let date = base_date
+            .checked_add_days(Days::new(offset))
+            .ok_or_else(|| AppError::Validation("partition date overflow".to_owned()))?;
+        let name: String = sqlx::query_scalar("SELECT ensure_traces_partition($1)")
+            .bind(date)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|err| {
+                AppError::DatabaseQuery(format!("ensure_traces_partition({date}): {err}"))
+            })?;
+        created.push(name);
+    }
+    tx.commit().await.map_err(|err| {
+        AppError::DatabaseQuery(format!("commit upcoming traces partitions creation: {err}"))
+    })?;
+    Ok(created)
+}

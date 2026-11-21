@@ -5,6 +5,7 @@ import {
   Bell,
   Bot,
   FolderKanban,
+  Gauge,
   Grid,
   Inbox,
   LogOut,
@@ -29,6 +30,7 @@ import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
 import { IssuesView, type IssuesTabMode } from "../modules/issues/IssuesView";
 import { McpView } from "../modules/mcp/McpView";
+import { PerformanceView } from "../modules/performance/PerformanceView";
 import { ProjectIcon } from "../modules/projects/ProjectIcon";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
@@ -36,6 +38,7 @@ import { ReleasesView } from "../modules/releases/ReleasesView";
 type ActiveNav =
   | "issues"
   | "regressed"
+  | "performance"
   | "releases"
   | "alerts"
   | "mcp"
@@ -64,10 +67,23 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
   const [activeWorkspaceSlug, setActiveWorkspaceSlug] = useState<string>("");
   const [projects, setProjects] = useState<ProjectView[]>([]);
-  const [selectedProjectSlug, setSelectedProjectSlug] = useState<string>("");
+  const [selectedProjectSlug, setSelectedProjectSlug] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("project") ?? "";
+  });
   const [selectedReleaseFilter, setSelectedReleaseFilter] = useState<string>("");
+  const [deepLinkTraceId, setDeepLinkTraceId] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("trace") ?? "";
+  });
 
-  const [activeNav, setActiveNav] = useState<ActiveNav>("issues");
+  const [activeNav, setActiveNav] = useState<ActiveNav>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") === "performance" || params.get("trace")) {
+      return "performance";
+    }
+    return "issues";
+  });
   const [globalSearch, setGlobalSearch] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -345,6 +361,19 @@ export function App() {
 
               <button
                 type="button"
+                onClick={() => setActiveNav("performance")}
+                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
+                  activeNav === "performance"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Gauge size={16} />
+                <span>Performance</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveNav("releases")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "releases"
@@ -506,6 +535,19 @@ export function App() {
             canTriage={canTriage}
             onShowToast={showToast}
             onNavigateToProjects={() => setActiveNav("projects")}
+          />
+        )}
+
+        {activeNav === "performance" && (
+          <PerformanceView
+            workspaceName={currentWorkspaceName}
+            workspaceSlug={activeWorkspaceSlug || undefined}
+            projects={projects}
+            selectedProjectSlug={selectedProjectSlug}
+            onSelectProjectSlug={setSelectedProjectSlug}
+            initialTraceId={deepLinkTraceId || undefined}
+            onClearInitialTraceId={() => setDeepLinkTraceId("")}
+            onShowToast={(msg) => showToast(msg)}
           />
         )}
 

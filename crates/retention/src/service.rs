@@ -66,11 +66,16 @@ pub fn spawn_retention_scheduler(pool: PgPool, cfg: RetentionConfig) -> JoinHand
                     info!(
                         ensured_partitions = report.ensured_partitions.len(),
                         dropped_partitions = ?report.dropped_partitions,
+                        ensured_trace_partitions = report.ensured_trace_partitions.len(),
+                        dropped_trace_partitions = ?report.dropped_trace_partitions,
                         override_deleted_events = report.override_deleted_events,
                         override_deleted_hourly_counters = report.override_deleted_hourly_counters,
                         override_deleted_issues = report.override_deleted_issues,
+                        override_deleted_traces = report.override_deleted_traces,
+                        override_deleted_tx_metrics = report.override_deleted_tx_metrics,
                         global_deleted_hourly_counters = report.global_deleted_hourly_counters,
                         global_deleted_issues = report.global_deleted_issues,
+                        global_deleted_tx_metrics = report.global_deleted_tx_metrics,
                         deleted_expired_sessions = report.deleted_expired_sessions,
                         "completed scheduled retention maintenance cycle"
                     );
@@ -134,6 +139,31 @@ pub async fn run_retention_cycle(
             } else {
                 report.ensured_partitions.push(part_name);
             }
+
+            let trace_part_name = format!("traces_{}", target_date.format("%Y_%m_%d"));
+            let trace_regclass = format!("public.{trace_part_name}");
+            let trace_exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+                .bind(&trace_regclass)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|err| {
+                    AppError::DatabaseQuery(format!("check partition {trace_regclass}: {err}"))
+                })?;
+
+            if !trace_exists {
+                let created: String = sqlx::query_scalar("SELECT ensure_traces_partition($1)")
+                    .bind(target_date)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|err| {
+                        AppError::DatabaseQuery(format!(
+                            "ensure_traces_partition({target_date}): {err}"
+                        ))
+                    })?;
+                report.ensured_trace_partitions.push(created);
+            } else {
+                report.ensured_trace_partitions.push(trace_part_name);
+            }
         }
 
         let cutoff_date = compute_partition_cutoff_date(today, global_days)?;
@@ -147,6 +177,18 @@ pub async fn run_retention_cycle(
                 ))
             })?;
         report.dropped_partitions = dropped;
+
+        let dropped_traces: Vec<String> =
+            sqlx::query_scalar("SELECT drop_expired_traces_partitions($1)")
+                .bind(cutoff_date)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|err| {
+                    AppError::DatabaseQuery(format!(
+                        "drop_expired_traces_partitions({cutoff_date}): {err}"
+                    ))
+                })?;
+        report.dropped_trace_partitions = dropped_traces;
 
         tx.commit().await.map_err(|err| {
             AppError::DatabaseQuery(format!("commit partition maintenance: {err}"))
@@ -220,15 +262,37 @@ pub async fn run_retention_cycle(
             max_batches,
         )
         .await?;
+
+        report.override_deleted_traces += bounded_delete_project_traces(
+            pool,
+            row.tenant_id,
+            row.project_id,
+            project_cutoff_ts,
+            batch_limit,
+            max_batches,
+        )
+        .await?;
+
+        report.override_deleted_tx_metrics += bounded_delete_project_tx_metrics(
+            pool,
+            row.tenant_id,
+            row.project_id,
+            project_cutoff_ts,
+            batch_limit,
+            max_batches,
+        )
+        .await?;
     }
 
-    // 3. Global cutoff cleanup for `issue_hourly_counters`, stale `issues`, and expired `sessions`.
+    // 3. Global cutoff cleanup for counters, metrics, stale `issues`, and expired `sessions`.
     let global_cutoff_ts = reference_now - Duration::days(i64::from(global_days));
     report.global_deleted_hourly_counters =
         bounded_delete_global_hourly_counters(pool, global_cutoff_ts, batch_limit, max_batches)
             .await?;
     report.global_deleted_issues =
         bounded_delete_global_issues(pool, global_cutoff_ts, batch_limit, max_batches).await?;
+    report.global_deleted_tx_metrics =
+        bounded_delete_global_tx_metrics(pool, global_cutoff_ts, batch_limit, max_batches).await?;
     report.deleted_expired_sessions =
         bounded_delete_expired_sessions(pool, reference_now, batch_limit, max_batches).await?;
 
@@ -501,6 +565,148 @@ async fn bounded_delete_expired_sessions(
         .map_err(|err| AppError::DatabaseQuery(format!("batch delete expired sessions: {err}")))?;
         tx.commit().await.map_err(|err| {
             AppError::DatabaseQuery(format!("commit expired sessions delete: {err}"))
+        })?;
+        let deleted = res.rows_affected();
+        total_deleted += deleted;
+        if deleted < u64::try_from(batch_limit).unwrap_or(1) {
+            break;
+        }
+    }
+    Ok(total_deleted)
+}
+
+async fn bounded_delete_project_traces(
+    pool: &PgPool,
+    tenant_id: i64,
+    project_id: i64,
+    cutoff_ts: DateTime<Utc>,
+    batch_limit: i64,
+    max_batches: usize,
+) -> Result<u64, AppError> {
+    let mut total_deleted = 0u64;
+    for _ in 0..max_batches {
+        let mut tx = begin_worker_tx(pool).await?;
+        let res = sqlx::query(
+            "WITH doomed AS (
+                 SELECT received_at, event_id
+                 FROM traces
+                 WHERE tenant_id = $1
+                   AND project_id = $2
+                   AND received_at < $3
+                 LIMIT $4
+             )
+             DELETE FROM traces t
+             USING doomed d
+             WHERE t.tenant_id = $1
+               AND t.project_id = $2
+               AND t.received_at = d.received_at
+               AND t.event_id = d.event_id",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(cutoff_ts)
+        .bind(batch_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("batch delete override traces: {err}")))?;
+        tx.commit().await.map_err(|err| {
+            AppError::DatabaseQuery(format!("commit override traces delete: {err}"))
+        })?;
+        let deleted = res.rows_affected();
+        total_deleted += deleted;
+        if deleted < u64::try_from(batch_limit).unwrap_or(1) {
+            break;
+        }
+    }
+    Ok(total_deleted)
+}
+
+async fn bounded_delete_project_tx_metrics(
+    pool: &PgPool,
+    tenant_id: i64,
+    project_id: i64,
+    cutoff_ts: DateTime<Utc>,
+    batch_limit: i64,
+    max_batches: usize,
+) -> Result<u64, AppError> {
+    let mut total_deleted = 0u64;
+    for _ in 0..max_batches {
+        let mut tx = begin_worker_tx(pool).await?;
+        let res = sqlx::query(
+            "WITH doomed AS (
+                 SELECT transaction_name, op, environment, release, minute_bucket
+                 FROM transaction_minute_metrics
+                 WHERE tenant_id = $1
+                   AND project_id = $2
+                   AND minute_bucket < $3
+                 LIMIT $4
+             )
+             DELETE FROM transaction_minute_metrics m
+             USING doomed d
+             WHERE m.tenant_id = $1
+               AND m.project_id = $2
+               AND m.transaction_name = d.transaction_name
+               AND m.op = d.op
+               AND m.environment = d.environment
+               AND m.release = d.release
+               AND m.minute_bucket = d.minute_bucket",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(cutoff_ts)
+        .bind(batch_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            AppError::DatabaseQuery(format!("batch delete override tx metrics: {err}"))
+        })?;
+        tx.commit().await.map_err(|err| {
+            AppError::DatabaseQuery(format!("commit override tx metrics delete: {err}"))
+        })?;
+        let deleted = res.rows_affected();
+        total_deleted += deleted;
+        if deleted < u64::try_from(batch_limit).unwrap_or(1) {
+            break;
+        }
+    }
+    Ok(total_deleted)
+}
+
+async fn bounded_delete_global_tx_metrics(
+    pool: &PgPool,
+    cutoff_ts: DateTime<Utc>,
+    batch_limit: i64,
+    max_batches: usize,
+) -> Result<u64, AppError> {
+    let mut total_deleted = 0u64;
+    for _ in 0..max_batches {
+        let mut tx = begin_worker_tx(pool).await?;
+        let res = sqlx::query(
+            "WITH doomed AS (
+                 SELECT tenant_id, project_id, transaction_name, op, environment, release, minute_bucket
+                 FROM transaction_minute_metrics
+                 WHERE minute_bucket < $1
+                 LIMIT $2
+             )
+             DELETE FROM transaction_minute_metrics m
+             USING doomed d
+             WHERE m.tenant_id = d.tenant_id
+               AND m.project_id = d.project_id
+               AND m.transaction_name = d.transaction_name
+               AND m.op = d.op
+               AND m.environment = d.environment
+               AND m.release = d.release
+               AND m.minute_bucket = d.minute_bucket",
+        )
+        .bind(cutoff_ts)
+        .bind(batch_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            AppError::DatabaseQuery(format!("batch delete global tx metrics: {err}"))
+        })?;
+        tx.commit().await.map_err(|err| {
+            AppError::DatabaseQuery(format!("commit global tx metrics delete: {err}"))
         })?;
         let deleted = res.rows_affected();
         total_deleted += deleted;

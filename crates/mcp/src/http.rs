@@ -10,6 +10,7 @@ use axum::{Json, Router};
 use maxi_loop_auth::mcp::{McpAuditStatus, McpAuthService};
 use maxi_loop_issues::service::IssuesService;
 use maxi_loop_org::service::OrgService;
+use maxi_loop_performance::service::PerformanceService;
 use maxi_loop_platform::config::Config;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
@@ -33,6 +34,7 @@ pub struct McpState {
     pub auth: McpAuthService,
     pub org: OrgService,
     pub issues: IssuesService,
+    pub performance: PerformanceService,
     pub rate_limiter: McpRateLimiter,
 }
 
@@ -42,6 +44,7 @@ impl McpState {
         auth: McpAuthService,
         org: OrgService,
         issues: IssuesService,
+        performance: PerformanceService,
         rate_limiter: McpRateLimiter,
     ) -> Self {
         Self {
@@ -49,6 +52,7 @@ impl McpState {
             auth,
             org,
             issues,
+            performance,
             rate_limiter,
         }
     }
@@ -273,6 +277,7 @@ async fn handle_tool_call(
     let services = ToolServices {
         org: &state.org,
         issues: &state.issues,
+        performance: &state.performance,
         public_base_url: &state.config.public_base_url,
     };
 

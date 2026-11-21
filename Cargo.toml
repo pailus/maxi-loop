@@ -8,6 +8,7 @@ members = [
     "crates/issues",
     "crates/retention",
     "crates/alerts",
+    "crates/performance",
     "crates/mcp",
     "crates/server",
     "crates/loadgen",
@@ -52,6 +53,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
 webpki-roots = "0.26"
+zstd = "0.13"
 
 maxi-loop-platform = { path = "crates/platform" }
 maxi-loop-auth = { path = "crates/auth" }
@@ -60,4 +62,5 @@ maxi-loop-ingest = { path = "crates/ingest" }
 maxi-loop-issues = { path = "crates/issues" }
 maxi-loop-retention = { path = "crates/retention" }
 maxi-loop-alerts = { path = "crates/alerts" }
+maxi-loop-performance = { path = "crates/performance" }
 maxi-loop-mcp = { path = "crates/mcp" }

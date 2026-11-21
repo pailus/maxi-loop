@@ -3,6 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use maxi_loop_performance::ingest_proc::{
+    TraceSamplingPolicy, flush_processed_transactions_in_tx, process_queued_transaction_with_rules,
+};
+use maxi_loop_performance::model::{ProcessedTransaction, TransactionFlushStats};
 use maxi_loop_platform::alert_notify::{AlertSignal, AlertSignalKind, AlertSignalObserver};
 use maxi_loop_platform::config::Config;
 use maxi_loop_platform::error::AppError;
@@ -21,6 +25,7 @@ pub struct IngestWorkerConfig {
     pub flush_interval: Duration,
     pub max_batch_events: usize,
     pub max_full_events_per_issue: u32,
+    pub trace_sampling: TraceSamplingPolicy,
 }
 
 impl IngestWorkerConfig {
@@ -29,6 +34,10 @@ impl IngestWorkerConfig {
             flush_interval: Duration::from_millis(100),
             max_batch_events: 256,
             max_full_events_per_issue: config.max_full_events_per_issue,
+            trace_sampling: TraceSamplingPolicy {
+                slow_threshold_ms: f64::from(config.trace_slow_threshold_ms),
+                random_sample_rate: config.trace_random_sample_rate,
+            },
         }
     }
 }
@@ -100,9 +109,11 @@ pub fn spawn_ingest_worker_with_hooks(
         .clamp(Duration::from_millis(10), Duration::from_secs(1));
     let max_batch_events = worker_config.max_batch_events.max(1);
     let max_full_events_per_issue = worker_config.max_full_events_per_issue.max(1);
+    let trace_sampling = worker_config.trace_sampling;
 
     tokio::spawn(async move {
         let mut pending: Vec<ProcessedEvent> = Vec::with_capacity(max_batch_events);
+        let mut pending_txs: Vec<ProcessedTransaction> = Vec::with_capacity(max_batch_events);
 
         loop {
             let first = match rx.recv().await {
@@ -110,13 +121,25 @@ pub fn spawn_ingest_worker_with_hooks(
                 None => break,
             };
 
-            append_envelope_events(first, scrub_cache.as_ref(), &mut pending);
+            append_envelope_items(
+                first,
+                scrub_cache.as_ref(),
+                trace_sampling,
+                &mut pending,
+                &mut pending_txs,
+            );
 
             let deadline = tokio::time::Instant::now() + flush_interval;
-            while pending.len() < max_batch_events {
+            while pending.len() + pending_txs.len() < max_batch_events {
                 match tokio::time::timeout_at(deadline, rx.recv()).await {
                     Ok(Some(envelope)) => {
-                        append_envelope_events(envelope, scrub_cache.as_ref(), &mut pending);
+                        append_envelope_items(
+                            envelope,
+                            scrub_cache.as_ref(),
+                            trace_sampling,
+                            &mut pending,
+                            &mut pending_txs,
+                        );
                     }
                     Ok(None) | Err(_) => break,
                 }
@@ -143,14 +166,27 @@ pub fn spawn_ingest_worker_with_hooks(
                 }
                 pending.clear();
             }
+
+            if !pending_txs.is_empty() {
+                if let Err(err) = flush_processed_transactions(&pool, &pending_txs).await {
+                    error!(
+                        batch_transactions = pending_txs.len(),
+                        error = %err,
+                        "failed to flush ingest transaction batch to PostgreSQL"
+                    );
+                }
+                pending_txs.clear();
+            }
         }
     })
 }
 
-fn append_envelope_events(
+fn append_envelope_items(
     envelope: QueuedEnvelope,
     scrub_cache: Option<&ScrubRulesCache>,
-    out: &mut Vec<ProcessedEvent>,
+    trace_sampling: TraceSamplingPolicy,
+    out_events: &mut Vec<ProcessedEvent>,
+    out_txs: &mut Vec<ProcessedTransaction>,
 ) {
     let custom_rules = scrub_cache
         .map(|c| {
@@ -164,7 +200,7 @@ fn append_envelope_events(
 
     for raw_ev in envelope.events {
         match process_queued_event_with_rules(raw_ev, &custom_rules) {
-            Ok(processed) => out.push(processed),
+            Ok(processed) => out_events.push(processed),
             Err(err) => {
                 warn!(
                     tenant_id = envelope.tenant_id,
@@ -176,6 +212,37 @@ fn append_envelope_events(
             }
         }
     }
+
+    for raw_tx in envelope.transactions {
+        match process_queued_transaction_with_rules(raw_tx, &custom_rules, trace_sampling) {
+            Ok(processed) => out_txs.push(processed),
+            Err(err) => {
+                warn!(
+                    tenant_id = envelope.tenant_id,
+                    project_id = envelope.project_id,
+                    envelope_id = %envelope.envelope_id,
+                    error = %err,
+                    "dropping malformed transaction item in worker"
+                );
+            }
+        }
+    }
+}
+
+/// Flush a batch of processed performance transactions in a single `maxi_loop_worker` transaction.
+pub async fn flush_processed_transactions(
+    pool: &PgPool,
+    batch: &[ProcessedTransaction],
+) -> Result<TransactionFlushStats, AppError> {
+    if batch.is_empty() {
+        return Ok(TransactionFlushStats::default());
+    }
+    let mut tx = begin_worker_tx(pool).await?;
+    let stats = flush_processed_transactions_in_tx(&mut tx, batch).await?;
+    tx.commit().await.map_err(|err| {
+        AppError::DatabaseQuery(format!("commit worker transaction batch: {err}"))
+    })?;
+    Ok(stats)
 }
 
 /// Process and flush a slice of raw `QueuedEvent` items in a single worker batch transaction.
