@@ -13,11 +13,15 @@ pub enum LogFormat {
 pub struct Config {
     pub app_host: IpAddr,
     pub app_port: u16,
+    pub public_base_url: String,
     pub database_url: String,
     pub db_max_connections: u32,
     pub retention_default_days: u16,
     pub max_full_events_per_issue: u32,
     pub log_format: LogFormat,
+    pub single_tenant_mode: bool,
+    pub cookie_secure: bool,
+    pub session_ttl_hours: u32,
     pub default_tenant_slug: String,
     pub default_tenant_name: String,
     pub default_workspace_slug: String,
@@ -34,11 +38,15 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("app_host", &self.app_host)
             .field("app_port", &self.app_port)
+            .field("public_base_url", &self.public_base_url)
             .field("database_url", &"<redacted>")
             .field("db_max_connections", &self.db_max_connections)
             .field("retention_default_days", &self.retention_default_days)
             .field("max_full_events_per_issue", &self.max_full_events_per_issue)
             .field("log_format", &self.log_format)
+            .field("single_tenant_mode", &self.single_tenant_mode)
+            .field("cookie_secure", &self.cookie_secure)
+            .field("session_ttl_hours", &self.session_ttl_hours)
             .field("default_tenant_slug", &self.default_tenant_slug)
             .field("default_tenant_name", &self.default_tenant_name)
             .field("default_workspace_slug", &self.default_workspace_slug)
@@ -66,6 +74,13 @@ impl Config {
 
         let app_port =
             parse_u16_range(lookup("APP_PORT").as_deref(), 8080, 1, u16::MAX, "APP_PORT")?;
+
+        let default_base_url = format!("http://{app_host}:{app_port}");
+        let public_base_url = parse_public_base_url(
+            lookup("PUBLIC_BASE_URL").as_deref(),
+            &default_base_url,
+            "PUBLIC_BASE_URL",
+        )?;
 
         let database_url = lookup("DATABASE_URL")
             .filter(|v| !v.trim().is_empty())
@@ -115,6 +130,26 @@ impl Config {
                 ));
             }
         };
+
+        let single_tenant_mode = parse_bool(
+            lookup("SINGLE_TENANT_MODE").as_deref(),
+            true,
+            "SINGLE_TENANT_MODE",
+        )?;
+
+        let cookie_secure = parse_bool(
+            lookup("COOKIE_SECURE").as_deref(),
+            public_base_url.starts_with("https://"),
+            "COOKIE_SECURE",
+        )?;
+
+        let session_ttl_hours = parse_u32_range(
+            lookup("SESSION_TTL_HOURS").as_deref(),
+            168,
+            1,
+            720,
+            "SESSION_TTL_HOURS",
+        )?;
 
         let default_tenant_slug = parse_slug(
             lookup("DEFAULT_TENANT_SLUG").as_deref(),
@@ -183,11 +218,15 @@ impl Config {
         Ok(Self {
             app_host,
             app_port,
+            public_base_url,
             database_url,
             db_max_connections,
             retention_default_days,
             max_full_events_per_issue,
             log_format,
+            single_tenant_mode,
+            cookie_secure,
+            session_ttl_hours,
             default_tenant_slug,
             default_tenant_name,
             default_workspace_slug,
@@ -200,6 +239,51 @@ impl Config {
 
     pub fn socket_addr(&self) -> Result<SocketAddr, ConfigError> {
         Ok(SocketAddr::new(self.app_host, self.app_port))
+    }
+}
+
+fn parse_public_base_url(
+    raw: Option<&str>,
+    default: &str,
+    name: &'static str,
+) -> Result<String, ConfigError> {
+    let val = match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => v.trim_end_matches('/'),
+        None => default.trim_end_matches('/'),
+    };
+    if !(val.starts_with("http://") || val.starts_with("https://"))
+        || val.len() > 256
+        || val.chars().any(char::is_whitespace)
+    {
+        return Err(ConfigError::InvalidValue(
+            name,
+            "must be a valid http:// or https:// base URL",
+        ));
+    }
+    let after_scheme = val
+        .strip_prefix("https://")
+        .or_else(|| val.strip_prefix("http://"))
+        .unwrap_or("");
+    if after_scheme.is_empty() || after_scheme.starts_with('/') || after_scheme.contains('@') {
+        return Err(ConfigError::InvalidValue(
+            name,
+            "must include a valid host without embedded credentials",
+        ));
+    }
+    Ok(val.to_owned())
+}
+
+fn parse_bool(raw: Option<&str>, default: bool, name: &'static str) -> Result<bool, ConfigError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(default),
+        Some(v) => match v.to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Ok(true),
+            "false" | "0" | "no" => Ok(false),
+            _ => Err(ConfigError::InvalidValue(
+                name,
+                "must be a boolean ('true' or 'false')",
+            )),
+        },
     }
 }
 

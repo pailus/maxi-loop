@@ -33,6 +33,33 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F003: Session auth (Argon2id + CSRF) and Tenant/Workspace/Project/DSN management API
+
+**Status at end of session:** done
+
+**Done:**
+- Created `crates/auth` (`maxi-loop-auth`): Argon2id login/logout/me (`/api/v1/auth/{login,logout,me}`) with timing-safe dummy Argon2id verification on unknown emails, 256-bit CSPRNG session tokens stored only as SHA-256 hashes in PostgreSQL `sessions`, `HttpOnly; SameSite=Lax` cookies, constant-time `X-CSRF-Token` validation automatically enforced by `AuthSession` extractor on all state-changing HTTP methods, and bounded in-memory `LoginRateLimiter` (`429 Too Many Requests` + `Retry-After`)
+- Created `crates/org` (`maxi-loop-org`): RLS-enforced tenant/workspace/project/DSN management service (`begin_tenant_tx` + `TenantContext`), 128-bit CSPRNG Sentry DSN generation & rotation, retention override validation (`<= global` per `D003`), role authorization (`tenant_owner`/`tenant_admin`/`workspace_admin` vs `member`/`viewer`), slug-based hierarchy routes (`/api/v1/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}`), and single-tenant convenience routes (`/api/v1/tenants/current`, `/api/v1/workspaces`, `/api/v1/projects`)
+- Extended `crates/platform` (`Config` + `AppError`) with `PUBLIC_BASE_URL`, `SINGLE_TENANT_MODE`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, and multi-tenant slug lookup in `bootstrap_defaults`
+- Added PostgreSQL 16 integration test `crates/server/tests/auth_org_isolation.rs` covering login/me/logout, raw token non-persistence, rate limiting, CSRF rejection, role authorization, retention override caps, DSN creation/rotation, and Tenant A vs Tenant B cross-tenant isolation
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (23 passed: 7 server unit + 1 server auth/org/isolation integration + 5 auth unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
+- `cargo build --workspace` → PASS
+- Manual smoke check (`maxi-loop bootstrap` + live HTTP server login → me → create project → rotate DSN → logout → verify 401 after logout + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: all inputs (email, password, slugs, names, platform, retention overrides, rate limits, `PUBLIC_BASE_URL`) validated server-side; parameterized SQLx queries inside `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + explicit `tenant_id` scoping); server-side role & tenant checks on every endpoint; raw session tokens never stored in DB (SHA-256 hash only) or logged; generic `invalid credentials` + dummy Argon2id hash prevents user enumeration; constant-time `subtle::ConstantTimeEq` CSRF verification on all state-changing cookie-authenticated requests; negative tests cover unauthenticated access, wrong password/unknown user, login rate limit, missing/invalid CSRF token, unauthorized viewer role, invalid retention override, and cross-tenant read/mutation attempts
+- Dependencies: promoted `sha2` v0.10, `subtle` v2, and `hex` v0.4 (all three already present in `Cargo.lock` via `sqlx` and `password-hash`, adding 0 new external crates). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Enforced `X-CSRF-Token` validation directly inside `AuthSession`'s `FromRequestParts` implementation for all non-`GET`/`HEAD`/`OPTIONS` requests so state-changing cookie-authenticated handlers cannot accidentally omit CSRF verification
+
+**Not finished / blockers:**
+- Ready to begin F004 (Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel)
+
 ### 2026-11-21 — Antigravity — F002: PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI
 
 **Status at end of session:** done

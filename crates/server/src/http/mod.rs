@@ -13,6 +13,8 @@ use crate::AppState;
 pub fn build_router(state: AppState) -> Router {
     let api_router = Router::new()
         .route("/health", get(health::check))
+        .merge(maxi_loop_auth::http::router::<AppState>())
+        .merge(maxi_loop_org::http::router::<AppState>())
         .fallback(api_not_found);
 
     Router::new()
@@ -59,11 +61,15 @@ mod tests {
         let config = Config {
             app_host: "127.0.0.1".parse().expect("valid ip"),
             app_port: 8080,
+            public_base_url: "http://127.0.0.1:8080".to_owned(),
             database_url: "postgres://user:secret_test_pw@127.0.0.1:1/maxi_loop".to_owned(),
             db_max_connections: 1,
             retention_default_days: 30,
             max_full_events_per_issue: 50,
             log_format: LogFormat::Pretty,
+            single_tenant_mode: true,
+            cookie_secure: false,
+            session_ttl_hours: 168,
             default_tenant_slug: "default".to_owned(),
             default_tenant_name: "Default Organization".to_owned(),
             default_workspace_slug: "default".to_owned(),

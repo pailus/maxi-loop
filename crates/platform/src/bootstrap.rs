@@ -153,30 +153,39 @@ pub async fn bootstrap_defaults(
 
     let mut tx = begin_worker_tx(pool).await?;
 
-    // 1. Ensure default tenant exists (idempotent on existing default tenant or matching slug).
-    let existing_default_tenant: Option<(i64, String)> =
-        sqlx::query_as("SELECT id, slug FROM tenants WHERE is_default = TRUE OR slug = $1 ORDER BY is_default DESC LIMIT 1")
+    // 1. Ensure target tenant exists by slug (marking it as the installation default if no default tenant exists yet).
+    let existing_tenant: Option<(i64, String)> =
+        sqlx::query_as("SELECT id, slug FROM tenants WHERE slug = $1 LIMIT 1")
             .bind(&spec.tenant_slug)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|err| AppError::DatabaseQuery(format!("lookup default tenant: {err}")))?;
+            .map_err(|err| AppError::DatabaseQuery(format!("lookup tenant by slug: {err}")))?;
 
-    let (tenant_id, tenant_slug) = match existing_default_tenant {
+    let (tenant_id, tenant_slug) = match existing_tenant {
         Some((id, slug)) => (id, slug),
         None => {
+            let has_default: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE is_default = TRUE)")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|err| {
+                        AppError::DatabaseQuery(format!("check default tenant: {err}"))
+                    })?;
+
             let retention_i16 = i16::try_from(spec.retention_days)
                 .map_err(|_| AppError::Validation("retention_days out of range".to_owned()))?;
             let row: (i64, String) = sqlx::query_as(
                 "INSERT INTO tenants (slug, name, retention_days, is_default)
-                 VALUES ($1, $2, $3, TRUE)
+                 VALUES ($1, $2, $3, $4)
                  RETURNING id, slug",
             )
             .bind(&spec.tenant_slug)
             .bind(spec.tenant_name.trim())
             .bind(retention_i16)
+            .bind(!has_default)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|err| AppError::DatabaseQuery(format!("insert default tenant: {err}")))?;
+            .map_err(|err| AppError::DatabaseQuery(format!("insert tenant: {err}")))?;
             row
         }
     };
