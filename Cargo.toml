@@ -6,6 +6,7 @@ members = [
     "crates/org",
     "crates/ingest",
     "crates/issues",
+    "crates/retention",
     "crates/server",
 ]
 
@@ -45,3 +46,4 @@ maxi-loop-auth = { path = "crates/auth" }
 maxi-loop-org = { path = "crates/org" }
 maxi-loop-ingest = { path = "crates/ingest" }
 maxi-loop-issues = { path = "crates/issues" }
+maxi-loop-retention = { path = "crates/retention" }

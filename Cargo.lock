@@ -1036,6 +1036,7 @@ dependencies = [
  "maxi-loop-issues",
  "maxi-loop-org",
  "maxi-loop-platform",
+ "maxi-loop-retention",
  "mime_guess",
  "rust-embed",
  "serde",
@@ -1130,6 +1131,17 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "maxi-loop-retention"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "maxi-loop-platform",
+ "sqlx",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

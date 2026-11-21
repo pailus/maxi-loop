@@ -33,6 +33,35 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F007: Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0002_drop_events_partition.sql` with `SECURITY DEFINER` function `drop_expired_events_partitions(cutoff_date DATE) RETURNS TEXT[]` granted exclusively to `maxi_loop_worker` to drop expired daily child partitions of `public.events` (`^events_[0-9]{4}_[0-9]{2}_[0-9]{2}$`) older than global retention without table bloat, and added `crates/platform/build.rs` (`cargo:rerun-if-changed=../../migrations`)
+- Created `crates/retention` (`maxi-loop-retention`):
+  - `model.rs`: `RetentionConfig` (`global_retention_days`, `days_ahead`, `batch_delete_limit`, `max_batches_per_run`, `schedule_interval`) and `RetentionReport`
+  - `service.rs`: `compute_effective_retention_days` (inheriting and clamping `global -> tenant -> workspace -> project`), `compute_partition_cutoff_date`, `run_retention_cycle` (pre-creates upcoming daily partitions via `ensure_events_partition`, drops expired partitions via `drop_expired_events_partitions`, and executes bounded `LIMIT`-capped batch deletes for shorter workspace/project retention overrides as well as global expired `issue_hourly_counters`, stale `issues`, and expired `sessions`), and `spawn_retention_scheduler`
+- Wired `spawn_retention_scheduler` into `crates/server/src/main.rs` on `maxi-loop serve`
+- Added PostgreSQL 16 integration test `crates/server/tests/retention_scheduler.rs` verifying override validation (`<= global` and `<= workspace`), upcoming partition pre-creation, `DROP TABLE` on expired partitions (`-35d` and `-31d`), and multi-batch bounded deletion for 7-day project override and 14-day workspace override while preserving sibling 30-day project data in the same daily partitions
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (39 passed: 7 server unit + 5 server integration + 5 auth unit + 9 ingest unit + 1 issues unit + 1 org unit + 8 platform unit + 1 platform RLS integration + 2 retention unit)
+- `cargo build --workspace` → PASS
+- Manual smoke check (created expired partition `events_2025_01_15` → started live `maxi-loop serve` → verified background retention scheduler dropped `events_2025_01_15` automatically + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: `drop_expired_events_partitions` queries `pg_inherits` scoped strictly to child tables of `public.events` matching `^events_[0-9]{4}_[0-9]{2}_[0-9]{2}$` and quotes identifier via `format('DROP TABLE IF EXISTS public.%I', rec.part_name)`; `REVOKE ALL ... FROM PUBLIC` and `GRANT EXECUTE ... TO maxi_loop_worker`; all batch deletes use parameterized queries inside `begin_worker_tx` bounded by `batch_delete_limit` and `max_batches_per_run` to prevent database lock starvation; negative tests verify out-of-range workspace/project retention overrides (`> global` / `> workspace`) are rejected with `400 Bad Request`
+- Dependencies: 0 new external crates added
+
+**Key decisions & why:**
+- Added `crates/platform/build.rs` emitting `cargo:rerun-if-changed=../../migrations` so Cargo always recompiles `sqlx::migrate!("../../migrations")` whenever a new SQL migration file is added
+
+**Not finished / blockers:**
+- Ready to begin F008 (Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart)
+
 ### 2026-11-21 — Antigravity — F006: Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests
 
 **Status at end of session:** done

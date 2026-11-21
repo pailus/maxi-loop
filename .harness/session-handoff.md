@@ -8,13 +8,14 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F006 (Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests) — done
+- Feature worked on: F007 (Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete) — done
 
 ## Current state
 - What works and is verified:
-  - `crates/issues` (`maxi-loop-issues`) implements RLS-enforced (`begin_tenant_tx` + `TenantContext`) issue list pagination & filtering (`project_id`, `project_slug`, `workspace_slug`, `environment`, `release`, `status`, `is_regressed`, `query`, `sort`), issue detail (`stack_frames`, `tags`, `sample_event`, `hourly_series`, `daily_series`), hourly/daily stats (`/stats?interval=1h|1d`), stored events list/detail (`/events`), and status triage (`PATCH /issues/{id}/status` for `unresolved`/`resolved`/`ignored` with `Role::can_triage_issues` RBAC and CSRF validation)
-  - Supports both single-tenant convenience routes (`/api/v1/issues/...`, `/api/v1/projects/{project_slug}/issues`) and explicit slug-scoped hierarchy routes (`/api/v1/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/...`)
-  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (36/36 passed), `cargo build --workspace`, and live HTTP smoke test
+  - `migrations/0002_drop_events_partition.sql` adds `drop_expired_events_partitions(cutoff_date DATE) RETURNS TEXT[]` (`SECURITY DEFINER`, executable by `maxi_loop_worker`) and `crates/platform/build.rs` tracks `../../migrations`
+  - `crates/retention` (`maxi-loop-retention`) implements `run_retention_cycle` and `spawn_retention_scheduler`: pre-creates upcoming daily `events_YYYY_MM_DD` partitions, drops daily partitions older than global retention (`RETENTION_DEFAULT_DAYS`, default 30 days), and runs bounded batch deletes for shorter workspace/project retention overrides (`<= global`) as well as expired hourly counters, stale issues, and expired sessions
+  - Wired into `crates/server/src/main.rs` on `maxi-loop serve`
+  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (39/39 passed), `cargo build --workspace`, and live smoke test verifying automatic drop of expired partition `events_2025_01_15`
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
 
@@ -24,7 +25,10 @@
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F007**: Retention scheduler: daily partition maintenance, `DROP PARTITION`, and override batch delete (`crates/retention`):
-   - Background scheduler pre-creating upcoming daily `events_YYYY_MM_DD` partitions and dropping partitions older than global retention (`RETENTION_DEFAULT_DAYS`, default 30 days) via `DROP TABLE` / `DROP PARTITION`
-   - Bounded scheduled batch deletes for tenants/workspaces/projects configured with shorter retention overrides (`< global`) across `events`, `issue_hourly_counters`, and expired `issues` (plus expired `sessions` cleanup)
-   - Integration tests against PostgreSQL 16 verifying partition creation, dropping expired partitions, and shorter override batch cleanup.
+1. Start **F008**: Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart (`web/src/`):
+   - Organize vertical-slice frontend modules under `web/src/modules/` (`auth/`, `projects/`, `issues/`, `health/`) and shared API client (`web/src/lib/api.ts` handling credentials + `X-CSRF-Token`)
+   - Login view authenticating via `/api/v1/auth/login` and hiding tenant/workspace chrome when `single_tenant_mode` is true (while showing workspace switcher/creator when `single_tenant_mode` is false)
+   - Projects view listing & creating projects (`/api/v1/projects`) with copyable Sentry DSN, ingest endpoint, platform badge, retention/rate-limit settings, and DSN rotation action
+   - Issues list view supporting filters (`project`, `environment`, `release`, `status`, search `query`, `sort`) and pagination
+   - Issue detail view displaying summary, regression badge, in-app/all stack trace frames with source context (`pre_context`, `context_line`, `post_context`), tags, sample event JSON payload, hourly/daily occurrence chart, and `Resolve` / `Ignore` / `Reopen` triage actions
+   - Build with `npm --prefix web run build` and verify the embedded SPA is served from the single Rust binary.

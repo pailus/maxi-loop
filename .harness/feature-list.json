@@ -129,7 +129,7 @@
     {
       "id": "F007",
       "title": "Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "Background scheduler pre-creates upcoming daily partitions and drops partitions older than global retention (default 30 days)",
@@ -138,9 +138,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F005"],
       "notes": "PRD F-ADM-3; Design §5.6"

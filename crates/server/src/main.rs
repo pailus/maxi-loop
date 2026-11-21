@@ -7,6 +7,8 @@ use maxi_loop::http::build_router;
 use maxi_loop_platform::bootstrap::{BootstrapSpec, bootstrap_defaults};
 use maxi_loop_platform::config::{Config, LogFormat};
 use maxi_loop_platform::db::{connect_db, ensure_upcoming_events_partitions, run_migrations};
+use maxi_loop_retention::model::RetentionConfig;
+use maxi_loop_retention::service::spawn_retention_scheduler;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -120,6 +122,8 @@ async fn main() {
             std::process::exit(1);
         }
     }
+    let retention_cfg = RetentionConfig::from_config(&state.config);
+    spawn_retention_scheduler(state.db.clone(), retention_cfg);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {

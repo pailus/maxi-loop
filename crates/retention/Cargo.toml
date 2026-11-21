@@ -1,0 +1,13 @@
+[package]
+name = "maxi-loop-retention"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+maxi-loop-platform.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true

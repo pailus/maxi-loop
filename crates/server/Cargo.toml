@@ -20,6 +20,7 @@ maxi-loop-ingest.workspace = true
 maxi-loop-issues.workspace = true
 maxi-loop-org.workspace = true
 maxi-loop-platform.workspace = true
+maxi-loop-retention.workspace = true
 mime_guess.workspace = true
 rust-embed.workspace = true
 serde.workspace = true
