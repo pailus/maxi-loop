@@ -1,0 +1,286 @@
+{
+  "$schema": "./feature-list.schema.json",
+  "project": "Maxi Loop",
+  "last_updated": "2026-11-21",
+  "features": [
+    {
+      "id": "F001",
+      "title": "Project scaffolding, configuration, Docker Compose Postgres 16, and health server",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Rust crate `maxi-loop` builds cleanly with `cargo check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo build`",
+        "Centralized env config validates all fields and redacts `DATABASE_URL` in Debug output",
+        "`docker-compose.yml` starts isolated PostgreSQL 16 on localhost port 55432 with `.env` gitignored",
+        "`GET /healthz` and `GET /api/v1/health` verify Postgres connectivity with timeout and return safe status JSON without leaking internals",
+        "Embedded React (Vite + TS + Tailwind) SPA builds cleanly and is served from the single Rust binary with security headers",
+        "PRD and design documents are stored under `docs/` and `.harness/ARCHITECTURE.md` and `decisions.md` are populated"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": [],
+      "notes": "Phase 1 foundation"
+    },
+    {
+      "id": "F002",
+      "title": "PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "SQLx migrations create tenants, workspaces, projects, users, memberships, sessions, issues, daily-partitioned events, and issue_hourly_counters with tenant_id + project_id leading keys/indexes",
+        "Row-Level Security policies enforce tenant isolation via `app.tenant_id` per transaction alongside a dedicated worker DB role",
+        "First-boot/CLI bootstrap creates default tenant, default workspace, and initial admin user cleanly (idempotent)",
+        "Integration tests verify migrations, partition creation, and RLS isolation against Postgres 16"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F001"],
+      "notes": "PRD F-ADM-6, F-ADM-7, F-ADM-10; Design §5.6 & §5.11"
+    },
+    {
+      "id": "F003",
+      "title": "Session auth (Argon2id + CSRF) and Tenant/Workspace/Project/DSN management API",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Login/logout/me endpoints use Argon2id password hashes, CSPRNG session tokens, HttpOnly/SameSite cookies, CSRF protection, and login rate limiting",
+        "Admin/tenant API creates and lists workspaces, projects, and generates/rotates project DSNs with slug-based routes",
+        "Single-tenant mode flag exposes default tenant/workspace seamlessly",
+        "Automated cross-tenant isolation tests verify Tenant A cannot read or mutate Tenant B resources"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F002"],
+      "notes": "PRD F-ADM-1, F-ADM-2, F-ADM-6, F-ADM-7, F-ADM-10"
+    },
+    {
+      "id": "F004",
+      "title": "Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "`POST /api/{project_id}/envelope/` authenticates DSN from in-memory cache without per-envelope DB queries",
+        "Supports gzip, deflate, and brotli request decompression with enforced body/event size limits",
+        "Drops unsupported item types (session, replay, profile, attachment) early",
+        "Per-project `governor` rate limit and full-channel backpressure return HTTP 429 with Retry-After / X-Sentry-Rate-Limits headers"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F003"],
+      "notes": "PRD F-ING-1..5; Design §5.1"
+    },
+    {
+      "id": "F005",
+      "title": "Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Worker scrubs default sensitive headers (Authorization, Cookie) and fields (password, token, secret, api_key) before persistence",
+        "Fingerprint grouping hashes exception type + in-app stack frames (with error message fallback)",
+        "Batch writer flushes every 100ms-1s: upserts issues, auto-reopens resolved issues on regression, caps full payloads at configured max (default 50) + sample, and increments hourly counters",
+        "Unit and integration tests cover grouping consistency, regression reopen, PII scrubbing, and event cap"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F004"],
+      "notes": "PRD F-ISS-1, F-ISS-4, F-ISS-5, D002 baseline PII scrubbing; Design §5.2-5.4"
+    },
+    {
+      "id": "F006",
+      "title": "Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "List issues supports pagination and filters by project, environment, release, and status",
+        "Issue detail returns summary, stack trace, tags, environment, release, sample event, and hourly/daily counter series",
+        "Issue status endpoint updates unresolved/resolved/ignored with server-side authorization",
+        "Cross-tenant isolation tests verify Tenant A cannot access Tenant B issues, events, or stats"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F005"],
+      "notes": "PRD F-ISS-2..5, F-ADM-7"
+    },
+    {
+      "id": "F007",
+      "title": "Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Background scheduler pre-creates upcoming daily partitions and drops partitions older than global retention (default 30 days)",
+        "Workspace/project retention overrides are validated `<= global` and cleaned via bounded scheduled batch deletes",
+        "Integration tests verify partition creation, dropping expired partitions, and shorter override cleanup"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F005"],
+      "notes": "PRD F-ADM-3; Design §5.6"
+    },
+    {
+      "id": "F008",
+      "title": "Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Login view authenticates via session cookie and hides tenant/workspace chrome in single-tenant mode",
+        "Projects view lists/creates projects and displays copyable Sentry DSN",
+        "Issues list supports filters (project, environment, release, status) and pagination",
+        "Issue detail shows stack trace, tags, sample event payload, hourly trend chart, and resolve/ignore/reopen actions",
+        "`npm --prefix web run build` succeeds and embeds into the Rust binary"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F006"],
+      "notes": "PRD F-ADM-1, F-ADM-2, F-ADM-10, F-ISS-2..5"
+    },
+    {
+      "id": "F009",
+      "title": "Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Synthetic envelope generator benchmarks ingest throughput and 429 behavior against running server",
+        "Official Python `sentry-sdk` (FastAPI/Django) successfully reports grouped exceptions by only changing DSN",
+        "Baseline throughput and idle RSS measurements are documented"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F008"],
+      "notes": "Completes Phase 1 (MVP); Design §9 & §11"
+    },
+    {
+      "id": "F010",
+      "title": "Phase 2: Configurable PII scrubbing, Release tracking, and Alerts (Webhook, Telegram, Email)",
+      "status": "todo",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "Configurable per-tenant/workspace/project PII scrub rules applied in ingest worker",
+        "Release tracking links issues and events to releases",
+        "Alert engine triggers on new issue, regression, or spike with Webhook first, then Telegram and Email"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F009"],
+      "notes": "PRD F-ING-6, F-ISS-6, F-ISS-7"
+    },
+    {
+      "id": "F011",
+      "title": "Phase 2b: Embedded MCP server (/mcp Streamable HTTP) for AI issue analysis and triage",
+      "status": "todo",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "Streamable HTTP `/mcp` endpoint runs over the shared internal service layer with revocable scoped Bearer tokens (`read` default, `triage` opt-in)",
+        "Implements `list_projects`, `list_issues`, `get_issue`, `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note` with token-efficient output and release-to-SHA mapping",
+        "Wraps untrusted event content, scrubs PII on output, enforces per-token rate limit, writes audit logs, and passes cross-tenant isolation tests"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F010"],
+      "notes": "PRD F-MCP-1..11; Design §5.10"
+    },
+    {
+      "id": "F012",
+      "title": "Phase 3: Performance monitoring (transactions, spans, histograms, sampled zstd traces, waterfall, MCP tools)",
+      "status": "todo",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "Ingests transactions and spans, aggregates 1-minute duration histograms for p50/p95/p99, throughput, and error rate",
+        "Stores sampled full traces (slow, error, 1-5% random) compressed with zstd and renders distributed trace waterfall",
+        "Exposes `list_transactions` and `get_trace` via UI API and MCP"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F011"],
+      "notes": "PRD F-PRF-1..5, F-MCP-12..13"
+    },
+    {
+      "id": "F013",
+      "title": "Phase 4: React Source Maps upload per release and bounded LRU ingest-time resolution",
+      "status": "todo",
+      "priority": "low",
+      "acceptance_criteria": [
+        "Source maps can be uploaded per release (matched by release + filename or debug id)",
+        "Ingest worker resolves minified JS stack frames using a bounded LRU cache before fingerprinting"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F012"],
+      "notes": "PRD F-ISS-8; Design §5.7"
+    },
+    {
+      "id": "F014",
+      "title": "Phase 5: Go & Rust SDK verification, multi-user RBAC, inherited settings, API tokens, aggregate tenant limits",
+      "status": "todo",
+      "priority": "low",
+      "acceptance_criteria": [
+        "Verified error and trace ingestion with official Go and Rust Sentry SDKs",
+        "Multi-user RBAC (`tenant_owner`, `tenant_admin`, `workspace_admin`, `member`, `viewer`), inherited settings, per-project API tokens, and aggregate tenant rate limits"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build"
+      ],
+      "depends_on": ["F013"],
+      "notes": "PRD F-ADM-4, F-ADM-5, F-ADM-8, F-ADM-9"
+    }
+  ]
+}

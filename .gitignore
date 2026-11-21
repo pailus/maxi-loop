@@ -1,0 +1,16 @@
+# Rust build artifacts
+/target/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies & build output
+/web/node_modules/
+/web/dist/
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
