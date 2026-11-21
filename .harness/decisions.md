@@ -8,6 +8,12 @@
 
 ---
 
+### D007 — 2026-11-21 — MaxiBoard design system, Lucide icons, and Maxiflow Doodle SVG project icons
+**Decision:** Style the embedded React UI (`web/`) after the **MaxiBoard** light, Jira-inspired design system (`#FFFFFF` surfaces, `#F7F8F9` sunken sidebar/panels, `#172B4D` primary navy text, `#0C66E4` primary blue accent, semantic lozenges, 56px topbar + 240px sidebar + master-detail right inspector drawer + `#172B4D` bottom undo toast), using `lucide-react` for UI icons and the 12 Maxiflow Doodle SVG icons (`ProjectIcon.tsx`) for projects.
+**Why:** Avoids generic dark-neon AI slop, keeps visual consistency across the user's `maxi-*` product suite (`MaxiBoard` in `maxi-code`), and prioritizes high-density glanceability for issue triage.
+**Rejected:** Dark slate/indigo neon dashboard cards, monument KPI boxes, and raw `dangerouslySetInnerHTML` SVG injection.
+**Decided by:** user
+
 ### D006 — 2026-11-21 — Cargo workspace with vertical-slice feature crates (Option A)
 **Decision:** Organize the Rust backend as a Cargo workspace under `crates/` using vertical-slice feature crates (`crates/platform`, `crates/server`, plus per-feature crates added as features are built: `auth`, `org`, `ingest`, `issues`, `retention`, `alerts`, `mcp`, `performance`, `sourcemaps`), and mirror the feature-modular layout in the frontend (`web/src/modules/<feature>/`).
 **Why:** Compiler-enforced module boundaries (e.g., `crates/mcp` cannot import `sqlx` directly and must go through service crates), clean per-module ownership matching the 1-feature-at-a-time workflow, and cheap future scaling (Design §6: splitting ingest/worker roles or swapping queue/storage behind traits).

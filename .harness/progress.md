@@ -33,6 +33,39 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F008: Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart
+
+**Status at end of session:** done
+
+**Done:**
+- Designed and iterated 4-screen FigCraft mockup (`/home/p4ck/Documents/maxi-loop-ui.figcraft`) via FigCraft MCP adopting the **MaxiBoard** light Jira-inspired design system (`D007`)
+- Updated `web/src/index.css` & `web/index.html` with MaxiBoard CSS custom properties (`#FFFFFF`, `#F7F8F9`, `#172B4D`, `#0C66E4`), lozenge utilities (`.pm-lozenge-*`), `.pm-tab`, `.pm-input`, and `.pm-bicon`
+- Extended `web/src/lib/api.ts` with typed endpoints for session auth (`login`, `logout`, `me`), workspaces, projects & DSN rotation, issues list/detail/events/stats, and triage status mutations with automatic `X-CSRF-Token` header enforcement
+- Created `web/src/modules/projects/ProjectIcon.tsx` rendering 12 Maxiflow Doodle SVG project icons (`software-development`, `web-development`, `cloud-devops`, `cyber-security`, `data-analytics`, `ai-automation`, `mobile-app`, `ecommerce`, `finance`, `infrastructure-iot`, `project-management`, `ui-ux-design`) as pure typed React JSX `<svg>` components (zero `dangerouslySetInnerHTML`)
+- Created `web/src/modules/auth/LoginView.tsx` (single-tenant default workspace context, optional tenant slug disclosure, `$ maxi-loop bootstrap` hint)
+- Created `web/src/modules/issues/` (`IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `OccurrenceChart.tsx`, `StackTraceView.tsx`): 3-pane master-detail split layout, status tabs (`Unresolved`/`Regressed`/`Resolved`/`Ignored`/`All`), filter toolbar (`project`, `environment`, `release`, `query`, `sort`), pagination, `1h`/`1d` occurrence histogram chart, `In-app only`/`All frames` stack trace code viewer, PII-scrubbed sample event payload viewer, and `Resolve`/`Ignore`/`Unresolve` triage with `#172B4D` undo toast
+- Created `web/src/modules/projects/ProjectsView.tsx` (project cards with copyable Sentry DSN, DSN rotation, retention/rate-limit metadata, and right-hand Create Project drawer with MaxiBoard icon picker + `sentry_sdk.init` quickstart snippet)
+- Updated `web/src/app/App.tsx` and `web/src/modules/health/HealthCard.tsx` with the 56px MaxiBoard topbar (`/` global search shortcut) and 240px sidebar
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (39/39 passed)
+- `cargo build --workspace` → PASS
+- Manual smoke check (live `maxi-loop serve` serving embedded MaxiBoard-styled SPA + login + project creation + envelope ingest + filtered issues list & detail with `[Filtered]` PII + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: all dynamic strings rendered via React JSX auto-escaping (0 `dangerouslySetInnerHTML` or `eval`); all mutating requests send `X-CSRF-Token` and `credentials: "same-origin"`; role permissions (`canTriage`, `canManageProjects`) respected in UI and enforced server-side
+- New dependency: `lucide-react` v1.21.0 in `web/package.json` (requested by user to match MaxiBoard icon set; `npm --prefix web audit` = 0 vulnerabilities)
+
+**Key decisions & why:**
+- Recorded `D007` in `.harness/decisions.md` (MaxiBoard light theme + `lucide-react` + Maxiflow Doodle project SVG icons)
+
+**Not finished / blockers:**
+- Ready to begin F009 (Envelope load-test generator and real Python Django/FastAPI Sentry SDK E2E verification)
+
 ### 2026-11-21 — Antigravity — F007: Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete
 
 **Status at end of session:** done
@@ -257,21 +290,3 @@
 
 **Not finished / blockers:**
 - None for F001; ready to begin F002 (Postgres schema, daily-partitioned events, RLS policies, and bootstrap CLI)
-
-### 2026-11-21 — Agentway — Initial setup
-**Status at end of session:** done
-
-**Done:**
-- dev-harness template installed into `.harness/` by Agentway
-  (detected stack: rust (from project type))
-
-**Verification run:**
-- No project code changed at this stage (scaffolding only)
-
-**Key decisions & why:**
-- Plain text files (not a database) so every coding assistant can read them
-  without extra dependencies
-
-**Not finished / blockers:**
-- Check the verification commands in `.harness/AGENTS.md` section 3 — they were
-  detected automatically; adjust any that do not match the real project

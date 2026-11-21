@@ -22,10 +22,10 @@ crates/                  — Rust workspace crates (vertical-slice modular layou
   server/                — `maxi-loop` binary: composition root, CLI (`serve` / `bootstrap`), router, security headers, `/healthz`, embedded SPA
   # Feature crates added one-by-one as each feature is built (no empty speculative crates):
   # alerts/, mcp/, performance/, sourcemaps/
-web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (built into `web/dist`)
-  src/app/               — App shell & routing
-  src/lib/               — Shared HTTP client & types
-  src/modules/<feature>/ — Vertical-slice UI modules (currently: `health/`)
+web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (MaxiBoard light theme, built into `web/dist`)
+  src/app/               — App shell (56px MaxiBoard topbar, 240px sidebar, global `/` search, undo toast)
+  src/lib/               — Shared HTTP client (`api.ts` with cookie auth & automatic `X-CSRF-Token`)
+  src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `issues/`, `projects/`, `health/`)
 docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & integration tests
 .harness/                — AI working rules, feature list, progress log, decisions, handoff
 ```

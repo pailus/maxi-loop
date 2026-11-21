@@ -148,7 +148,7 @@
     {
       "id": "F008",
       "title": "Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "Login view authenticates via session cookie and hides tenant/workspace chrome in single-tenant mode",
@@ -160,9 +160,9 @@
       "verification_commands": [
         "npm --prefix web run build",
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F006"],
       "notes": "PRD F-ADM-1, F-ADM-2, F-ADM-10, F-ISS-2..5"

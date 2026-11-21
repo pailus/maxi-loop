@@ -8,14 +8,19 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F007 (Retention scheduler: daily partition maintenance, DROP PARTITION, and override batch delete) — done
+- Feature worked on: F008 (Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart) — done
 
 ## Current state
 - What works and is verified:
-  - `migrations/0002_drop_events_partition.sql` adds `drop_expired_events_partitions(cutoff_date DATE) RETURNS TEXT[]` (`SECURITY DEFINER`, executable by `maxi_loop_worker`) and `crates/platform/build.rs` tracks `../../migrations`
-  - `crates/retention` (`maxi-loop-retention`) implements `run_retention_cycle` and `spawn_retention_scheduler`: pre-creates upcoming daily `events_YYYY_MM_DD` partitions, drops daily partitions older than global retention (`RETENTION_DEFAULT_DAYS`, default 30 days), and runs bounded batch deletes for shorter workspace/project retention overrides (`<= global`) as well as expired hourly counters, stale issues, and expired sessions
-  - Wired into `crates/server/src/main.rs` on `maxi-loop serve`
-  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (39/39 passed), `cargo build --workspace`, and live smoke test verifying automatic drop of expired partition `events_2025_01_15`
+  - Designed 4-screen FigCraft mockup (`/home/p4ck/Documents/maxi-loop-ui.figcraft`) via FigCraft MCP using the **MaxiBoard** light Jira-inspired design system (`D007`)
+  - Implemented vertical-slice React frontend in `web/src/`:
+    - `web/src/index.css`: MaxiBoard tokens (`#FFFFFF`, `#F7F8F9`, `#172B4D`, `#0C66E4`), `.pm-lozenge`, `.pm-tab`, `.pm-input`, `.pm-bicon`
+    - `web/src/lib/api.ts`: typed HTTP client for auth, workspaces, projects/DSN rotation, issues list/detail/events/stats, and status triage with automatic `X-CSRF-Token` header attachment
+    - `web/src/modules/projects/ProjectIcon.tsx`: 12 Maxiflow Doodle SVG project icons rendered as pure typed React JSX components
+    - `web/src/modules/auth/LoginView.tsx`: single-tenant default workspace login card with optional tenant slug disclosure and `$ maxi-loop bootstrap` tip
+    - `web/src/modules/issues/` (`IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `OccurrenceChart.tsx`, `StackTraceView.tsx`): 3-pane MaxiBoard master-detail layout, status tabs, filters (`project`, `environment`, `release`, `query`, `sort`), pagination, `1h`/`1d` occurrence histogram chart, `In-app only`/`All frames` stack trace code viewer, PII-scrubbed sample event payload inspector, and `Resolve`/`Ignore`/`Unresolve` triage with `#172B4D` undo toast
+    - `web/src/modules/projects/ProjectsView.tsx`: project cards with copyable Sentry DSN, DSN rotation, retention/rate-limit metadata, and right-hand Create Project drawer with MaxiBoard icon picker + `sentry_sdk.init` snippet
+  - All checks pass: `npm --prefix web run build`, `npm --prefix web audit` (0 vulnerabilities), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (39/39 passed), `cargo build --workspace`, and live smoke test
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
 
@@ -25,10 +30,7 @@
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F008**: Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart (`web/src/`):
-   - Organize vertical-slice frontend modules under `web/src/modules/` (`auth/`, `projects/`, `issues/`, `health/`) and shared API client (`web/src/lib/api.ts` handling credentials + `X-CSRF-Token`)
-   - Login view authenticating via `/api/v1/auth/login` and hiding tenant/workspace chrome when `single_tenant_mode` is true (while showing workspace switcher/creator when `single_tenant_mode` is false)
-   - Projects view listing & creating projects (`/api/v1/projects`) with copyable Sentry DSN, ingest endpoint, platform badge, retention/rate-limit settings, and DSN rotation action
-   - Issues list view supporting filters (`project`, `environment`, `release`, `status`, search `query`, `sort`) and pagination
-   - Issue detail view displaying summary, regression badge, in-app/all stack trace frames with source context (`pre_context`, `context_line`, `post_context`), tags, sample event JSON payload, hourly/daily occurrence chart, and `Resolve` / `Ignore` / `Reopen` triage actions
-   - Build with `npm --prefix web run build` and verify the embedded SPA is served from the single Rust binary.
+1. Start **F009**: Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification:
+   - Build synthetic envelope load-test generator / benchmark subcommand or tool to measure ingest throughput, latency, and `429 Too Many Requests` (`Retry-After` / `X-Sentry-Rate-Limits`) behavior against a running `maxi-loop` server
+   - Verify real Python `sentry-sdk` (FastAPI/Django) E2E exception ingestion & grouping by only changing the DSN
+   - Measure and document baseline throughput and idle RSS memory footprint (completing Phase 1 MVP).
