@@ -19,6 +19,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(health::check))
+        .merge(maxi_loop_ingest::http::router::<AppState>())
         .nest("/api/v1", api_router)
         .fallback(assets::serve_spa)
         .with_state(state)
@@ -66,6 +67,10 @@ mod tests {
             db_max_connections: 1,
             retention_default_days: 30,
             max_full_events_per_issue: 50,
+            max_envelope_compressed_bytes: 1_048_576,
+            max_envelope_decompressed_bytes: 2_097_152,
+            max_event_payload_bytes: 524_288,
+            ingest_channel_capacity: 1024,
             log_format: LogFormat::Pretty,
             single_tenant_mode: true,
             cookie_secure: false,

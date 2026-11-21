@@ -111,6 +111,15 @@ async fn main() {
     };
 
     let state = AppState::new(config, db);
+    match state.dsn_cache.reload_from_db(&state.db).await {
+        Ok(loaded_projects) => {
+            info!(loaded_projects, "preloaded project DSN cache into memory");
+        }
+        Err(err) => {
+            error!(error = %err, "failed to preload project DSN cache");
+            std::process::exit(1);
+        }
+    }
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {

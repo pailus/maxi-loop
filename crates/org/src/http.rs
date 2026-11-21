@@ -4,6 +4,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
 use maxi_loop_auth::model::AuthSession;
+use maxi_loop_platform::dsn_notify::ProjectDsnInfo;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 
@@ -201,6 +202,7 @@ async fn default_create_project_handler(
         input,
     )
     .await?;
+    notify_dsn_cache(&state, &created);
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -220,6 +222,7 @@ async fn create_project_handler(
         input,
     )
     .await?;
+    notify_dsn_cache(&state, &created);
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -272,6 +275,7 @@ async fn default_rotate_project_dsn_handler(
         &project_slug,
     )
     .await?;
+    notify_dsn_cache(&state, &proj);
     Ok(Json(proj))
 }
 
@@ -290,5 +294,16 @@ async fn rotate_project_dsn_handler(
         &project_slug,
     )
     .await?;
+    notify_dsn_cache(&state, &proj);
     Ok(Json(proj))
+}
+
+fn notify_dsn_cache(state: &AuthState, proj: &ProjectView) {
+    state.notify_project_dsn(ProjectDsnInfo {
+        project_id: proj.id,
+        tenant_id: proj.tenant_id,
+        workspace_id: proj.workspace_id,
+        dsn_public_key: proj.dsn_public_key.clone(),
+        rate_limit_per_minute: u32::try_from(proj.rate_limit_per_minute.max(1)).unwrap_or(1200),
+    });
 }

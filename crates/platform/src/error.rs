@@ -30,6 +30,10 @@ pub enum AppError {
     Forbidden(&'static str),
     #[error("conflict: {0}")]
     Conflict(&'static str),
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(&'static str),
+    #[error("unsupported media type: {0}")]
+    UnsupportedMediaType(&'static str),
     #[error("rate limited (retry after {retry_after_secs}s)")]
     RateLimited { retry_after_secs: u64 },
     #[error("not found")]
@@ -62,6 +66,10 @@ impl IntoResponse for AppError {
                     AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
                     AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
                     AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+                    AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg),
+                    AppError::UnsupportedMediaType(msg) => {
+                        (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg)
+                    }
                     AppError::DatabaseConnect(_)
                     | AppError::DatabaseMigration(_)
                     | AppError::DatabaseQuery(_) => {

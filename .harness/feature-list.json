@@ -69,7 +69,7 @@
     {
       "id": "F004",
       "title": "Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "`POST /api/{project_id}/envelope/` authenticates DSN from in-memory cache without per-envelope DB queries",
@@ -79,9 +79,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F003"],
       "notes": "PRD F-ING-1..5; Design §5.1"

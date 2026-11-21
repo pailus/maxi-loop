@@ -4,6 +4,7 @@ members = [
     "crates/platform",
     "crates/auth",
     "crates/org",
+    "crates/ingest",
     "crates/server",
 ]
 
@@ -16,8 +17,11 @@ publish = false
 [workspace.dependencies]
 argon2 = { version = "0.5", features = ["std", "password-hash"] }
 axum = "0.8"
+brotli = "7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 dotenvy = "0.15"
+flate2 = "1"
+governor = "0.8"
 hex = "0.4"
 http = "1"
 mime_guess = "2"
@@ -29,7 +33,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros", "chrono"] }
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["set-header", "trace"] }
 tracing = "0.1"
@@ -38,3 +42,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 maxi-loop-platform = { path = "crates/platform" }
 maxi-loop-auth = { path = "crates/auth" }
 maxi-loop-org = { path = "crates/org" }
+maxi-loop-ingest = { path = "crates/ingest" }

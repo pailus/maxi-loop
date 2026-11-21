@@ -16,9 +16,10 @@ crates/                  — Rust workspace crates (vertical-slice modular layou
   platform/              — `maxi-loop-platform`: config, typed errors, DB pool/migrations/partitions, TenantContext & RLS tx helpers, Argon2id bootstrap
   auth/                  — `maxi-loop-auth`: Argon2id login/logout/me, CSPRNG session token + SHA-256 hash storage, `HttpOnly`/`SameSite=Lax` cookies, CSRF protection, login rate limiter, `AuthSession` extractor
   org/                   — `maxi-loop-org`: tenant/workspace/project/DSN service (`begin_tenant_tx` + `TenantContext`), CSPRNG DSN generation & rotation, retention override validation (`<= global`), slug & single-tenant routes
+  ingest/                — `maxi-loop-ingest`: `POST /api/{project_id}/envelope/`, in-memory `DsnCache` (0 per-envelope DB queries, live sync via `ProjectDsnObserver`), bounded gzip/deflate/brotli decompression, early drop of unsupported items, per-project `governor` rate limiting, bounded `tokio::sync::mpsc` channel backpressure (`429` + `Retry-After` / `X-Sentry-Rate-Limits`)
   server/                — `maxi-loop` binary: composition root, CLI (`serve` / `bootstrap`), router, security headers, `/healthz`, embedded SPA
   # Feature crates added one-by-one as each feature is built (no empty speculative crates):
-  # ingest/, issues/, retention/, alerts/, mcp/, performance/, sourcemaps/
+  # issues/, retention/, alerts/, mcp/, performance/, sourcemaps/
 web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (built into `web/dist`)
   src/app/               — App shell & routing
   src/lib/               — Shared HTTP client & types
@@ -39,13 +40,13 @@ docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & inte
 - `web/src/main.tsx` — React SPA entry point (Vite dev server proxies `/api` and `/healthz` to `:8080`).
 
 ## Main Data Flow
-- Current (F001–F003): Startup → SQLx migrations (`migrations/0001_initial_schema.sql`) → pre-create `events_YYYY_MM_DD` partitions → idempotent default tenant/workspace (+ optional Argon2id admin user) bootstrap → Axum HTTP server (`/healthz`, `/api/v1/health`, `/api/v1/auth/{login,logout,me}`, `/api/v1/tenants/current`, `/api/v1/t/{tenant_slug}/...`, `/api/v1/workspaces`, `/api/v1/projects`, embedded React SPA). All tenant DB operations run via `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + transaction-local `app.tenant_id` enforced by Postgres Row-Level Security); cross-tenant background tasks use `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`).
+- Current (F001–F004): Startup → SQLx migrations (`migrations/0001_initial_schema.sql`) → pre-create `events_YYYY_MM_DD` partitions → idempotent default tenant/workspace (+ optional Argon2id admin user) bootstrap → preload in-memory `DsnCache` → Axum HTTP server (`/healthz`, `/api/v1/health`, `/api/{project_id}/envelope/`, `/api/v1/auth/{login,logout,me}`, `/api/v1/tenants/current`, `/api/v1/t/{tenant_slug}/...`, `/api/v1/workspaces`, `/api/v1/projects`, embedded React SPA). All tenant DB operations run via `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + transaction-local `app.tenant_id` enforced by Postgres Row-Level Security); cross-tenant background tasks use `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`).
 - Planned (Phase 1): Sentry SDK → `ingest` crate (`/api/{project_id}/envelope/`, DSN cache auth, decompression, rate limit, bounded channel) → worker pool (PII scrub, fingerprint, batch insert) → PostgreSQL (daily partitioned events, RLS tenant isolation) → `issues`/`org`/`auth` services → JSON API & React UI (and later `mcp`).
 
 ## External Services & Config
 - **PostgreSQL 16** (via `docker-compose.yml`, host port `55432` by default).
 - Required/optional env vars (see `.env.example`, never commit `.env`):
-  `DATABASE_URL` (required), `APP_HOST`, `APP_PORT`, `PUBLIC_BASE_URL`, `DB_MAX_CONNECTIONS`, `SINGLE_TENANT_MODE`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `RETENTION_DEFAULT_DAYS`, `MAX_FULL_EVENTS_PER_ISSUE`, `DEFAULT_TENANT_SLUG`, `DEFAULT_TENANT_NAME`, `DEFAULT_WORKSPACE_SLUG`, `DEFAULT_WORKSPACE_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_NAME`, `LOG_FORMAT`, `RUST_LOG`, plus compose vars `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`.
+  `DATABASE_URL` (required), `APP_HOST`, `APP_PORT`, `PUBLIC_BASE_URL`, `DB_MAX_CONNECTIONS`, `SINGLE_TENANT_MODE`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `RETENTION_DEFAULT_DAYS`, `MAX_FULL_EVENTS_PER_ISSUE`, `MAX_ENVELOPE_COMPRESSED_BYTES`, `MAX_ENVELOPE_DECOMPRESSED_BYTES`, `MAX_EVENT_PAYLOAD_BYTES`, `INGEST_CHANNEL_CAPACITY`, `DEFAULT_TENANT_SLUG`, `DEFAULT_TENANT_NAME`, `DEFAULT_WORKSPACE_SLUG`, `DEFAULT_WORKSPACE_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_NAME`, `LOG_FORMAT`, `RUST_LOG`, plus compose vars `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`.
 
 ## Conventions Found in the Code
 - Rust 2024 edition (`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, no `unwrap()`/`expect()` on production paths).

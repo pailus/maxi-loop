@@ -18,6 +18,10 @@ pub struct Config {
     pub db_max_connections: u32,
     pub retention_default_days: u16,
     pub max_full_events_per_issue: u32,
+    pub max_envelope_compressed_bytes: usize,
+    pub max_envelope_decompressed_bytes: usize,
+    pub max_event_payload_bytes: usize,
+    pub ingest_channel_capacity: usize,
     pub log_format: LogFormat,
     pub single_tenant_mode: bool,
     pub cookie_secure: bool,
@@ -43,6 +47,16 @@ impl fmt::Debug for Config {
             .field("db_max_connections", &self.db_max_connections)
             .field("retention_default_days", &self.retention_default_days)
             .field("max_full_events_per_issue", &self.max_full_events_per_issue)
+            .field(
+                "max_envelope_compressed_bytes",
+                &self.max_envelope_compressed_bytes,
+            )
+            .field(
+                "max_envelope_decompressed_bytes",
+                &self.max_envelope_decompressed_bytes,
+            )
+            .field("max_event_payload_bytes", &self.max_event_payload_bytes)
+            .field("ingest_channel_capacity", &self.ingest_channel_capacity)
             .field("log_format", &self.log_format)
             .field("single_tenant_mode", &self.single_tenant_mode)
             .field("cookie_secure", &self.cookie_secure)
@@ -115,6 +129,38 @@ impl Config {
             1000,
             "MAX_FULL_EVENTS_PER_ISSUE",
         )?;
+
+        let max_envelope_compressed_bytes = parse_u32_range(
+            lookup("MAX_ENVELOPE_COMPRESSED_BYTES").as_deref(),
+            1_048_576,
+            1_024,
+            33_554_432,
+            "MAX_ENVELOPE_COMPRESSED_BYTES",
+        )? as usize;
+
+        let max_envelope_decompressed_bytes = parse_u32_range(
+            lookup("MAX_ENVELOPE_DECOMPRESSED_BYTES").as_deref(),
+            2_097_152,
+            1_024,
+            67_108_864,
+            "MAX_ENVELOPE_DECOMPRESSED_BYTES",
+        )? as usize;
+
+        let max_event_payload_bytes = parse_u32_range(
+            lookup("MAX_EVENT_PAYLOAD_BYTES").as_deref(),
+            524_288,
+            1_024,
+            16_777_216,
+            "MAX_EVENT_PAYLOAD_BYTES",
+        )? as usize;
+
+        let ingest_channel_capacity = parse_u32_range(
+            lookup("INGEST_CHANNEL_CAPACITY").as_deref(),
+            1_024,
+            1,
+            100_000,
+            "INGEST_CHANNEL_CAPACITY",
+        )? as usize;
 
         let log_format = match lookup("LOG_FORMAT")
             .unwrap_or_else(|| "pretty".to_owned())
@@ -223,6 +269,10 @@ impl Config {
             db_max_connections,
             retention_default_days,
             max_full_events_per_issue,
+            max_envelope_compressed_bytes,
+            max_envelope_decompressed_bytes,
+            max_event_payload_bytes,
+            ingest_channel_capacity,
             log_format,
             single_tenant_mode,
             cookie_secure,
