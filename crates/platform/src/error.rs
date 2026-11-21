@@ -16,6 +16,14 @@ pub enum ConfigError {
 pub enum AppError {
     #[error("database connection failed: {0}")]
     DatabaseConnect(String),
+    #[error("database migration failed: {0}")]
+    DatabaseMigration(String),
+    #[error("database query failed: {0}")]
+    DatabaseQuery(String),
+    #[error("validation error: {0}")]
+    Validation(String),
+    #[error("cryptographic operation failed: {0}")]
+    Crypto(String),
     #[error("not found")]
     NotFound,
 }
@@ -29,9 +37,13 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found"),
-            AppError::DatabaseConnect(_) => {
+            AppError::Validation(_) => (StatusCode::BAD_REQUEST, "invalid request"),
+            AppError::DatabaseConnect(_)
+            | AppError::DatabaseMigration(_)
+            | AppError::DatabaseQuery(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "service unavailable")
             }
+            AppError::Crypto(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
         };
         (status, Json(ErrorBody { error: message })).into_response()
     }

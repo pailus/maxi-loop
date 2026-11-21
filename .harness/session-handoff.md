@@ -8,22 +8,21 @@
 ## Last session
 - Date: 2026-11-21
 - Assistant: Antigravity
-- Feature worked on: F001 + Cargo Workspace vertical-slice refactor (`D006`) — done
+- Feature worked on: F002 (PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI) — done
 
 ## Current state
 - What works and is verified:
-  - Cargo workspace (`crates/platform`, `crates/server`) producing single binary `maxi-loop`
-  - Vertical-slice React SPA (`web/src/{app,lib,modules/health}`) embedded via `rust-embed` (`../../web/dist`)
-  - Isolated Docker Compose PostgreSQL 16 (`maxi-loop-postgres` on `127.0.0.1:55432`)
-  - All workspace checks pass: `npm --prefix web run build`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (9/9), `cargo build --workspace`, and live smoke test
+  - `migrations/0001_initial_schema.sql` creates `maxi_loop_app` & `maxi_loop_worker` DB roles, `app_current_tenant_id()`, `tenants`, `workspaces`, `projects`, `users`, `memberships`, `sessions`, `issues`, daily range-partitioned `events`, `issue_hourly_counters`, `FORCE ROW LEVEL SECURITY` policies, and `ensure_events_partition(DATE)`
+  - `crates/platform` provides `TenantContext`, `begin_tenant_tx` (transaction-local `SET LOCAL ROLE maxi_loop_app` + `app.tenant_id`), `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`), migration & partition helpers, and Argon2id password hashing + idempotent `bootstrap_defaults`
+  - `crates/server` runs migrations, pre-creates 7 days of `events` partitions, runs idempotent first-boot bootstrap, and supports `maxi-loop bootstrap` CLI subcommand
+  - All checks pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (16/16 including Postgres 16 RLS integration test), `cargo build --workspace`, and live smoke test
 - What is in progress but unfinished: none
 - Files left "dirty" / half-done (if any): none (only untracked `.env` for local dev)
 
 ## What the next session MUST watch out for
 - Unresolved blockers: none
-- Decisions still waiting for user confirmation: none (`D001`–`D006` all confirmed)
+- Decisions still waiting for user confirmation: none
 - Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host
 
 ## Suggested next steps
-1. Start **F002**: PostgreSQL schema migrations (`migrations/`), `TenantContext` + RLS transaction helper in `crates/platform`, worker DB role, and idempotent single-tenant bootstrap CLI/first-boot.
-2. Add integration tests verifying migrations, daily partition creation, and RLS tenant isolation against `maxi-loop-postgres`.
+1. Start **F003**: Session auth (Argon2id login/logout/me, CSPRNG session tokens, `HttpOnly`/`SameSite` cookies, CSRF header/token validation, login rate limiting) and Tenant/Workspace/Project/DSN management API (`crates/auth` and `crates/org`, mounted in `crates/server`), plus cross-tenant API isolation tests.

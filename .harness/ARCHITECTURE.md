@@ -11,9 +11,10 @@
 ```
 Cargo.toml               — Cargo workspace root + shared `[workspace.dependencies]`
 docs/                    — PRD (sentry-lite-prd.md) and technical design (sentry-lite-design.md)
+migrations/              — SQLx PostgreSQL migrations (`0001_initial_schema.sql`: schema, daily partitions, RLS)
 crates/                  — Rust workspace crates (vertical-slice modular layout)
-  platform/              — `maxi-loop-platform`: config, typed errors, DB pool, (later: TenantContext & RLS tx helper)
-  server/                — `maxi-loop` binary: composition root, router, security headers, `/healthz`, embedded SPA
+  platform/              — `maxi-loop-platform`: config, typed errors, DB pool/migrations/partitions, TenantContext & RLS tx helpers, Argon2id bootstrap
+  server/                — `maxi-loop` binary: composition root, CLI (`serve` / `bootstrap`), router, security headers, `/healthz`, embedded SPA
   # Feature crates added one-by-one as each feature is built (no empty speculative crates):
   # auth/, org/, ingest/, issues/, retention/, alerts/, mcp/, performance/, sourcemaps/
 web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (built into `web/dist`)
@@ -31,18 +32,18 @@ docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & inte
 - `crates/server` is the thin composition root: wires config, DB pool, workers, schedulers, mounts each feature crate's `Router`, and embeds `web/dist`.
 
 ## Entry Points
-- `crates/server/src/main.rs` — Single-binary entrypoint (`maxi-loop`), listening on `APP_HOST:APP_PORT` (default `127.0.0.1:8080`).
+- `crates/server/src/main.rs` — Single-binary entrypoint (`maxi-loop` / `maxi-loop serve` to run migrations, pre-create daily partitions, ensure default tenant/workspace, and serve HTTP on `APP_HOST:APP_PORT`; `maxi-loop bootstrap` CLI subcommand for idempotent tenant/workspace/admin provisioning).
 - `crates/server/build.rs` — Ensures `../../web/dist` exists at compile time for `rust-embed`.
 - `web/src/main.tsx` — React SPA entry point (Vite dev server proxies `/api` and `/healthz` to `:8080`).
 
 ## Main Data Flow
-- Current (F001): HTTP request → `crates/server` Axum router + security headers + tracing → `/healthz` or `/api/v1/health` (PostgreSQL `SELECT 1` with 2s timeout) or embedded React SPA (`web/dist`).
+- Current (F001–F002): Startup → SQLx migrations (`migrations/0001_initial_schema.sql`) → pre-create `events_YYYY_MM_DD` partitions → idempotent default tenant/workspace (+ optional Argon2id admin user) bootstrap → Axum HTTP server (`/healthz`, `/api/v1/health`, embedded React SPA). All tenant DB operations run via `begin_tenant_tx` (`SET LOCAL ROLE maxi_loop_app` + transaction-local `app.tenant_id` enforced by Postgres Row-Level Security); cross-tenant background tasks use `begin_worker_tx` (`SET LOCAL ROLE maxi_loop_worker`).
 - Planned (Phase 1): Sentry SDK → `ingest` crate (`/api/{project_id}/envelope/`, DSN cache auth, decompression, rate limit, bounded channel) → worker pool (PII scrub, fingerprint, batch insert) → PostgreSQL (daily partitioned events, RLS tenant isolation) → `issues`/`org`/`auth` services → JSON API & React UI (and later `mcp`).
 
 ## External Services & Config
 - **PostgreSQL 16** (via `docker-compose.yml`, host port `55432` by default).
 - Required/optional env vars (see `.env.example`, never commit `.env`):
-  `DATABASE_URL` (required), `APP_HOST`, `APP_PORT`, `DB_MAX_CONNECTIONS`, `RETENTION_DEFAULT_DAYS`, `MAX_FULL_EVENTS_PER_ISSUE`, `LOG_FORMAT`, `RUST_LOG`, plus compose vars `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`.
+  `DATABASE_URL` (required), `APP_HOST`, `APP_PORT`, `DB_MAX_CONNECTIONS`, `RETENTION_DEFAULT_DAYS`, `MAX_FULL_EVENTS_PER_ISSUE`, `DEFAULT_TENANT_SLUG`, `DEFAULT_TENANT_NAME`, `DEFAULT_WORKSPACE_SLUG`, `DEFAULT_WORKSPACE_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_NAME`, `LOG_FORMAT`, `RUST_LOG`, plus compose vars `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`.
 
 ## Conventions Found in the Code
 - Rust 2024 edition (`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, no `unwrap()`/`expect()` on production paths).

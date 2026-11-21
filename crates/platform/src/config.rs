@@ -18,11 +18,19 @@ pub struct Config {
     pub retention_default_days: u16,
     pub max_full_events_per_issue: u32,
     pub log_format: LogFormat,
+    pub default_tenant_slug: String,
+    pub default_tenant_name: String,
+    pub default_workspace_slug: String,
+    pub default_workspace_name: String,
+    pub bootstrap_admin_email: Option<String>,
+    pub bootstrap_admin_password: Option<String>,
+    pub bootstrap_admin_name: String,
 }
 
-// Redact database_url so credentials can never be logged via Debug.
+// Redact sensitive fields so credentials can never be logged via Debug.
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redacted_admin_pw = self.bootstrap_admin_password.as_ref().map(|_| "<redacted>");
         f.debug_struct("Config")
             .field("app_host", &self.app_host)
             .field("app_port", &self.app_port)
@@ -31,6 +39,13 @@ impl fmt::Debug for Config {
             .field("retention_default_days", &self.retention_default_days)
             .field("max_full_events_per_issue", &self.max_full_events_per_issue)
             .field("log_format", &self.log_format)
+            .field("default_tenant_slug", &self.default_tenant_slug)
+            .field("default_tenant_name", &self.default_tenant_name)
+            .field("default_workspace_slug", &self.default_workspace_slug)
+            .field("default_workspace_name", &self.default_workspace_name)
+            .field("bootstrap_admin_email", &self.bootstrap_admin_email)
+            .field("bootstrap_admin_password", &redacted_admin_pw)
+            .field("bootstrap_admin_name", &self.bootstrap_admin_name)
             .finish()
     }
 }
@@ -101,6 +116,70 @@ impl Config {
             }
         };
 
+        let default_tenant_slug = parse_slug(
+            lookup("DEFAULT_TENANT_SLUG").as_deref(),
+            "default",
+            "DEFAULT_TENANT_SLUG",
+        )?;
+        let default_tenant_name = parse_display_name(
+            lookup("DEFAULT_TENANT_NAME").as_deref(),
+            "Default Organization",
+            "DEFAULT_TENANT_NAME",
+        )?;
+        let default_workspace_slug = parse_slug(
+            lookup("DEFAULT_WORKSPACE_SLUG").as_deref(),
+            "default",
+            "DEFAULT_WORKSPACE_SLUG",
+        )?;
+        let default_workspace_name = parse_display_name(
+            lookup("DEFAULT_WORKSPACE_NAME").as_deref(),
+            "Default Workspace",
+            "DEFAULT_WORKSPACE_NAME",
+        )?;
+
+        let bootstrap_admin_email = match lookup("BOOTSTRAP_ADMIN_EMAIL")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|v| !v.is_empty())
+        {
+            Some(email) => {
+                if !is_valid_email(&email) {
+                    return Err(ConfigError::InvalidValue(
+                        "BOOTSTRAP_ADMIN_EMAIL",
+                        "must be a valid email address",
+                    ));
+                }
+                Some(email)
+            }
+            None => None,
+        };
+
+        let bootstrap_admin_password =
+            match lookup("BOOTSTRAP_ADMIN_PASSWORD").filter(|v| !v.is_empty()) {
+                Some(pw) => {
+                    if pw.len() < 12 || pw.len() > 256 {
+                        return Err(ConfigError::InvalidValue(
+                            "BOOTSTRAP_ADMIN_PASSWORD",
+                            "must be between 12 and 256 characters",
+                        ));
+                    }
+                    Some(pw)
+                }
+                None => None,
+            };
+
+        if bootstrap_admin_email.is_some() != bootstrap_admin_password.is_some() {
+            return Err(ConfigError::InvalidValue(
+                "BOOTSTRAP_ADMIN_EMAIL",
+                "BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD must be provided together",
+            ));
+        }
+
+        let bootstrap_admin_name = parse_display_name(
+            lookup("BOOTSTRAP_ADMIN_NAME").as_deref(),
+            "Administrator",
+            "BOOTSTRAP_ADMIN_NAME",
+        )?;
+
         Ok(Self {
             app_host,
             app_port,
@@ -109,12 +188,73 @@ impl Config {
             retention_default_days,
             max_full_events_per_issue,
             log_format,
+            default_tenant_slug,
+            default_tenant_name,
+            default_workspace_slug,
+            default_workspace_name,
+            bootstrap_admin_email,
+            bootstrap_admin_password,
+            bootstrap_admin_name,
         })
     }
 
     pub fn socket_addr(&self) -> Result<SocketAddr, ConfigError> {
         Ok(SocketAddr::new(self.app_host, self.app_port))
     }
+}
+
+pub fn is_valid_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.len() > 64 {
+        return false;
+    }
+    slug.split('-').all(|part| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    })
+}
+
+pub fn is_valid_email(email: &str) -> bool {
+    if email.len() < 3 || email.len() > 254 || email.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn parse_slug(raw: Option<&str>, default: &str, name: &'static str) -> Result<String, ConfigError> {
+    let val = match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => v,
+        None => default,
+    };
+    if !is_valid_slug(val) {
+        return Err(ConfigError::InvalidValue(
+            name,
+            "must be lowercase alphanumeric hyphen-separated slug (max 64 chars)",
+        ));
+    }
+    Ok(val.to_owned())
+}
+
+fn parse_display_name(
+    raw: Option<&str>,
+    default: &str,
+    name: &'static str,
+) -> Result<String, ConfigError> {
+    let val = match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => v,
+        None => default,
+    };
+    if val.is_empty() || val.len() > 128 {
+        return Err(ConfigError::InvalidValue(
+            name,
+            "must be between 1 and 128 characters",
+        ));
+    }
+    Ok(val.to_owned())
 }
 
 fn parse_u16_range(
@@ -189,6 +329,10 @@ mod tests {
         assert_eq!(cfg.retention_default_days, 30);
         assert_eq!(cfg.max_full_events_per_issue, 50);
         assert_eq!(cfg.log_format, LogFormat::Pretty);
+        assert_eq!(cfg.default_tenant_slug, "default");
+        assert_eq!(cfg.default_workspace_slug, "default");
+        assert_eq!(cfg.bootstrap_admin_email, None);
+        assert_eq!(cfg.bootstrap_admin_password, None);
     }
 
     #[test]
@@ -228,15 +372,45 @@ mod tests {
     }
 
     #[test]
-    fn debug_output_redacts_database_url() {
-        let cfg = Config::from_lookup(map_lookup(&[(
-            "DATABASE_URL",
-            "postgres://user:super_secret_pw@127.0.0.1:55432/maxi_loop",
-        )]))
-        .expect("config should load");
+    fn validates_bootstrap_admin_credentials_and_redacts_secrets_in_debug() {
+        let err = Config::from_lookup(map_lookup(&[
+            ("DATABASE_URL", "postgres://user:pass@127.0.0.1/db"),
+            ("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue("BOOTSTRAP_ADMIN_EMAIL", _)
+        ));
 
+        let err = Config::from_lookup(map_lookup(&[
+            ("DATABASE_URL", "postgres://user:pass@127.0.0.1/db"),
+            ("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com"),
+            ("BOOTSTRAP_ADMIN_PASSWORD", "short"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue("BOOTSTRAP_ADMIN_PASSWORD", _)
+        ));
+
+        let cfg = Config::from_lookup(map_lookup(&[
+            (
+                "DATABASE_URL",
+                "postgres://user:super_secret_db_pw@127.0.0.1:55432/maxi_loop",
+            ),
+            ("BOOTSTRAP_ADMIN_EMAIL", "Admin@Example.com"),
+            ("BOOTSTRAP_ADMIN_PASSWORD", "admin_secret_password_123"),
+        ]))
+        .expect("valid bootstrap config");
+
+        assert_eq!(
+            cfg.bootstrap_admin_email.as_deref(),
+            Some("admin@example.com")
+        );
         let rendered = format!("{cfg:?}");
-        assert!(!rendered.contains("super_secret_pw"));
+        assert!(!rendered.contains("super_secret_db_pw"));
+        assert!(!rendered.contains("admin_secret_password_123"));
         assert!(rendered.contains("<redacted>"));
     }
 }

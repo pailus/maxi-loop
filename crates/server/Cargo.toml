@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum.workspace = true
+chrono.workspace = true
 dotenvy.workspace = true
 http.workspace = true
 maxi-loop-platform.workspace = true

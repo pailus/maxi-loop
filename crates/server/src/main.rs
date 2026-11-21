@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 
+use chrono::Utc;
 use maxi_loop::AppState;
+use maxi_loop::cli::{Command, parse_args};
 use maxi_loop::http::build_router;
+use maxi_loop_platform::bootstrap::{BootstrapSpec, bootstrap_defaults};
 use maxi_loop_platform::config::{Config, LogFormat};
-use maxi_loop_platform::db::connect_db;
+use maxi_loop_platform::db::{connect_db, ensure_upcoming_events_partitions, run_migrations};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -11,6 +14,14 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() {
     let _ = dotenvy::dotenv();
+
+    let command = match parse_args(std::env::args()) {
+        Ok(cmd) => cmd,
+        Err(err) => {
+            eprintln!("argument error: {err}");
+            std::process::exit(2);
+        }
+    };
 
     let config = match Config::from_env() {
         Ok(cfg) => cfg,
@@ -30,6 +41,66 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    if let Err(err) = run_migrations(&db).await {
+        error!(error = %err, "failed to run database migrations");
+        std::process::exit(1);
+    }
+
+    let today_utc = Utc::now().date_naive();
+    if let Err(err) = ensure_upcoming_events_partitions(&db, today_utc, 7).await {
+        error!(error = %err, "failed to ensure upcoming events partitions");
+        std::process::exit(1);
+    }
+
+    match command {
+        Command::Bootstrap(overrides) => {
+            let spec = match overrides.apply_to(&config) {
+                Ok(spec) => spec,
+                Err(err) => {
+                    error!(error = %err, "invalid bootstrap parameters");
+                    std::process::exit(2);
+                }
+            };
+            match bootstrap_defaults(&db, &spec).await {
+                Ok(outcome) => {
+                    info!(
+                        tenant_id = outcome.tenant_id,
+                        tenant_slug = %outcome.tenant_slug,
+                        workspace_id = outcome.workspace_id,
+                        workspace_slug = %outcome.workspace_slug,
+                        admin_user_id = ?outcome.admin_user_id,
+                        admin_email = ?outcome.admin_email,
+                        "bootstrap completed"
+                    );
+                    return;
+                }
+                Err(err) => {
+                    error!(error = %err, "bootstrap failed");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::Serve => {
+            let spec = BootstrapSpec::from_config(&config);
+            match bootstrap_defaults(&db, &spec).await {
+                Ok(outcome) => {
+                    info!(
+                        tenant_id = outcome.tenant_id,
+                        tenant_slug = %outcome.tenant_slug,
+                        workspace_id = outcome.workspace_id,
+                        workspace_slug = %outcome.workspace_slug,
+                        admin_user_id = ?outcome.admin_user_id,
+                        "verified default tenant and workspace"
+                    );
+                }
+                Err(err) => {
+                    error!(error = %err, "first-boot bootstrap failed");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 
     let addr: SocketAddr = match config.socket_addr() {
         Ok(addr) => addr,

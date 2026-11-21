@@ -29,7 +29,7 @@
     {
       "id": "F002",
       "title": "PostgreSQL schema, daily-partitioned events, RLS tenant isolation, and bootstrap CLI",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "SQLx migrations create tenants, workspaces, projects, users, memberships, sessions, issues, daily-partitioned events, and issue_hourly_counters with tenant_id + project_id leading keys/indexes",
@@ -39,9 +39,9 @@
       ],
       "verification_commands": [
         "cargo fmt --check",
-        "cargo clippy --all-targets -- -D warnings",
-        "cargo test",
-        "cargo build"
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
       ],
       "depends_on": ["F001"],
       "notes": "PRD F-ADM-6, F-ADM-7, F-ADM-10; Design §5.6 & §5.11"

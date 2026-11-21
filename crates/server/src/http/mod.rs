@@ -64,6 +64,13 @@ mod tests {
             retention_default_days: 30,
             max_full_events_per_issue: 50,
             log_format: LogFormat::Pretty,
+            default_tenant_slug: "default".to_owned(),
+            default_tenant_name: "Default Organization".to_owned(),
+            default_workspace_slug: "default".to_owned(),
+            default_workspace_name: "Default Workspace".to_owned(),
+            bootstrap_admin_email: None,
+            bootstrap_admin_password: None,
+            bootstrap_admin_name: "Administrator".to_owned(),
         };
         let db = PgPoolOptions::new()
             .max_connections(1)
