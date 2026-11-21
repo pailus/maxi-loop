@@ -51,6 +51,7 @@ async fn list_channels_handler(
     State(state): State<AuthState>,
     session: AuthSession,
 ) -> Result<Json<Vec<AlertChannelView>>, AppError> {
+    session.require_user_session()?;
     let items = list_alert_channels(&state.db, session.tenant_ctx).await?;
     Ok(Json(items))
 }
@@ -60,6 +61,7 @@ async fn create_channel_handler(
     session: AuthSession,
     Json(input): Json<CreateAlertChannelInput>,
 ) -> Result<(StatusCode, Json<AlertChannelView>), AppError> {
+    session.require_user_session()?;
     // Production HTTP API ALWAYS enforces strict SSRF protection (allow_private_ips = false).
     let created =
         create_alert_channel(&state.db, session.tenant_ctx, session.role, input, false).await?;
@@ -72,6 +74,7 @@ async fn update_channel_handler(
     Path(channel_id): Path<i64>,
     Json(input): Json<UpdateAlertChannelInput>,
 ) -> Result<Json<AlertChannelView>, AppError> {
+    session.require_user_session()?;
     let updated = update_alert_channel(
         &state.db,
         session.tenant_ctx,
@@ -88,6 +91,7 @@ async fn delete_channel_handler(
     session: AuthSession,
     Path(channel_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
+    session.require_user_session()?;
     delete_alert_channel(&state.db, session.tenant_ctx, session.role, channel_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -96,6 +100,7 @@ async fn list_rules_handler(
     State(state): State<AuthState>,
     session: AuthSession,
 ) -> Result<Json<Vec<AlertRuleView>>, AppError> {
+    session.require_user_session()?;
     let items = list_alert_rules(&state.db, session.tenant_ctx).await?;
     Ok(Json(items))
 }
@@ -105,6 +110,7 @@ async fn create_rule_handler(
     session: AuthSession,
     Json(input): Json<CreateAlertRuleInput>,
 ) -> Result<(StatusCode, Json<AlertRuleView>), AppError> {
+    session.require_user_session()?;
     let created = create_alert_rule(&state.db, session.tenant_ctx, session.role, input).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -115,6 +121,7 @@ async fn update_rule_handler(
     Path(rule_id): Path<i64>,
     Json(input): Json<UpdateAlertRuleInput>,
 ) -> Result<Json<AlertRuleView>, AppError> {
+    session.require_user_session()?;
     let updated =
         update_alert_rule(&state.db, session.tenant_ctx, session.role, rule_id, input).await?;
     Ok(Json(updated))
@@ -125,6 +132,7 @@ async fn delete_rule_handler(
     session: AuthSession,
     Path(rule_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
+    session.require_user_session()?;
     delete_alert_rule(&state.db, session.tenant_ctx, session.role, rule_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -134,6 +142,7 @@ async fn list_deliveries_handler(
     session: AuthSession,
     Query(query): Query<DeliveriesQuery>,
 ) -> Result<Json<Vec<AlertDeliveryView>>, AppError> {
+    session.require_user_session()?;
     let items = list_alert_deliveries(&state.db, session.tenant_ctx, query.limit).await?;
     Ok(Json(items))
 }

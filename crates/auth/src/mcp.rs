@@ -230,6 +230,7 @@ async fn list_tokens_handler(
     State(state): State<AuthState>,
     session: AuthSession,
 ) -> Result<Json<Vec<McpTokenView>>, AppError> {
+    session.require_user_session()?;
     let tokens = list_mcp_tokens(&state.db, &session).await?;
     Ok(Json(tokens))
 }
@@ -239,6 +240,7 @@ async fn create_token_handler(
     session: AuthSession,
     Json(input): Json<CreateMcpTokenInput>,
 ) -> Result<(StatusCode, Json<CreatedMcpTokenResponse>), AppError> {
+    session.require_user_session()?;
     let created = create_mcp_token(&state.db, &session, input).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -248,6 +250,7 @@ async fn revoke_token_handler(
     session: AuthSession,
     Path(token_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
+    session.require_user_session()?;
     revoke_mcp_token(&state.db, &session, token_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -257,6 +260,7 @@ async fn list_audit_logs_handler(
     session: AuthSession,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<Vec<McpAuditLogView>>, AppError> {
+    session.require_user_session()?;
     let logs = list_mcp_audit_logs(&state.db, &session, query.limit).await?;
     Ok(Json(logs))
 }

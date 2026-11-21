@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use axum::http::HeaderMap;
@@ -121,8 +122,10 @@ pub async fn login(
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
 
     let tenant = load_tenant_summary(&mut tx, tenant_id).await?;
-    let role = load_highest_role(&mut tx, tenant_id, user_id).await?;
-    let default_workspace = load_default_workspace(&mut tx, tenant_id).await?;
+    let (role, tenant_role, workspace_roles) =
+        load_user_memberships(&mut tx, tenant_id, user_id).await?;
+    let default_workspace =
+        load_default_workspace_for_user(&mut tx, tenant_id, tenant_role, &workspace_roles).await?;
 
     let raw_token = generate_random_token_hex();
     let token_hash = hash_session_token(&raw_token)?;
@@ -167,6 +170,9 @@ pub async fn login(
             name: user_name,
         },
         role,
+        tenant_role,
+        workspace_roles,
+        api_token: None,
         csrf_token,
     };
 
@@ -227,8 +233,10 @@ pub async fn authenticate_cookie(
     };
 
     let tenant = load_tenant_summary(&mut tx, tenant_id).await?;
-    let role = load_highest_role(&mut tx, tenant_id, user_id).await?;
-    let default_workspace = load_default_workspace(&mut tx, tenant_id).await?;
+    let (role, tenant_role, workspace_roles) =
+        load_user_memberships(&mut tx, tenant_id, user_id).await?;
+    let default_workspace =
+        load_default_workspace_for_user(&mut tx, tenant_id, tenant_role, &workspace_roles).await?;
 
     tx.commit()
         .await
@@ -245,11 +253,15 @@ pub async fn authenticate_cookie(
             name,
         },
         role,
+        tenant_role,
+        workspace_roles,
+        api_token: None,
         csrf_token,
     })
 }
 
 pub async fn logout(pool: &PgPool, session: &AuthSession) -> Result<(), AppError> {
+    session.require_user_session()?;
     let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
     sqlx::query("DELETE FROM sessions WHERE tenant_id = $1 AND id = $2")
         .bind(session.tenant_ctx.tenant_id())
@@ -263,12 +275,34 @@ pub async fn logout(pool: &PgPool, session: &AuthSession) -> Result<(), AppError
     Ok(())
 }
 
-async fn load_tenant_summary(
+#[derive(sqlx::FromRow)]
+struct TenantSummaryRow {
+    id: i64,
+    slug: String,
+    name: String,
+    retention_days: i16,
+    default_rate_limit_per_minute: i32,
+    aggregate_rate_limit_per_minute: i32,
+    is_default: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct WorkspaceSummaryRow {
+    id: i64,
+    slug: String,
+    name: String,
+    retention_days_override: Option<i16>,
+    default_rate_limit_per_minute_override: Option<i32>,
+    is_default: bool,
+}
+
+pub(crate) async fn load_tenant_summary(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: i64,
 ) -> Result<TenantSummary, AppError> {
-    let row: Option<(i64, String, String, i16, bool)> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days, is_default
+    let row: Option<TenantSummaryRow> = sqlx::query_as(
+        "SELECT id, slug, name, retention_days,
+                default_rate_limit_per_minute, aggregate_rate_limit_per_minute, is_default
          FROM tenants
          WHERE id = $1",
     )
@@ -277,28 +311,30 @@ async fn load_tenant_summary(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("load tenant summary: {err}")))?;
 
-    let Some((id, slug, name, retention_days_i16, is_default)) = row else {
+    let Some(row) = row else {
         return Err(AppError::Unauthorized("tenant not found"));
     };
-    let retention_days = u16::try_from(retention_days_i16)
+    let retention_days = u16::try_from(row.retention_days)
         .map_err(|_| AppError::Validation("invalid tenant retention_days".to_owned()))?;
 
     Ok(TenantSummary {
-        id,
-        slug,
-        name,
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
         retention_days,
-        is_default,
+        default_rate_limit_per_minute: row.default_rate_limit_per_minute,
+        aggregate_rate_limit_per_minute: row.aggregate_rate_limit_per_minute,
+        is_default: row.is_default,
     })
 }
 
-async fn load_highest_role(
+async fn load_user_memberships(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: i64,
     user_id: i64,
-) -> Result<Role, AppError> {
-    let roles: Vec<String> = sqlx::query_scalar(
-        "SELECT role
+) -> Result<(Role, Option<Role>, BTreeMap<i64, Role>), AppError> {
+    let rows: Vec<(Option<i64>, String)> = sqlx::query_as(
+        "SELECT workspace_id, role
          FROM memberships
          WHERE tenant_id = $1 AND user_id = $2",
     )
@@ -309,36 +345,81 @@ async fn load_highest_role(
     .map_err(|err| AppError::DatabaseQuery(format!("load user memberships: {err}")))?;
 
     let mut best: Option<Role> = None;
-    for raw in roles {
-        let parsed = Role::parse(&raw)?;
+    let mut tenant_role: Option<Role> = None;
+    let mut workspace_roles: BTreeMap<i64, Role> = BTreeMap::new();
+
+    for (ws_id_opt, raw_role) in rows {
+        let parsed = Role::parse(&raw_role)?;
         if best.is_none_or(|current| parsed.privilege_rank() > current.privilege_rank()) {
             best = Some(parsed);
         }
+        match ws_id_opt {
+            None => {
+                if tenant_role
+                    .is_none_or(|current| parsed.privilege_rank() > current.privilege_rank())
+                {
+                    tenant_role = Some(parsed);
+                }
+            }
+            Some(ws_id) => {
+                workspace_roles
+                    .entry(ws_id)
+                    .and_modify(|cur| {
+                        if parsed.privilege_rank() > cur.privilege_rank() {
+                            *cur = parsed;
+                        }
+                    })
+                    .or_insert(parsed);
+            }
+        }
     }
 
-    best.ok_or(AppError::Unauthorized("no active tenant membership"))
+    let highest = best.ok_or(AppError::Unauthorized("no active tenant membership"))?;
+    Ok((highest, tenant_role, workspace_roles))
 }
 
-async fn load_default_workspace(
+async fn load_default_workspace_for_user(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: i64,
+    tenant_role: Option<Role>,
+    workspace_roles: &BTreeMap<i64, Role>,
 ) -> Result<WorkspaceSummary, AppError> {
-    let row: Option<(i64, String, String, Option<i16>, bool)> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days_override, is_default
-         FROM workspaces
-         WHERE tenant_id = $1
-         ORDER BY is_default DESC, id ASC
-         LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(|err| AppError::DatabaseQuery(format!("load default workspace: {err}")))?;
+    let row: Option<WorkspaceSummaryRow> = if tenant_role.is_some() || workspace_roles.is_empty() {
+        sqlx::query_as(
+            "SELECT id, slug, name, retention_days_override,
+                    default_rate_limit_per_minute_override, is_default
+             FROM workspaces
+             WHERE tenant_id = $1
+             ORDER BY is_default DESC, id ASC
+             LIMIT 1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("load default workspace: {err}")))?
+    } else {
+        let allowed_ids: Vec<i64> = workspace_roles.keys().copied().collect();
+        sqlx::query_as(
+            "SELECT id, slug, name, retention_days_override,
+                    default_rate_limit_per_minute_override, is_default
+             FROM workspaces
+             WHERE tenant_id = $1 AND id = ANY($2)
+             ORDER BY is_default DESC, id ASC
+             LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(&allowed_ids)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|err| {
+            AppError::DatabaseQuery(format!("load user scoped default workspace: {err}"))
+        })?
+    };
 
-    let Some((id, slug, name, retention_override_i16, is_default)) = row else {
+    let Some(row) = row else {
         return Err(AppError::NotFound);
     };
-    let retention_days_override = match retention_override_i16 {
+    let retention_days_override = match row.retention_days_override {
         Some(v) => Some(
             u16::try_from(v)
                 .map_err(|_| AppError::Validation("invalid workspace retention".to_owned()))?,
@@ -347,10 +428,11 @@ async fn load_default_workspace(
     };
 
     Ok(WorkspaceSummary {
-        id,
-        slug,
-        name,
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
         retention_days_override,
-        is_default,
+        default_rate_limit_per_minute_override: row.default_rate_limit_per_minute_override,
+        is_default: row.is_default,
     })
 }

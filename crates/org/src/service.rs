@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use maxi_loop_auth::model::{Role, TenantSummary, WorkspaceSummary};
 use maxi_loop_platform::config::{Config, is_valid_slug};
+use maxi_loop_platform::dsn_notify::TenantRateLimitUpdate;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
@@ -10,9 +11,14 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 use crate::dsn::{format_ingest_endpoint, format_project_dsn, generate_dsn_public_key};
 use crate::model::{
-    CreateProjectInput, CreateWorkspaceInput, ProjectView, TenantOverview, WorkspaceView,
+    CreateProjectInput, CreateWorkspaceInput, ProjectView, TenantOverview,
+    UpdateProjectSettingsInput, UpdateTenantSettingsInput, UpdateWorkspaceSettingsInput,
+    WorkspaceView,
 };
 use crate::pii::list_pii_scrub_rules;
+
+const MAX_PROJECT_RPM: i32 = 1_000_000;
+const MAX_TENANT_AGGREGATE_RPM: i32 = 10_000_000;
 
 /// Service facade owned by `maxi-loop-org` so upstream layers (like `maxi-loop-mcp`) can invoke
 /// tenant-scoped org services without importing `sqlx` directly (`D006`).
@@ -74,6 +80,7 @@ struct WorkspaceDbRow {
     slug: String,
     name: String,
     retention_days_override: Option<i16>,
+    default_rate_limit_per_minute_override: Option<i32>,
     is_default: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -85,12 +92,13 @@ struct ProjectJoinedDbRow {
     workspace_id: i64,
     workspace_slug: String,
     ws_retention_days_override: Option<i16>,
+    ws_rate_limit_override: Option<i32>,
     slug: String,
     name: String,
     platform: String,
     dsn_public_key: String,
     retention_days_override: Option<i16>,
-    rate_limit_per_minute: i32,
+    rate_limit_per_minute_override: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -104,7 +112,7 @@ struct ProjectMutatedDbRow {
     platform: String,
     dsn_public_key: String,
     retention_days_override: Option<i16>,
-    rate_limit_per_minute: i32,
+    rate_limit_per_minute_override: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -129,6 +137,132 @@ pub async fn get_tenant_overview(
     })
 }
 
+pub async fn update_tenant_settings(
+    pool: &PgPool,
+    config: &Config,
+    tenant_ctx: TenantContext,
+    tenant_slug: &str,
+    input: UpdateTenantSettingsInput,
+) -> Result<(TenantOverview, TenantRateLimitUpdate), AppError> {
+    let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    let current = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
+
+    let new_name = match input.name {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.len() > 128 {
+                return Err(AppError::Validation(
+                    "tenant name must be between 1 and 128 characters".to_owned(),
+                ));
+            }
+            trimmed.to_owned()
+        }
+        None => current.name.clone(),
+    };
+
+    let new_retention = match input.retention_days {
+        Some(days) => {
+            if days < 1 || days > config.retention_default_days {
+                return Err(AppError::Validation(format!(
+                    "tenant retention_days must be between 1 and {} days",
+                    config.retention_default_days
+                )));
+            }
+            days
+        }
+        None => current.retention_days,
+    };
+
+    let new_default_rpm = match input.default_rate_limit_per_minute {
+        Some(rpm) => {
+            if !(1..=MAX_PROJECT_RPM).contains(&rpm) {
+                return Err(AppError::Validation(format!(
+                    "default_rate_limit_per_minute must be between 1 and {MAX_PROJECT_RPM}"
+                )));
+            }
+            rpm
+        }
+        None => current.default_rate_limit_per_minute,
+    };
+
+    let new_agg_rpm = match input.aggregate_rate_limit_per_minute {
+        Some(rpm) => {
+            if !(1..=MAX_TENANT_AGGREGATE_RPM).contains(&rpm) {
+                return Err(AppError::Validation(format!(
+                    "aggregate_rate_limit_per_minute must be between 1 and {MAX_TENANT_AGGREGATE_RPM}"
+                )));
+            }
+            rpm
+        }
+        None => current.aggregate_rate_limit_per_minute,
+    };
+
+    let retention_i16 = i16::try_from(new_retention)
+        .map_err(|_| AppError::Validation("retention_days out of range".to_owned()))?;
+
+    sqlx::query(
+        "UPDATE tenants
+         SET name = $1,
+             retention_days = $2,
+             default_rate_limit_per_minute = $3,
+             aggregate_rate_limit_per_minute = $4,
+             updated_at = NOW()
+         WHERE id = $5",
+    )
+    .bind(&new_name)
+    .bind(retention_i16)
+    .bind(new_default_rpm)
+    .bind(new_agg_rpm)
+    .bind(current.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("update tenant settings: {err}")))?;
+
+    // Collect effective rate limits for all projects in this tenant so DsnCache updates live.
+    let proj_limits: Vec<(i64, i32)> = sqlx::query_as(
+        "SELECT p.id,
+                COALESCE(
+                    p.rate_limit_per_minute_override,
+                    w.default_rate_limit_per_minute_override,
+                    $2
+                ) AS effective_rpm
+         FROM projects p
+         JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
+         WHERE p.tenant_id = $1",
+    )
+    .bind(current.id)
+    .bind(new_default_rpm)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|err| {
+        AppError::DatabaseQuery(format!("load tenant project effective limits: {err}"))
+    })?;
+
+    let updated_tenant = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
+    let default_ws = load_default_workspace_in_tx(&mut tx, updated_tenant.id).await?;
+    tx.commit()
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("commit update_tenant_settings: {err}")))?;
+
+    let cache_update = TenantRateLimitUpdate {
+        tenant_id: updated_tenant.id,
+        aggregate_rate_limit_per_minute: Some(u32::try_from(new_agg_rpm.max(1)).unwrap_or(6000)),
+        project_effective_limits: proj_limits
+            .into_iter()
+            .map(|(pid, rpm)| (pid, u32::try_from(rpm.max(1)).unwrap_or(1200)))
+            .collect(),
+    };
+
+    Ok((
+        TenantOverview {
+            tenant: updated_tenant,
+            default_workspace: default_ws,
+            single_tenant_mode: config.single_tenant_mode,
+        },
+        cache_update,
+    ))
+}
+
 pub async fn list_workspaces(
     pool: &PgPool,
     tenant_ctx: TenantContext,
@@ -138,7 +272,8 @@ pub async fn list_workspaces(
     let tenant = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
 
     let rows: Vec<WorkspaceDbRow> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days_override, is_default, created_at, updated_at
+        "SELECT id, slug, name, retention_days_override,
+                default_rate_limit_per_minute_override, is_default, created_at, updated_at
          FROM workspaces
          WHERE tenant_id = $1
          ORDER BY is_default DESC, slug ASC
@@ -202,6 +337,13 @@ pub async fn create_workspace(
             "workspace name must be between 1 and 128 characters".to_owned(),
         ));
     }
+    if let Some(rpm) = input.default_rate_limit_per_minute_override
+        && !(1..=MAX_PROJECT_RPM).contains(&rpm)
+    {
+        return Err(AppError::Validation(format!(
+            "default_rate_limit_per_minute_override must be between 1 and {MAX_PROJECT_RPM}"
+        )));
+    }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
     let tenant = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
@@ -214,14 +356,19 @@ pub async fn create_workspace(
     )?;
 
     let insert_res: Result<WorkspaceDbRow, sqlx::Error> = sqlx::query_as(
-        "INSERT INTO workspaces (tenant_id, slug, name, retention_days_override, is_default)
-         VALUES ($1, $2, $3, $4, FALSE)
-         RETURNING id, slug, name, retention_days_override, is_default, created_at, updated_at",
+        "INSERT INTO workspaces (
+             tenant_id, slug, name, retention_days_override,
+             default_rate_limit_per_minute_override, is_default
+         )
+         VALUES ($1, $2, $3, $4, $5, FALSE)
+         RETURNING id, slug, name, retention_days_override,
+                   default_rate_limit_per_minute_override, is_default, created_at, updated_at",
     )
     .bind(tenant.id)
     .bind(slug)
     .bind(name)
     .bind(retention_override_i16)
+    .bind(input.default_rate_limit_per_minute_override)
     .fetch_one(&mut *tx)
     .await;
 
@@ -238,6 +385,109 @@ pub async fn create_workspace(
         .map_err(|err| AppError::DatabaseQuery(format!("commit create_workspace: {err}")))?;
 
     map_workspace_row(&tenant, row)
+}
+
+pub async fn update_workspace_settings(
+    pool: &PgPool,
+    config: &Config,
+    tenant_ctx: TenantContext,
+    tenant_slug: &str,
+    workspace_slug: &str,
+    input: UpdateWorkspaceSettingsInput,
+) -> Result<(WorkspaceView, TenantRateLimitUpdate), AppError> {
+    if !is_valid_slug(workspace_slug) {
+        return Err(AppError::Validation("invalid workspace_slug".to_owned()));
+    }
+
+    let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    let tenant = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
+    let current = load_workspace_by_slug_in_tx(&mut tx, &tenant, workspace_slug).await?;
+
+    let new_name = match input.name {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.len() > 128 {
+                return Err(AppError::Validation(
+                    "workspace name must be between 1 and 128 characters".to_owned(),
+                ));
+            }
+            trimmed.to_owned()
+        }
+        None => current.name.clone(),
+    };
+
+    let max_retention = config.retention_default_days.min(tenant.retention_days);
+    let new_retention_override = match input.retention_days_override {
+        Some(opt) => {
+            validate_retention_override(opt, max_retention, "workspace retention_days_override")?
+        }
+        None => current
+            .retention_days_override
+            .and_then(|v| i16::try_from(v).ok()),
+    };
+
+    let new_rate_override = match input.default_rate_limit_per_minute_override {
+        Some(Some(rpm)) => {
+            if !(1..=MAX_PROJECT_RPM).contains(&rpm) {
+                return Err(AppError::Validation(format!(
+                    "default_rate_limit_per_minute_override must be between 1 and {MAX_PROJECT_RPM}"
+                )));
+            }
+            Some(rpm)
+        }
+        Some(None) => None,
+        None => current.default_rate_limit_per_minute_override,
+    };
+
+    let updated_row: WorkspaceDbRow = sqlx::query_as(
+        "UPDATE workspaces
+         SET name = $1,
+             retention_days_override = $2,
+             default_rate_limit_per_minute_override = $3,
+             updated_at = NOW()
+         WHERE tenant_id = $4 AND id = $5
+         RETURNING id, slug, name, retention_days_override,
+                   default_rate_limit_per_minute_override, is_default, created_at, updated_at",
+    )
+    .bind(&new_name)
+    .bind(new_retention_override)
+    .bind(new_rate_override)
+    .bind(tenant.id)
+    .bind(current.id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("update workspace settings: {err}")))?;
+
+    let ws_effective_rpm = new_rate_override.unwrap_or(tenant.default_rate_limit_per_minute);
+    let proj_limits: Vec<(i64, i32)> = sqlx::query_as(
+        "SELECT id, COALESCE(rate_limit_per_minute_override, $3) AS effective_rpm
+         FROM projects
+         WHERE tenant_id = $1 AND workspace_id = $2",
+    )
+    .bind(tenant.id)
+    .bind(current.id)
+    .bind(ws_effective_rpm)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|err| {
+        AppError::DatabaseQuery(format!("load workspace project effective limits: {err}"))
+    })?;
+
+    tx.commit().await.map_err(|err| {
+        AppError::DatabaseQuery(format!("commit update_workspace_settings: {err}"))
+    })?;
+
+    let view = map_workspace_row(&tenant, updated_row)?;
+    let cache_update = TenantRateLimitUpdate {
+        tenant_id: tenant.id,
+        aggregate_rate_limit_per_minute: None,
+        project_effective_limits: proj_limits
+            .into_iter()
+            .map(|(pid, rpm)| (pid, u32::try_from(rpm.max(1)).unwrap_or(1200)))
+            .collect(),
+    };
+
+    Ok((view, cache_update))
 }
 
 pub async fn list_projects(
@@ -263,8 +513,9 @@ pub async fn list_projects(
                 "SELECT p.id, p.workspace_id,
                         w.slug AS workspace_slug,
                         w.retention_days_override AS ws_retention_days_override,
+                        w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
                         p.slug, p.name, p.platform, p.dsn_public_key,
-                        p.retention_days_override, p.rate_limit_per_minute,
+                        p.retention_days_override, p.rate_limit_per_minute_override,
                         p.created_at, p.updated_at
                  FROM projects p
                  JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
@@ -282,8 +533,9 @@ pub async fn list_projects(
             "SELECT p.id, p.workspace_id,
                     w.slug AS workspace_slug,
                     w.retention_days_override AS ws_retention_days_override,
+                    w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
                     p.slug, p.name, p.platform, p.dsn_public_key,
-                    p.retention_days_override, p.rate_limit_per_minute,
+                    p.retention_days_override, p.rate_limit_per_minute_override,
                     p.created_at, p.updated_at
              FROM projects p
              JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
@@ -328,8 +580,9 @@ pub async fn get_project(
         "SELECT p.id, p.workspace_id,
                 w.slug AS workspace_slug,
                 w.retention_days_override AS ws_retention_days_override,
+                w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
                 p.slug, p.name, p.platform, p.dsn_public_key,
-                p.retention_days_override, p.rate_limit_per_minute,
+                p.retention_days_override, p.rate_limit_per_minute_override,
                 p.created_at, p.updated_at
          FROM projects p
          JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
@@ -379,32 +632,14 @@ pub async fn create_project(
             "project name must be between 1 and 128 characters".to_owned(),
         ));
     }
-    let platform = match input
-        .platform
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(p) => {
-            if p.len() > 64
-                || !p
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            {
-                return Err(AppError::Validation(
-                    "invalid platform identifier".to_owned(),
-                ));
-            }
-            p.to_ascii_lowercase()
-        }
-        None => "other".to_owned(),
-    };
+    let platform = parse_platform(input.platform.as_deref())?;
 
-    let rate_limit_per_minute = input.rate_limit_per_minute.unwrap_or(1200);
-    if !(1..=1_000_000).contains(&rate_limit_per_minute) {
-        return Err(AppError::Validation(
-            "rate_limit_per_minute must be between 1 and 1000000".to_owned(),
-        ));
+    if let Some(rpm) = input.rate_limit_per_minute
+        && !(1..=MAX_PROJECT_RPM).contains(&rpm)
+    {
+        return Err(AppError::Validation(format!(
+            "rate_limit_per_minute must be between 1 and {MAX_PROJECT_RPM}"
+        )));
     }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
@@ -421,6 +656,10 @@ pub async fn create_project(
         "project retention_days_override",
     )?;
 
+    let effective_rpm = input
+        .rate_limit_per_minute
+        .unwrap_or(ws.effective_rate_limit_per_minute);
+
     let dsn_public_key = generate_dsn_public_key();
     let ws_retention_i16 = ws
         .retention_days_override
@@ -429,11 +668,12 @@ pub async fn create_project(
     let insert_res: Result<ProjectMutatedDbRow, sqlx::Error> = sqlx::query_as(
         "INSERT INTO projects (
              tenant_id, workspace_id, slug, name, platform,
-             dsn_public_key, retention_days_override, rate_limit_per_minute
+             dsn_public_key, retention_days_override,
+             rate_limit_per_minute, rate_limit_per_minute_override
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, workspace_id, slug, name, platform,
-                   dsn_public_key, retention_days_override, rate_limit_per_minute,
+                   dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                    created_at, updated_at",
     )
     .bind(tenant.id)
@@ -443,7 +683,8 @@ pub async fn create_project(
     .bind(&platform)
     .bind(&dsn_public_key)
     .bind(retention_override_i16)
-    .bind(rate_limit_per_minute)
+    .bind(effective_rpm)
+    .bind(input.rate_limit_per_minute)
     .fetch_one(&mut *tx)
     .await;
 
@@ -467,14 +708,149 @@ pub async fn create_project(
             workspace_id: inserted.workspace_id,
             workspace_slug: ws.slug,
             ws_retention_days_override: ws_retention_i16,
+            ws_rate_limit_override: ws.default_rate_limit_per_minute_override,
             slug: inserted.slug,
             name: inserted.name,
             platform: inserted.platform,
             dsn_public_key: inserted.dsn_public_key,
             retention_days_override: inserted.retention_days_override,
-            rate_limit_per_minute: inserted.rate_limit_per_minute,
+            rate_limit_per_minute_override: inserted.rate_limit_per_minute_override,
             created_at: inserted.created_at,
             updated_at: inserted.updated_at,
+        },
+    )
+}
+
+pub async fn update_project_settings(
+    pool: &PgPool,
+    config: &Config,
+    tenant_ctx: TenantContext,
+    tenant_slug: &str,
+    workspace_slug: &str,
+    project_slug: &str,
+    input: UpdateProjectSettingsInput,
+) -> Result<ProjectView, AppError> {
+    if !is_valid_slug(workspace_slug) || !is_valid_slug(project_slug) {
+        return Err(AppError::Validation(
+            "invalid workspace_slug or project_slug".to_owned(),
+        ));
+    }
+
+    let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    let tenant = verify_tenant_in_tx(&mut tx, tenant_ctx, tenant_slug).await?;
+    let ws = load_workspace_by_slug_in_tx(&mut tx, &tenant, workspace_slug).await?;
+
+    let existing: Option<ProjectMutatedDbRow> = sqlx::query_as(
+        "SELECT id, workspace_id, slug, name, platform,
+                dsn_public_key, retention_days_override, rate_limit_per_minute_override,
+                created_at, updated_at
+         FROM projects
+         WHERE tenant_id = $1 AND workspace_id = $2 AND slug = $3",
+    )
+    .bind(tenant.id)
+    .bind(ws.id)
+    .bind(project_slug)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("lookup project for settings: {err}")))?;
+
+    let Some(existing) = existing else {
+        return Err(AppError::NotFound);
+    };
+
+    let new_name = match input.name {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.len() > 128 {
+                return Err(AppError::Validation(
+                    "project name must be between 1 and 128 characters".to_owned(),
+                ));
+            }
+            trimmed.to_owned()
+        }
+        None => existing.name.clone(),
+    };
+
+    let new_platform = match input.platform {
+        Some(p) => parse_platform(Some(&p))?,
+        None => existing.platform.clone(),
+    };
+
+    let max_retention = config
+        .retention_default_days
+        .min(tenant.retention_days)
+        .min(ws.effective_retention_days);
+    let new_retention_override = match input.retention_days_override {
+        Some(opt) => {
+            validate_retention_override(opt, max_retention, "project retention_days_override")?
+        }
+        None => existing.retention_days_override,
+    };
+
+    let new_rate_override = match input.rate_limit_per_minute_override {
+        Some(Some(rpm)) => {
+            if !(1..=MAX_PROJECT_RPM).contains(&rpm) {
+                return Err(AppError::Validation(format!(
+                    "rate_limit_per_minute_override must be between 1 and {MAX_PROJECT_RPM}"
+                )));
+            }
+            Some(rpm)
+        }
+        Some(None) => None,
+        None => existing.rate_limit_per_minute_override,
+    };
+
+    let effective_rpm = new_rate_override.unwrap_or(ws.effective_rate_limit_per_minute);
+
+    let updated: ProjectMutatedDbRow = sqlx::query_as(
+        "UPDATE projects
+         SET name = $1,
+             platform = $2,
+             retention_days_override = $3,
+             rate_limit_per_minute_override = $4,
+             rate_limit_per_minute = $5,
+             updated_at = NOW()
+         WHERE tenant_id = $6 AND id = $7
+         RETURNING id, workspace_id, slug, name, platform,
+                   dsn_public_key, retention_days_override, rate_limit_per_minute_override,
+                   created_at, updated_at",
+    )
+    .bind(&new_name)
+    .bind(&new_platform)
+    .bind(new_retention_override)
+    .bind(new_rate_override)
+    .bind(effective_rpm)
+    .bind(tenant.id)
+    .bind(existing.id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("update project settings: {err}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("commit update_project_settings: {err}")))?;
+
+    let ws_retention_i16 = ws
+        .retention_days_override
+        .and_then(|v| i16::try_from(v).ok());
+
+    map_project_row(
+        config,
+        &tenant,
+        ProjectJoinedDbRow {
+            id: updated.id,
+            workspace_id: updated.workspace_id,
+            workspace_slug: ws.slug,
+            ws_retention_days_override: ws_retention_i16,
+            ws_rate_limit_override: ws.default_rate_limit_per_minute_override,
+            slug: updated.slug,
+            name: updated.name,
+            platform: updated.platform,
+            dsn_public_key: updated.dsn_public_key,
+            retention_days_override: updated.retention_days_override,
+            rate_limit_per_minute_override: updated.rate_limit_per_minute_override,
+            created_at: updated.created_at,
+            updated_at: updated.updated_at,
         },
     )
 }
@@ -508,7 +884,7 @@ pub async fn rotate_project_dsn(
              updated_at = NOW()
          WHERE tenant_id = $2 AND workspace_id = $3 AND slug = $4
          RETURNING id, workspace_id, slug, name, platform,
-                   dsn_public_key, retention_days_override, rate_limit_per_minute,
+                   dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                    created_at, updated_at",
     )
     .bind(&new_key)
@@ -539,16 +915,56 @@ pub async fn rotate_project_dsn(
             workspace_id: updated.workspace_id,
             workspace_slug: ws.slug,
             ws_retention_days_override: ws_retention_i16,
+            ws_rate_limit_override: ws.default_rate_limit_per_minute_override,
             slug: updated.slug,
             name: updated.name,
             platform: updated.platform,
             dsn_public_key: updated.dsn_public_key,
             retention_days_override: updated.retention_days_override,
-            rate_limit_per_minute: updated.rate_limit_per_minute,
+            rate_limit_per_minute_override: updated.rate_limit_per_minute_override,
             created_at: updated.created_at,
             updated_at: updated.updated_at,
         },
     )
+}
+
+fn parse_platform(raw: Option<&str>) -> Result<String, AppError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => {
+            if p.len() > 64
+                || !p
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(AppError::Validation(
+                    "invalid platform identifier".to_owned(),
+                ));
+            }
+            Ok(p.to_ascii_lowercase())
+        }
+        None => Ok("other".to_owned()),
+    }
+}
+
+#[derive(FromRow)]
+struct TenantDbRow {
+    id: i64,
+    slug: String,
+    name: String,
+    retention_days: i16,
+    default_rate_limit_per_minute: i32,
+    aggregate_rate_limit_per_minute: i32,
+    is_default: bool,
+}
+
+#[derive(FromRow)]
+struct WorkspaceSummaryDbRow {
+    id: i64,
+    slug: String,
+    name: String,
+    retention_days_override: Option<i16>,
+    default_rate_limit_per_minute_override: Option<i32>,
+    is_default: bool,
 }
 
 async fn verify_tenant_in_tx(
@@ -560,8 +976,9 @@ async fn verify_tenant_in_tx(
         return Err(AppError::Validation("invalid tenant_slug".to_owned()));
     }
 
-    let row: Option<(i64, String, String, i16, bool)> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days, is_default
+    let row: Option<TenantDbRow> = sqlx::query_as(
+        "SELECT id, slug, name, retention_days,
+                default_rate_limit_per_minute, aggregate_rate_limit_per_minute, is_default
          FROM tenants
          WHERE id = $1 AND slug = $2",
     )
@@ -571,18 +988,20 @@ async fn verify_tenant_in_tx(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("verify tenant slug: {err}")))?;
 
-    let Some((id, slug, name, retention_i16, is_default)) = row else {
+    let Some(row) = row else {
         return Err(AppError::NotFound);
     };
-    let retention_days = u16::try_from(retention_i16)
+    let retention_days = u16::try_from(row.retention_days)
         .map_err(|_| AppError::Validation("invalid tenant retention_days".to_owned()))?;
 
     Ok(TenantSummary {
-        id,
-        slug,
-        name,
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
         retention_days,
-        is_default,
+        default_rate_limit_per_minute: row.default_rate_limit_per_minute,
+        aggregate_rate_limit_per_minute: row.aggregate_rate_limit_per_minute,
+        is_default: row.is_default,
     })
 }
 
@@ -590,8 +1009,9 @@ async fn load_default_workspace_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     tenant_id: i64,
 ) -> Result<WorkspaceSummary, AppError> {
-    let row: Option<(i64, String, String, Option<i16>, bool)> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days_override, is_default
+    let row: Option<WorkspaceSummaryDbRow> = sqlx::query_as(
+        "SELECT id, slug, name, retention_days_override,
+                default_rate_limit_per_minute_override, is_default
          FROM workspaces
          WHERE tenant_id = $1
          ORDER BY is_default DESC, id ASC
@@ -602,10 +1022,10 @@ async fn load_default_workspace_in_tx(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("load default workspace: {err}")))?;
 
-    let Some((id, slug, name, retention_override_i16, is_default)) = row else {
+    let Some(row) = row else {
         return Err(AppError::NotFound);
     };
-    let retention_days_override = match retention_override_i16 {
+    let retention_days_override = match row.retention_days_override {
         Some(v) => Some(
             u16::try_from(v)
                 .map_err(|_| AppError::Validation("invalid workspace retention".to_owned()))?,
@@ -614,11 +1034,12 @@ async fn load_default_workspace_in_tx(
     };
 
     Ok(WorkspaceSummary {
-        id,
-        slug,
-        name,
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
         retention_days_override,
-        is_default,
+        default_rate_limit_per_minute_override: row.default_rate_limit_per_minute_override,
+        is_default: row.is_default,
     })
 }
 
@@ -632,7 +1053,8 @@ async fn load_workspace_by_slug_in_tx(
     }
 
     let row: Option<WorkspaceDbRow> = sqlx::query_as(
-        "SELECT id, slug, name, retention_days_override, is_default, created_at, updated_at
+        "SELECT id, slug, name, retention_days_override,
+                default_rate_limit_per_minute_override, is_default, created_at, updated_at
          FROM workspaces
          WHERE tenant_id = $1 AND slug = $2",
     )
@@ -683,6 +1105,9 @@ fn map_workspace_row(
     let effective_retention_days = retention_days_override
         .unwrap_or(tenant.retention_days)
         .min(tenant.retention_days);
+    let effective_rate_limit_per_minute = row
+        .default_rate_limit_per_minute_override
+        .unwrap_or(tenant.default_rate_limit_per_minute);
 
     Ok(WorkspaceView {
         id: row.id,
@@ -692,6 +1117,8 @@ fn map_workspace_row(
         name: row.name,
         retention_days_override,
         effective_retention_days,
+        default_rate_limit_per_minute_override: row.default_rate_limit_per_minute_override,
+        effective_rate_limit_per_minute,
         is_default: row.is_default,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -726,6 +1153,13 @@ fn map_project_row(
         .min(ws_effective)
         .min(config.retention_default_days);
 
+    let ws_effective_rpm = row
+        .ws_rate_limit_override
+        .unwrap_or(tenant.default_rate_limit_per_minute);
+    let effective_rate_limit_per_minute = row
+        .rate_limit_per_minute_override
+        .unwrap_or(ws_effective_rpm);
+
     let dsn = format_project_dsn(&config.public_base_url, &row.dsn_public_key, row.id);
     let ingest_endpoint = format_ingest_endpoint(&config.public_base_url, row.id);
 
@@ -743,7 +1177,9 @@ fn map_project_row(
         ingest_endpoint,
         retention_days_override,
         effective_retention_days,
-        rate_limit_per_minute: row.rate_limit_per_minute,
+        rate_limit_per_minute_override: row.rate_limit_per_minute_override,
+        rate_limit_per_minute: effective_rate_limit_per_minute,
+        effective_rate_limit_per_minute,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })

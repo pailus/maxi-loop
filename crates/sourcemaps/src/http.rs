@@ -72,9 +72,25 @@ struct RawUploadQuery {
 async fn list_sourcemaps_handler(
     State(state): State<SourceMapState>,
     session: AuthSession,
-    Query(filter): Query<SourceMapListFilter>,
+    Query(mut filter): Query<SourceMapListFilter>,
 ) -> Result<Json<Vec<SourceMapView>>, AppError> {
-    let items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
+    if let Some(tok) = &session.api_token {
+        if let Some(slug) = filter.project_slug.as_deref()
+            && !slug.trim().is_empty()
+            && slug.trim() != tok.project_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        filter.project_slug = Some(tok.project_slug.clone());
+    }
+    let mut items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
+    if let Some(scoped_pid) = session.scoped_project_id() {
+        items.retain(|m| m.project_id == scoped_pid);
+    } else if session.tenant_role.is_none() {
+        items.retain(|m| session.can_access_workspace(m.workspace_id));
+    }
     Ok(Json(items))
 }
 
@@ -87,16 +103,31 @@ async fn scoped_list_sourcemaps_handler(
     if session.tenant.slug != tenant_slug {
         return Err(AppError::NotFound);
     }
+    session.enforce_api_token_project_slug(&project_slug)?;
     filter.project_slug = Some(project_slug);
-    let items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
+    let mut items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
+    if let Some(scoped_pid) = session.scoped_project_id() {
+        items.retain(|m| m.project_id == scoped_pid);
+    } else if session.tenant_role.is_none() {
+        items.retain(|m| session.can_access_workspace(m.workspace_id));
+    }
     Ok(Json(items))
 }
 
 async fn upload_sourcemap_json_handler(
     State(state): State<SourceMapState>,
     session: AuthSession,
-    Json(input): Json<UploadSourceMapJsonInput>,
+    Json(mut input): Json<UploadSourceMapJsonInput>,
 ) -> Result<(StatusCode, Json<SourceMapView>), AppError> {
+    session.enforce_api_token_write()?;
+    if let Some(tok) = &session.api_token {
+        if input.project_slug.trim() != tok.project_slug {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        input.workspace_slug = Some(tok.workspace_slug.clone());
+    }
     let view = upload_source_map(
         &state.db,
         &state.resolver,
@@ -121,9 +152,18 @@ async fn upload_sourcemap_raw_handler(
     State(state): State<SourceMapState>,
     session: AuthSession,
     Path((project_slug, release_version)): Path<(String, String)>,
-    Query(query): Query<RawUploadQuery>,
+    Query(mut query): Query<RawUploadQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<SourceMapView>), AppError> {
+    session.enforce_api_token_write()?;
+    if let Some(tok) = &session.api_token {
+        if project_slug.trim() != tok.project_slug {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        query.workspace_slug = Some(tok.workspace_slug.clone());
+    }
     let view = upload_source_map(
         &state.db,
         &state.resolver,
@@ -149,6 +189,27 @@ async fn delete_sourcemap_handler(
     session: AuthSession,
     Path(sourcemap_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
+    session.enforce_api_token_write()?;
+    if let Some(scoped_pid) = session.scoped_project_id() {
+        let existing = list_source_maps(
+            &state.db,
+            session.tenant_ctx,
+            SourceMapListFilter {
+                project_slug: session.scoped_project_slug().map(ToOwned::to_owned),
+                release_version: None,
+                limit: Some(500),
+            },
+        )
+        .await?;
+        if !existing
+            .iter()
+            .any(|m| m.id == sourcemap_id && m.project_id == scoped_pid)
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+    }
     delete_source_map(
         &state.db,
         &state.resolver,

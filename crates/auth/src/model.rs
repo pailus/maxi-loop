@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::http::HeaderMap;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::TenantContext;
@@ -64,6 +66,17 @@ impl Role {
             Self::TenantOwner | Self::TenantAdmin | Self::WorkspaceAdmin | Self::Member
         )
     }
+
+    pub fn is_valid_tenant_role(self) -> bool {
+        matches!(
+            self,
+            Self::TenantOwner | Self::TenantAdmin | Self::Member | Self::Viewer
+        )
+    }
+
+    pub fn is_valid_workspace_role(self) -> bool {
+        matches!(self, Self::WorkspaceAdmin | Self::Member | Self::Viewer)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +92,8 @@ pub struct TenantSummary {
     pub slug: String,
     pub name: String,
     pub retention_days: u16,
+    pub default_rate_limit_per_minute: i32,
+    pub aggregate_rate_limit_per_minute: i32,
     pub is_default: bool,
 }
 
@@ -88,7 +103,21 @@ pub struct WorkspaceSummary {
     pub slug: String,
     pub name: String,
     pub retention_days_override: Option<u16>,
+    pub default_rate_limit_per_minute_override: Option<i32>,
     pub is_default: bool,
+}
+
+/// Scope details when a request is authenticated via a per-project API Bearer token (`mlapi_...`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiTokenAuthScope {
+    pub token_id: i64,
+    pub token_name: String,
+    pub project_id: i64,
+    pub project_slug: String,
+    pub workspace_id: i64,
+    pub workspace_slug: String,
+    pub can_read: bool,
+    pub can_write: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -98,7 +127,14 @@ pub struct AuthSession {
     pub tenant: TenantSummary,
     pub default_workspace: WorkspaceSummary,
     pub user: AuthenticatedUser,
+    /// Highest effective role across the tenant (used for UI affordances & legacy checks).
     pub role: Role,
+    /// Explicit tenant-wide role (`memberships.workspace_id IS NULL`), if any.
+    pub tenant_role: Option<Role>,
+    /// Explicit per-workspace roles (`memberships.workspace_id IS NOT NULL`).
+    pub workspace_roles: BTreeMap<i64, Role>,
+    /// Present only when authenticated via a per-project API token (`Authorization: Bearer mlapi_...`).
+    pub api_token: Option<ApiTokenAuthScope>,
     pub csrf_token: String,
 }
 
@@ -116,12 +152,160 @@ impl AuthSession {
         Ok(())
     }
 
+    pub fn is_api_token(&self) -> bool {
+        self.api_token.is_some()
+    }
+
+    /// Reject requests authenticated via a per-project API token on admin/user/tenant-wide routes.
+    pub fn require_user_session(&self) -> Result<(), AppError> {
+        if self.api_token.is_some() {
+            return Err(AppError::Forbidden(
+                "project api tokens cannot access this endpoint",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn scoped_project_id(&self) -> Option<i64> {
+        self.api_token.as_ref().map(|t| t.project_id)
+    }
+
+    pub fn scoped_project_slug(&self) -> Option<&str> {
+        self.api_token.as_ref().map(|t| t.project_slug.as_str())
+    }
+
+    pub fn scoped_workspace_slug(&self) -> Option<&str> {
+        self.api_token.as_ref().map(|t| t.workspace_slug.as_str())
+    }
+
+    /// Compute the effective role for a specific workspace (`max(tenant_role, workspace_role)`).
+    /// Returns `None` if the user has neither a tenant-level role nor a membership on this workspace.
+    pub fn effective_role_for_workspace(&self, workspace_id: i64) -> Option<Role> {
+        if let Some(tok) = &self.api_token {
+            if tok.workspace_id != workspace_id {
+                return None;
+            }
+            return Some(if tok.can_write {
+                Role::Member
+            } else {
+                Role::Viewer
+            });
+        }
+
+        match (
+            self.tenant_role,
+            self.workspace_roles.get(&workspace_id).copied(),
+        ) {
+            (Some(t), Some(w)) => {
+                if w.privilege_rank() > t.privilege_rank() {
+                    Some(w)
+                } else {
+                    Some(t)
+                }
+            }
+            (Some(t), None) => Some(t),
+            (None, Some(w)) => Some(w),
+            (None, None) => None,
+        }
+    }
+
+    pub fn can_access_workspace(&self, workspace_id: i64) -> bool {
+        self.effective_role_for_workspace(workspace_id).is_some()
+    }
+
+    pub fn can_manage_tenant(&self) -> bool {
+        !self.is_api_token() && self.tenant_role.is_some_and(Role::can_manage_workspaces)
+    }
+
+    pub fn can_manage_workspace(&self, workspace_id: i64) -> bool {
+        !self.is_api_token()
+            && self
+                .effective_role_for_workspace(workspace_id)
+                .is_some_and(Role::can_manage_projects)
+    }
+
+    pub fn can_triage_workspace(&self, workspace_id: i64) -> bool {
+        self.effective_role_for_workspace(workspace_id)
+            .is_some_and(Role::can_triage_issues)
+    }
+
+    pub fn can_manage_members(&self) -> bool {
+        !self.is_api_token()
+            && (self.can_manage_tenant()
+                || self
+                    .workspace_roles
+                    .values()
+                    .any(|r| r.can_manage_projects()))
+    }
+
+    /// Enforce read access for a specific project (both API token project scoping and workspace RBAC).
+    pub fn enforce_project_read(&self, project_id: i64, workspace_id: i64) -> Result<(), AppError> {
+        if let Some(tok) = &self.api_token {
+            if !tok.can_read || tok.project_id != project_id {
+                return Err(AppError::Forbidden(
+                    "api token does not grant access to this project",
+                ));
+            }
+            return Ok(());
+        }
+        if !self.can_access_workspace(workspace_id) {
+            return Err(AppError::Forbidden("insufficient workspace permissions"));
+        }
+        Ok(())
+    }
+
+    /// Enforce triage/write access for a specific project (API token `can_write` + project match,
+    /// or user workspace role `can_triage_issues`).
+    pub fn enforce_project_write(
+        &self,
+        project_id: i64,
+        workspace_id: i64,
+    ) -> Result<(), AppError> {
+        if let Some(tok) = &self.api_token {
+            if !tok.can_write || tok.project_id != project_id {
+                return Err(AppError::Forbidden(
+                    "api token does not grant write access to this project",
+                ));
+            }
+            return Ok(());
+        }
+        if !self.can_triage_workspace(workspace_id) {
+            return Err(AppError::Forbidden("insufficient permissions"));
+        }
+        Ok(())
+    }
+
+    /// For API tokens targeting a slug-based project route, fail closed if the requested slug does
+    /// not match the token's project.
+    pub fn enforce_api_token_project_slug(&self, project_slug: &str) -> Result<(), AppError> {
+        if let Some(tok) = &self.api_token
+            && tok.project_slug != project_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Enforce `can_write` for API token write actions.
+    pub fn enforce_api_token_write(&self) -> Result<(), AppError> {
+        if let Some(tok) = &self.api_token
+            && !tok.can_write
+        {
+            return Err(AppError::Forbidden("api token is read-only"));
+        }
+        Ok(())
+    }
+
     pub fn to_view(&self, single_tenant_mode: bool) -> AuthSessionView {
         AuthSessionView {
             user: self.user.clone(),
             tenant: self.tenant.clone(),
             default_workspace: self.default_workspace.clone(),
             role: self.role,
+            tenant_role: self.tenant_role,
+            workspace_roles: self.workspace_roles.clone(),
             csrf_token: self.csrf_token.clone(),
             single_tenant_mode,
         }
@@ -134,6 +318,8 @@ pub struct AuthSessionView {
     pub tenant: TenantSummary,
     pub default_workspace: WorkspaceSummary,
     pub role: Role,
+    pub tenant_role: Option<Role>,
+    pub workspace_roles: BTreeMap<i64, Role>,
     pub csrf_token: String,
     pub single_tenant_mode: bool,
 }

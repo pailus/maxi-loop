@@ -130,6 +130,9 @@ fn finalize_processed_event(
     if raw_frames.is_empty() {
         raw_frames = extract_frames_from_stacktrace_node(payload.get("stacktrace"));
     }
+    if raw_frames.is_empty() {
+        raw_frames = extract_frames_from_threads_node(payload.get("threads"));
+    }
 
     let fallback_message = extract_fallback_message(&payload);
     let effective_exc_value = if !exc_value.is_empty() {
@@ -481,6 +484,12 @@ fn extract_frames_from_stacktrace_node(node: Option<&Value>) -> Vec<RawFrame> {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    obj.get("package")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                })
                 .map(ToOwned::to_owned);
             let function = obj
                 .get("function")
@@ -512,6 +521,38 @@ fn extract_frames_from_stacktrace_node(node: Option<&Value>) -> Vec<RawFrame> {
             })
         })
         .collect()
+}
+
+/// Fallback stack frame extraction from `threads.values[].stacktrace` (used by Go `sentry-go`
+/// and Rust `sentry` SDKs for captured messages / tracing events with `attach_stacktrace`).
+fn extract_frames_from_threads_node(node: Option<&Value>) -> Vec<RawFrame> {
+    let Some(threads) = node else {
+        return Vec::new();
+    };
+    let values = threads
+        .get("values")
+        .and_then(Value::as_array)
+        .or_else(|| threads.as_array());
+    let Some(items) = values else {
+        return Vec::new();
+    };
+
+    let chosen = items
+        .iter()
+        .find(|t| {
+            t.get("crashed").and_then(Value::as_bool) == Some(true) && t.get("stacktrace").is_some()
+        })
+        .or_else(|| {
+            items.iter().find(|t| {
+                t.get("current").and_then(Value::as_bool) == Some(true)
+                    && t.get("stacktrace").is_some()
+            })
+        })
+        .or_else(|| items.iter().find(|t| t.get("stacktrace").is_some()));
+
+    chosen
+        .map(|t| extract_frames_from_stacktrace_node(t.get("stacktrace")))
+        .unwrap_or_default()
 }
 
 fn extract_string_vec(node: Option<&Value>) -> Vec<String> {

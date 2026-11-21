@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+/tests/e2e/rust/target/
 
 # Environment and secrets
 .env

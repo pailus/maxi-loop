@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Tag,
+  Users,
 } from "lucide-react";
 import {
   type AuthSessionView,
@@ -25,6 +26,7 @@ import {
   fetchWorkspaces,
   logoutSession,
 } from "../lib/api";
+import { TeamAndSettingsView } from "../modules/admin/TeamAndSettingsView";
 import { AlertsView } from "../modules/alerts/AlertsView";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
@@ -43,6 +45,7 @@ type ActiveNav =
   | "alerts"
   | "mcp"
   | "projects"
+  | "team"
   | "health";
 
 interface ToastState {
@@ -429,6 +432,19 @@ export function App() {
 
               <button
                 type="button"
+                onClick={() => setActiveNav("team")}
+                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
+                  activeNav === "team"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Users size={16} />
+                <span>Team &amp; settings</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveNav("health")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "health"
@@ -598,6 +614,21 @@ export function App() {
             onOpenProjectIssues={(slug) => {
               setSelectedProjectSlug(slug);
               setActiveNav("issues");
+            }}
+            onShowToast={(msg) => showToast(msg)}
+          />
+        )}
+
+        {activeNav === "team" && (
+          <TeamAndSettingsView
+            session={session}
+            projects={projects}
+            onSettingsChanged={async () => {
+              const refreshed = await fetchCurrentSession().catch(() => null);
+              if (refreshed) setSession(refreshed);
+              await loadWorkspaceResources(
+                activeWorkspaceSlug || session.default_workspace.slug,
+              );
             }}
             onShowToast={(msg) => showToast(msg)}
           />

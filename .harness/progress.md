@@ -33,6 +33,45 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F014: Phase 5: Go & Rust SDK verification, multi-user RBAC, inherited settings, API tokens, aggregate tenant limits
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0007_phase5_rbac_settings_tokens.sql` adding inherited rate-limit columns (`tenants.default_rate_limit_per_minute`, `tenants.aggregate_rate_limit_per_minute`, `workspaces.default_rate_limit_per_minute_override`, `projects.rate_limit_per_minute_override` with backward-compatible backfill) and per-project `api_tokens` table (SHA-256 hash only, `can_read`/`can_write`, `expires_at`, `revoked_at`, `last_used_at`, leading `(tenant_id, project_id)` PK) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Implemented **Multi-User RBAC (`F-ADM-5`)** in `crates/auth`:
+  - Extended `AuthSession` (`model.rs`, `service.rs`) with explicit `tenant_role: Option<Role>` and per-workspace `workspace_roles: BTreeMap<i64, Role>` so workspace-scoped admins/members/viewers are enforced per workspace (never leaking permissions to sibling workspaces)
+  - Created `crates/auth/src/members.rs` (`/api/v1/members` `GET`/`POST`, `PATCH`/`DELETE /api/v1/members/{membership_id}`) with Argon2id hashing for new accounts (never overwriting an existing user's password across tenants), privilege-hierarchy enforcement (only `tenant_owner` can grant/modify/remove `tenant_owner`; `workspace_admin` limited to managed workspaces), last-`tenant_owner` protection, and immediate session revocation when a user's last tenant membership is removed
+- Implemented **Per-Project API Tokens (`F-ADM-4`)** in `crates/auth/src/api_tokens.rs`:
+  - 256-bit CSPRNG `mlapi_<64-hex>` tokens stored strictly as SHA-256 hashes (`/api/v1/api-tokens` `GET`/`POST`, `DELETE /api/v1/api-tokens/{token_id}`), supporting `Authorization: Bearer mlapi_...` in `AuthSession` without CSRF
+  - Enforced strict single-project scoping + `can_write` checks across `org`, `issues`, `performance`, and `sourcemaps` (enabling CI source map upload & release/issue automation), while failing closed (`403 Forbidden` via `require_user_session()`) on all admin, member, settings, alerts, PII, and MCP-token endpoints
+- Implemented **Inherited Settings (`F-ADM-8`)** and **Aggregate Tenant Rate Limits (`F-ADM-9`)**:
+  - Extended `crates/org` with `PATCH /api/v1/tenants/current/settings`, `PATCH /api/v1/workspaces/{slug}/settings`, and `PATCH /api/v1/projects/{slug}/settings` (plus `/t/{tenant}/...` slug routes), validating retention bounds & rate limits and propagating inherited changes live via `ProjectDsnObserver::on_tenant_rate_limits_updated`
+  - Extended `crates/ingest/src/cache.rs` & `http.rs` with per-tenant aggregate `governor` token buckets checked alongside per-project buckets (0 per-envelope DB queries), returning `429 Too Many Requests` + `Retry-After` + `X-Sentry-Rate-Limits: <secs>:<category>:organization` when the aggregate tenant cap is exceeded
+  - Enhanced `crates/ingest/src/fingerprint.rs` with `threads.values[].stacktrace` and `frame.package` fallbacks for Go & Rust SDK stack traces
+- Added MaxiBoard UI `web/src/modules/admin/TeamAndSettingsView.tsx` (**Team & settings** sidebar tab with Members & RBAC, Inherited Settings & Aggregate Limits, and Project API Tokens + one-time copyable token & `curl` CI snippet), plus inline inherited-override editing and Python/Go/Rust SDK quickstarts in `ProjectsView.tsx`
+- Added PostgreSQL 16 integration test `crates/server/tests/phase5_rbac_settings_tokens.rs` and isolated official SDK E2E suites `tests/e2e/go/` (`github.com/getsentry/sentry-go` v0.31.1), `tests/e2e/rust/` (`sentry` v0.34.0 + `sentry-tracing`), and `tests/e2e/verify_go_rust_sdks.py`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (76/76 passed, incl. `phase5_rbac_settings_tokens`, `api_tokens` unit test, and `DsnCache` aggregate tenant limit unit test)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
+- Live official Go & Rust Sentry SDK E2E (`tests/e2e/verify_go_rust_sdks.py` against restarted `maxi-loop-dev.service` on port `8080`) → PASS (`Go sentry-go`: 2 grouped issues `[3, 1]` + stack frames + `[Filtered]` PII + `GET /api/go/orders/{id}` p50=40.9ms + 3-span waterfall; `Rust sentry + tracing`: 2 grouped issues `[3, 1]` + stack frames + `[Filtered]` PII + `POST /api/rust/billing` p50=40.2ms + 3-span waterfall; tampered-DSN negative test: 0 events ingested; unauth `/api/v1/members` & `/api/v1/api-tokens` `401`)
+
+**Security notes:**
+- Self-review passed: all member, role, setting, and API token inputs validated server-side; all tenant queries run inside `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + explicit `tenant_id`); privilege escalation blocked (`tenant_admin` cannot grant/modify `tenant_owner`, `workspace_admin` cannot access sibling workspaces, last `tenant_owner` protected, removed users' sessions revoked immediately); attaching an existing email never modifies their password; per-project API tokens (`mlapi_<64-hex>`) stored strictly as SHA-256 hashes, shown once, confined to one project, read-only by default, and fail-closed (`403`) on all admin/settings/alert/PII/MCP-token endpoints; negative tests cover privilege escalation, cross-workspace denial, cross-project token denial, admin-route token denial, token revocation (`401`), aggregate tenant `429`, tampered DSNs, and Tenant A vs Tenant B cross-tenant isolation
+- Dependencies: 0 new production Rust or npm dependencies added (`github.com/getsentry/sentry-go` v0.31.1 and `sentry` v0.34.0 live strictly in isolated `tests/e2e/{go,rust}/`). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Checked per-project rate limit before aggregate tenant rate limit in `DsnCache::check_rate_limit` so a noisy single project exceeding its own cap cannot starve sibling projects' shared tenant aggregate quota
+
+**Not finished / blockers:**
+- All roadmap features (`F001`–`F014`, Phases 1–5) are now 100% complete!
+
 ### 2026-11-22 — Antigravity — F013: Phase 4: React Source Maps upload per release and bounded LRU ingest-time resolution
 
 **Status at end of session:** done

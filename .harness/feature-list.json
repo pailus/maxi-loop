@@ -266,7 +266,7 @@
     {
       "id": "F014",
       "title": "Phase 5: Go & Rust SDK verification, multi-user RBAC, inherited settings, API tokens, aggregate tenant limits",
-      "status": "todo",
+      "status": "done",
       "priority": "low",
       "acceptance_criteria": [
         "Verified error and trace ingestion with official Go and Rust Sentry SDKs",

@@ -67,22 +67,75 @@ struct TransactionDetailQuery {
     hours: Option<u32>,
 }
 
+fn token_scoped_perf_scope<'a>(
+    session: &'a AuthSession,
+    tenant_slug: &'a str,
+    workspace_slug: Option<&'a str>,
+    project_slug: Option<&'a str>,
+) -> Result<PerformanceScope<'a>, AppError> {
+    if let Some(tok) = &session.api_token {
+        if let Some(ws) = workspace_slug
+            && ws != tok.workspace_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different workspace",
+            ));
+        }
+        if let Some(proj) = project_slug
+            && proj != tok.project_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        return Ok(PerformanceScope {
+            tenant_slug,
+            workspace_slug: Some(&tok.workspace_slug),
+            project_slug: Some(&tok.project_slug),
+        });
+    }
+    Ok(PerformanceScope {
+        tenant_slug,
+        workspace_slug,
+        project_slug,
+    })
+}
+
+fn apply_token_to_tx_filter(
+    session: &AuthSession,
+    filter: &mut TransactionListFilter,
+) -> Result<(), AppError> {
+    if let Some(tok) = &session.api_token {
+        if let Some(slug) = filter.project_slug.as_deref()
+            && !slug.trim().is_empty()
+            && slug.trim() != tok.project_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        if let Some(ws) = filter.workspace_slug.as_deref()
+            && !ws.trim().is_empty()
+            && ws.trim() != tok.workspace_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different workspace",
+            ));
+        }
+        filter.project_slug = Some(tok.project_slug.clone());
+        filter.workspace_slug = Some(tok.workspace_slug.clone());
+    }
+    Ok(())
+}
+
 async fn default_list_transactions_handler(
     State(state): State<AuthState>,
     session: AuthSession,
-    Query(filter): Query<TransactionListFilter>,
+    Query(mut filter): Query<TransactionListFilter>,
 ) -> Result<Json<PaginatedTransactionsResponse>, AppError> {
-    let res = list_transactions(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &session.tenant.slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
-        filter,
-    )
-    .await?;
+    apply_token_to_tx_filter(&session, &mut filter)?;
+    let scope = token_scoped_perf_scope(&session, &session.tenant.slug, None, None)?;
+    let res = list_transactions(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -90,19 +143,16 @@ async fn default_project_list_transactions_handler(
     State(state): State<AuthState>,
     session: AuthSession,
     Path(project_slug): Path<String>,
-    Query(filter): Query<TransactionListFilter>,
+    Query(mut filter): Query<TransactionListFilter>,
 ) -> Result<Json<PaginatedTransactionsResponse>, AppError> {
-    let res = list_transactions(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &session.tenant.slug,
-            workspace_slug: Some(&session.default_workspace.slug),
-            project_slug: Some(&project_slug),
-        },
-        filter,
-    )
-    .await?;
+    apply_token_to_tx_filter(&session, &mut filter)?;
+    let scope = token_scoped_perf_scope(
+        &session,
+        &session.tenant.slug,
+        Some(&session.default_workspace.slug),
+        Some(&project_slug),
+    )?;
+    let res = list_transactions(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -110,19 +160,11 @@ async fn tenant_list_transactions_handler(
     State(state): State<AuthState>,
     session: AuthSession,
     Path(tenant_slug): Path<String>,
-    Query(filter): Query<TransactionListFilter>,
+    Query(mut filter): Query<TransactionListFilter>,
 ) -> Result<Json<PaginatedTransactionsResponse>, AppError> {
-    let res = list_transactions(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &tenant_slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
-        filter,
-    )
-    .await?;
+    apply_token_to_tx_filter(&session, &mut filter)?;
+    let scope = token_scoped_perf_scope(&session, &tenant_slug, None, None)?;
+    let res = list_transactions(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -130,19 +172,16 @@ async fn project_list_transactions_handler(
     State(state): State<AuthState>,
     session: AuthSession,
     Path((tenant_slug, workspace_slug, project_slug)): Path<(String, String, String)>,
-    Query(filter): Query<TransactionListFilter>,
+    Query(mut filter): Query<TransactionListFilter>,
 ) -> Result<Json<PaginatedTransactionsResponse>, AppError> {
-    let res = list_transactions(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &tenant_slug,
-            workspace_slug: Some(&workspace_slug),
-            project_slug: Some(&project_slug),
-        },
-        filter,
-    )
-    .await?;
+    apply_token_to_tx_filter(&session, &mut filter)?;
+    let scope = token_scoped_perf_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    let res = list_transactions(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -151,14 +190,12 @@ async fn default_transaction_detail_handler(
     session: AuthSession,
     Query(query): Query<TransactionDetailQuery>,
 ) -> Result<Json<TransactionDetailView>, AppError> {
+    session.enforce_api_token_project_slug(&query.project_slug)?;
+    let scope = token_scoped_perf_scope(&session, &session.tenant.slug, None, None)?;
     let detail = get_transaction_detail(
         &state.db,
         session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &session.tenant.slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
+        scope,
         TransactionDetailQueryParams {
             project_slug: &query.project_slug,
             transaction_name: &query.transaction_name,
@@ -175,19 +212,22 @@ async fn default_transaction_detail_handler(
 async fn default_list_traces_handler(
     State(state): State<AuthState>,
     session: AuthSession,
-    Query(filter): Query<TraceListFilter>,
+    Query(mut filter): Query<TraceListFilter>,
 ) -> Result<Json<Vec<TraceSummaryView>>, AppError> {
-    let traces = list_traces(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &session.tenant.slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
-        filter,
-    )
-    .await?;
+    if let Some(tok) = &session.api_token {
+        if let Some(slug) = filter.project_slug.as_deref()
+            && !slug.trim().is_empty()
+            && slug.trim() != tok.project_slug
+        {
+            return Err(AppError::Forbidden(
+                "api token is scoped to a different project",
+            ));
+        }
+        filter.project_slug = Some(tok.project_slug.clone());
+        filter.workspace_slug = Some(tok.workspace_slug.clone());
+    }
+    let scope = token_scoped_perf_scope(&session, &session.tenant.slug, None, None)?;
+    let traces = list_traces(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(traces))
 }
 
@@ -196,18 +236,8 @@ async fn default_get_trace_handler(
     session: AuthSession,
     Path(trace_id): Path<String>,
 ) -> Result<Json<TraceWaterfallView>, AppError> {
-    let wf = get_trace(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &session.tenant.slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
-        &trace_id,
-        &[],
-    )
-    .await?;
+    let scope = token_scoped_perf_scope(&session, &session.tenant.slug, None, None)?;
+    let wf = get_trace(&state.db, session.tenant_ctx, scope, &trace_id, &[]).await?;
     Ok(Json(wf))
 }
 
@@ -216,18 +246,8 @@ async fn tenant_get_trace_handler(
     session: AuthSession,
     Path((tenant_slug, trace_id)): Path<(String, String)>,
 ) -> Result<Json<TraceWaterfallView>, AppError> {
-    let wf = get_trace(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &tenant_slug,
-            workspace_slug: None,
-            project_slug: None,
-        },
-        &trace_id,
-        &[],
-    )
-    .await?;
+    let scope = token_scoped_perf_scope(&session, &tenant_slug, None, None)?;
+    let wf = get_trace(&state.db, session.tenant_ctx, scope, &trace_id, &[]).await?;
     Ok(Json(wf))
 }
 
@@ -241,17 +261,12 @@ async fn project_get_trace_handler(
         String,
     )>,
 ) -> Result<Json<TraceWaterfallView>, AppError> {
-    let wf = get_trace(
-        &state.db,
-        session.tenant_ctx,
-        PerformanceScope {
-            tenant_slug: &tenant_slug,
-            workspace_slug: Some(&workspace_slug),
-            project_slug: Some(&project_slug),
-        },
-        &trace_id,
-        &[],
-    )
-    .await?;
+    let scope = token_scoped_perf_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    let wf = get_trace(&state.db, session.tenant_ctx, scope, &trace_id, &[]).await?;
     Ok(Json(wf))
 }

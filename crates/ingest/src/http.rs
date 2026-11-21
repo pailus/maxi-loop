@@ -154,16 +154,16 @@ async fn ingest_envelope_handler(
             .into_response());
     }
 
-    // Per-project `governor` rate limit check.
+    // Per-project and aggregate per-tenant `governor` rate limit check.
     let item_count_u32 = u32::try_from(accepted_items).unwrap_or(u32::MAX);
-    if let Err(retry_after_secs) = state
+    if let Err(hit) = state
         .dsn_cache
         .check_rate_limit(&cached_project, item_count_u32)
     {
         return Ok(rate_limit_response(
-            retry_after_secs,
+            hit.retry_after_secs,
             limit_category,
-            "project",
+            hit.scope.sentry_scope(),
         ));
     }
 

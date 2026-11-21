@@ -7,12 +7,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use maxi_loop_platform::config::Config;
-use maxi_loop_platform::dsn_notify::{ProjectDsnInfo, ProjectDsnObserver};
+use maxi_loop_platform::dsn_notify::{ProjectDsnInfo, ProjectDsnObserver, TenantRateLimitUpdate};
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::scrub_notify::{PiiScrubRuleEntry, PiiScrubRulesObserver};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use crate::api_tokens::{API_TOKEN_PREFIX, authenticate_api_token};
 use crate::model::{AuthSession, AuthSessionView, LoginRequest};
 use crate::rate_limit::LoginRateLimiter;
 use crate::service::{authenticate_cookie, login, logout};
@@ -75,6 +76,12 @@ impl AuthState {
         }
     }
 
+    pub fn notify_tenant_rate_limits(&self, update: TenantRateLimitUpdate) {
+        if let Some(observer) = &self.dsn_observer {
+            observer.on_tenant_rate_limits_updated(update);
+        }
+    }
+
     pub fn notify_pii_rule_upserted(&self, rule: PiiScrubRuleEntry) {
         if let Some(observer) = &self.pii_observer {
             observer.on_pii_rule_upserted(rule);
@@ -88,6 +95,15 @@ impl AuthState {
     }
 }
 
+fn extract_bearer_api_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let token = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?
+        .trim();
+    if token.is_empty() { None } else { Some(token) }
+}
+
 impl<S> FromRequestParts<S> for AuthSession
 where
     AuthState: FromRef<S>,
@@ -97,6 +113,16 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let auth_state = AuthState::from_ref(state);
+
+        // Support per-project API Bearer tokens (`Authorization: Bearer mlapi_...`) for CI/automation.
+        // Bearer authentication is not ambient browser state, so CSRF header is not required.
+        if let Some(bearer) = extract_bearer_api_token(&parts.headers) {
+            if !bearer.starts_with(API_TOKEN_PREFIX) {
+                return Err(AppError::Unauthorized("invalid api token"));
+            }
+            return authenticate_api_token(&auth_state.db, bearer).await;
+        }
+
         let session = authenticate_cookie(&auth_state.db, &parts.headers).await?;
 
         // State-changing requests authenticated via session cookie MUST pass CSRF validation.
@@ -117,6 +143,8 @@ where
         .route("/auth/login", post(login_handler))
         .route("/auth/logout", post(logout_handler))
         .route("/auth/me", get(me_handler))
+        .merge(crate::members::router::<S>())
+        .merge(crate::api_tokens::router::<S>())
         .merge(crate::mcp::router::<S>())
 }
 

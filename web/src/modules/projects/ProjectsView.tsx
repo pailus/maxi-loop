@@ -12,6 +12,7 @@ import {
   type ProjectView,
   createProject,
   rotateProjectDsn,
+  updateProjectSettings,
 } from "../../lib/api";
 import {
   PROJECT_ICON_OPTIONS,
@@ -56,9 +57,14 @@ export function ProjectsView({
   const [slugTouched, setSlugTouched] = useState(false);
   const [platform, setPlatform] = useState("python");
   const [retentionOverride, setRetentionOverride] = useState("");
-  const [rateLimit, setRateLimit] = useState("1200");
+  const [rateLimit, setRateLimit] = useState("");
   const [selectedIcon, setSelectedIcon] = useState<ProjectIconId>("software-development");
   const [selectedColor, setSelectedColor] = useState(PROJECT_SWATCH_COLORS[0]);
+  const [sdkLang, setSdkLang] = useState<"python" | "go" | "rust">("python");
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [editRetention, setEditRetention] = useState("");
+  const [editRateLimit, setEditRateLimit] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -148,6 +154,49 @@ export function ProjectsView({
       );
     } finally {
       setRotatingSlug(null);
+    }
+  }
+
+  function startEditProject(proj: ProjectView) {
+    setEditingSlug(proj.slug);
+    setEditRetention(
+      proj.retention_days_override !== null
+        ? String(proj.retention_days_override)
+        : "",
+    );
+    setEditRateLimit(
+      proj.rate_limit_per_minute_override !== null
+        ? String(proj.rate_limit_per_minute_override)
+        : "",
+    );
+  }
+
+  async function handleSaveProjectEdit(proj: ProjectView) {
+    setSavingEdit(true);
+    try {
+      const nextRetention = editRetention.trim()
+        ? Number.parseInt(editRetention.trim(), 10)
+        : null;
+      const nextRate = editRateLimit.trim()
+        ? Number.parseInt(editRateLimit.trim(), 10)
+        : null;
+      await updateProjectSettings(
+        proj.slug,
+        {
+          retention_days_override: nextRetention,
+          rate_limit_per_minute_override: nextRate,
+        },
+        proj.workspace_slug,
+      );
+      setEditingSlug(null);
+      await onProjectsChanged();
+      onShowToast(`Updated inherited overrides for ${proj.slug}`);
+    } catch (err) {
+      onShowToast(
+        err instanceof Error ? err.message : "Failed to update project settings",
+      );
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -292,9 +341,76 @@ export function ProjectsView({
                       Governor rate limit
                     </dt>
                     <dd className="font-medium text-[var(--color-success-text)]">
-                      {p.rate_limit_per_minute.toLocaleString()} envelopes/min (HTTP 429 + Retry-After on burst)
+                      {p.effective_rate_limit_per_minute.toLocaleString()} envelopes/min{" "}
+                      <span className="font-normal text-[var(--color-text-dim)]">
+                        {p.rate_limit_per_minute_override !== null
+                          ? "(project override)"
+                          : "(inherited from workspace/tenant)"}
+                      </span>
                     </dd>
                   </dl>
+
+                  {canManageProjects && editingSlug === p.slug && (
+                    <div className="mt-3 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-muted)] grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2.5 items-end">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                          Retention override (blank = inherit)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={globalRetentionDays}
+                          value={editRetention}
+                          onChange={(e) => setEditRetention(e.target.value)}
+                          placeholder="Inherit"
+                          className="pm-input pm-mono h-8 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                          Rate limit override /min (blank = inherit)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1000000}
+                          value={editRateLimit}
+                          onChange={(e) => setEditRateLimit(e.target.value)}
+                          placeholder="Inherit"
+                          className="pm-input pm-mono h-8 text-xs"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={savingEdit}
+                          onClick={() => void handleSaveProjectEdit(p)}
+                          className="h-8 px-3 rounded bg-[var(--color-primary)] text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingSlug(null)}
+                          className="h-8 px-2.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {canManageProjects && editingSlug !== p.slug && (
+                    <div className="mt-2.5 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => startEditProject(p)}
+                        className="text-[11px] font-semibold text-[var(--color-link)] hover:underline cursor-pointer"
+                      >
+                        Edit inherited overrides
+                      </button>
+                    </div>
+                  )}
                 </article>
               );
             })
@@ -451,11 +567,12 @@ export function ProjectsView({
               <input
                 id="proj-rate"
                 type="number"
-                min={10}
-                max={100000}
+                min={1}
+                max={1000000}
                 disabled={!canManageProjects}
                 value={rateLimit}
                 onChange={(e) => setRateLimit(e.target.value)}
+                placeholder="Inherit default"
                 className="pm-input pm-mono"
               />
             </div>
@@ -474,23 +591,61 @@ export function ProjectsView({
         <hr className="my-5 border-[var(--color-border)]" />
 
         <div>
-          <h3 className="text-xs font-bold text-[var(--color-text)]">
-            Sentry SDK quickstart (drop-in DSN replacement)
-          </h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-bold text-[var(--color-text)]">
+              Sentry SDK quickstart
+            </h3>
+            <div className="flex items-center gap-1">
+              {(["python", "go", "rust"] as const).map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  onClick={() => setSdkLang(lang)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer ${
+                    sdkLang === lang
+                      ? "bg-[var(--color-primary-light)] text-[var(--color-primary)]"
+                      : "text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)]"
+                  }`}
+                >
+                  {lang.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
           <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
             Official Python, Go, Rust, and React SDKs work without custom wrappers:
           </p>
 
           <pre className="mt-2.5 p-3 rounded-md bg-[var(--pm-col)] border border-[var(--color-border)] pm-mono text-xs leading-relaxed text-[var(--color-text)] overflow-x-auto">
-{`# pip install sentry-sdk[fastapi]
+{sdkLang === "python"
+  ? `# pip install sentry-sdk[fastapi]
 import sentry_sdk
 
 sentry_sdk.init(
     dsn="${sampleDsn}",
     environment="production",
     release="9f3c2a1",
-    send_default_pii=False,
-)`}
+    traces_sample_rate=1.0,
+)`
+  : sdkLang === "go"
+    ? `// go get github.com/getsentry/sentry-go
+sentry.Init(sentry.ClientOptions{
+    Dsn:              "${sampleDsn}",
+    Environment:      "production",
+    Release:          "9f3c2a1",
+    EnableTracing:    true,
+    TracesSampleRate: 1.0,
+})`
+    : `// Cargo.toml: sentry = "0.34"
+let _guard = sentry::init((
+    "${sampleDsn}",
+    sentry::ClientOptions {
+        release: Some("9f3c2a1".into()),
+        environment: Some("production".into()),
+        traces_sample_rate: 1.0,
+        ..Default::default()
+    },
+));`}
           </pre>
         </div>
       </aside>

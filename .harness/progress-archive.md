@@ -5,6 +5,34 @@
 
 ---
 
+### 2026-11-21 — Antigravity — F005: Ingest worker pool: default PII scrubbing, fingerprinting, issue upsert/reopen, capped events, batch insert
+
+**Status at end of session:** done
+
+**Done:**
+- Implemented `crates/ingest/src/scrub.rs`: depth-bounded recursive baseline PII scrubbing (`[Filtered]`) for sensitive headers (`Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, etc., in both object and `[key, value]` tuple-array formats), cookies, sensitive fields (`password`, `token`, `secret`, `api_key`, `client_secret`, `access_token`, etc.), sensitive query parameters in `query_string` / `url`, and `Bearer`/`Basic` auth values before persistence
+- Implemented `crates/ingest/src/fingerprint.rs`: Sentry event normalization and deterministic SHA-256 fingerprinting based on exception type + in-app stack frames (`module`/`filename` + `function`, stripping Rust compiler hash suffixes), with fallback to normalized error message (UUID/hex/number tokenization), plus custom `fingerprint` array support, `culprit` extraction, and tag normalization
+- Implemented `crates/ingest/src/worker.rs`: async batch worker (`spawn_ingest_worker`, flushing every 100ms–1s or 256 events) and transactional `flush_processed_batch` (`begin_worker_tx`): checks `to_regclass` before `ensure_events_partition`, upserts `issues` in deterministic order, auto-reopens `resolved` issues on regression (`status = 'unresolved'`, `is_regressed = TRUE`), caps full event payloads at `MAX_FULL_EVENTS_PER_ISSUE` (default 50) + sample (`is_sample = TRUE`), and executes multi-row batch inserts/upserts into `events` and `issue_hourly_counters`
+- Wired `spawn_ingest_worker` into `crates/server` (`AppState::new` and `AppState::with_login_limiter`)
+- Added PostgreSQL 16 integration test `crates/server/tests/ingest_worker.rs` verifying live background worker PII scrubbing, grouping consistency, regression reopen, `ignored` status retention, full-event cap + regression sample, and hourly counter aggregation
+
+**Verification run:**
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (34 passed: 7 server unit + 3 server integration + 5 auth unit + 9 ingest unit + 1 issues unit + 1 org unit + 8 platform unit + 1 platform RLS integration)
+- `cargo build --workspace` → PASS
+- Manual smoke check (live `maxi-loop serve` + login + project creation + 2 gzipped envelopes with `Authorization` & `password` PII → verified grouped issue `event_count = 2`, `[Filtered]` in `events.payload`, and `issue_hourly_counters` count = 2 + clean SIGTERM) → PASS
+
+**Security notes:**
+- Self-review passed: PII scrubbing executes before any field extraction or database persistence so raw credentials (`Authorization`, `Cookie`, `password`, `token`, `secret`, `api_key`, URL query secrets) never reach PostgreSQL (`events.payload`, `events.tags`, or `issues`); recursion bounded by `MAX_SCRUB_DEPTH = 32`; parameterized SQLx `QueryBuilder` binds inside `begin_worker_tx`; negative tests verify zero raw secret substrings in persisted rows
+- Dependencies: added `sha2.workspace = true` to `crates/ingest` (already in workspace lockfile, 0 new external crates)
+
+**Key decisions & why:**
+- Check `SELECT to_regclass($1) IS NOT NULL` before calling `ensure_events_partition` in `flush_processed_batch` so the 100ms ingest hot path avoids executing partition DDL (`AccessExclusiveLock`) when the daily partition already exists
+
+**Not finished / blockers:**
+- Ready to begin F006 (Issues query, detail, hourly stats, and triage JSON API with tenant isolation tests)
+
 ### 2026-11-21 — Antigravity — F004: Sentry Envelope ingest endpoint with DSN cache, decompression, rate limiting, and bounded channel
 
 **Status at end of session:** done

@@ -1,0 +1,11 @@
+[workspace]
+
+[package]
+name = "maxi-loop-e2e-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sentry = { version = "0.34", features = ["tracing"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

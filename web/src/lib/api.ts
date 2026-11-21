@@ -23,6 +23,8 @@ export interface TenantSummary {
   slug: string;
   name: string;
   retention_days: number;
+  default_rate_limit_per_minute: number;
+  aggregate_rate_limit_per_minute: number;
   is_default: boolean;
 }
 
@@ -31,6 +33,7 @@ export interface WorkspaceSummary {
   slug: string;
   name: string;
   retention_days_override: number | null;
+  default_rate_limit_per_minute_override: number | null;
   is_default: boolean;
 }
 
@@ -39,6 +42,8 @@ export interface AuthSessionView {
   tenant: TenantSummary;
   default_workspace: WorkspaceSummary;
   role: Role;
+  tenant_role: Role | null;
+  workspace_roles: Record<string, Role>;
   csrf_token: string;
   single_tenant_mode: boolean;
 }
@@ -57,6 +62,8 @@ export interface WorkspaceView {
   name: string;
   retention_days_override: number | null;
   effective_retention_days: number;
+  default_rate_limit_per_minute_override: number | null;
+  effective_rate_limit_per_minute: number;
   is_default: boolean;
   created_at: string;
   updated_at: string;
@@ -66,6 +73,7 @@ export interface CreateWorkspaceInput {
   slug: string;
   name: string;
   retention_days_override?: number | null;
+  default_rate_limit_per_minute_override?: number | null;
 }
 
 export interface ProjectView {
@@ -82,7 +90,9 @@ export interface ProjectView {
   ingest_endpoint: string;
   retention_days_override: number | null;
   effective_retention_days: number;
+  rate_limit_per_minute_override: number | null;
   rate_limit_per_minute: number;
+  effective_rate_limit_per_minute: number;
   created_at: string;
   updated_at: string;
 }
@@ -1028,5 +1038,193 @@ export async function deleteSourceMap(sourcemapId: number): Promise<void> {
   });
   if (!res.ok) {
     throw new ApiError(res.status, `Failed to delete source map (${res.status})`);
+  }
+}
+
+// --- Phase 5: Multi-User RBAC, Inherited Settings & Per-Project API Tokens ---
+
+export interface TenantMemberView {
+  membership_id: number;
+  tenant_id: number;
+  user_id: number;
+  email: string;
+  name: string;
+  is_active: boolean;
+  scope: "tenant" | "workspace";
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  workspace_name: string | null;
+  role: Role;
+  created_at: string;
+}
+
+export interface CreateMemberInput {
+  email: string;
+  name?: string;
+  password?: string;
+  role: Role;
+  workspace_slug?: string | null;
+}
+
+export async function fetchMembers(): Promise<TenantMemberView[]> {
+  return requestJson<TenantMemberView[]>("/api/v1/members");
+}
+
+export async function createMember(
+  input: CreateMemberInput,
+): Promise<TenantMemberView> {
+  return requestJson<TenantMemberView>("/api/v1/members", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateMemberRole(
+  membershipId: number,
+  role: Role,
+): Promise<TenantMemberView> {
+  return requestJson<TenantMemberView>(`/api/v1/members/${membershipId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function deleteMember(membershipId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/members/${membershipId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new ApiError(res.status, errText || `Failed to remove member (${res.status})`);
+  }
+}
+
+export interface TenantOverview {
+  tenant: TenantSummary;
+  default_workspace: WorkspaceSummary;
+  single_tenant_mode: boolean;
+}
+
+export interface UpdateTenantSettingsInput {
+  name?: string;
+  retention_days?: number;
+  default_rate_limit_per_minute?: number;
+  aggregate_rate_limit_per_minute?: number;
+}
+
+export interface UpdateWorkspaceSettingsInput {
+  name?: string;
+  retention_days_override?: number | null;
+  default_rate_limit_per_minute_override?: number | null;
+}
+
+export interface UpdateProjectSettingsInput {
+  name?: string;
+  platform?: string;
+  retention_days_override?: number | null;
+  rate_limit_per_minute_override?: number | null;
+}
+
+export async function updateTenantSettings(
+  input: UpdateTenantSettingsInput,
+): Promise<TenantOverview> {
+  return requestJson<TenantOverview>("/api/v1/tenants/current/settings", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateWorkspaceSettings(
+  workspaceSlug: string,
+  input: UpdateWorkspaceSettingsInput,
+): Promise<WorkspaceView> {
+  return requestJson<WorkspaceView>(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceSlug)}/settings`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateProjectSettings(
+  projectSlug: string,
+  input: UpdateProjectSettingsInput,
+  workspaceSlug?: string,
+): Promise<ProjectView> {
+  const qs = workspaceSlug
+    ? `?workspace_slug=${encodeURIComponent(workspaceSlug)}`
+    : "";
+  return requestJson<ProjectView>(
+    `/api/v1/projects/${encodeURIComponent(projectSlug)}/settings${qs}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export interface ApiTokenView {
+  id: number;
+  tenant_id: number;
+  workspace_id: number;
+  workspace_slug: string;
+  project_id: number;
+  project_slug: string;
+  created_by_user_id: number;
+  created_by_email: string;
+  name: string;
+  token_prefix: string;
+  can_read: boolean;
+  can_write: boolean;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedApiTokenResponse {
+  token: ApiTokenView;
+  raw_token: string;
+}
+
+export interface CreateApiTokenInput {
+  project_slug: string;
+  workspace_slug?: string;
+  name: string;
+  can_write?: boolean;
+  expires_in_days?: number | null;
+}
+
+export async function fetchApiTokens(
+  projectSlug?: string,
+): Promise<ApiTokenView[]> {
+  const qs = projectSlug ? `?project_slug=${encodeURIComponent(projectSlug)}` : "";
+  return requestJson<ApiTokenView[]>(`/api/v1/api-tokens${qs}`);
+}
+
+export async function createApiToken(
+  input: CreateApiTokenInput,
+): Promise<CreatedApiTokenResponse> {
+  return requestJson<CreatedApiTokenResponse>("/api/v1/api-tokens", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeApiToken(tokenId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/api-tokens/${tokenId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to revoke API token (${res.status})`);
   }
 }
