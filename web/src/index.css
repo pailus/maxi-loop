@@ -4,11 +4,14 @@
 :root,
 html[data-app="maxiboard"] {
   --color-bg: #ffffff;
-  --color-bg-muted: #f7f8f9;
+  --color-bg-muted: #fafbfc;
   --color-bg-card: #ffffff;
   --color-bg-sidebar: #ffffff;
-  --color-bg-hover: #ebecf0;
-  --color-border: #dcdfe4;
+  /* Softer than MaxiBoard (D013): lighter surfaces, subtle hover, lighter hairline border. */
+  --color-bg-hover: #f4f5f7;
+  /* Hover for controls that already have a filled background (--pm-col), and neutral badges. */
+  --color-bg-hover-strong: #eef0f3;
+  --color-border: #e4e6ea;
   --color-border-light: #f1f2f4;
   --color-border-strong: #b7bcc5;
   --color-text: #172b4d;
@@ -31,12 +34,13 @@ html[data-app="maxiboard"] {
   --color-purple: #6e5dc6;
   --color-purple-light: #f3f0ff;
   --color-purple-text: #5e4db2;
-  --pm-col: #f1f2f4;
-  --pm-card-hover: #f7f8f9;
+  --pm-col: #f5f6f8;
+  --pm-card-hover: #fafbfc;
   --pm-text-faint: #8590a2;
   --pm-skeleton: #ebecf0;
   --pm-skeleton-hi: #f7f8f9;
-  --pm-shadow-card: 0 1px 1px rgba(9, 30, 66, 0.25), 0 0 1px rgba(9, 30, 66, 0.31);
+  /* Cards already draw a 1px border, so the shadow adds only soft depth (no second ring). */
+  --pm-shadow-card: 0 1px 3px rgba(9, 30, 66, 0.05);
   --pm-shadow-raised: 0 8px 12px rgba(9, 30, 66, 0.15), 0 0 1px rgba(9, 30, 66, 0.31);
   --focus-ring: #0c66e4;
   color-scheme: light;
@@ -88,6 +92,13 @@ html[data-app="maxiboard"] {
 
   ::-webkit-scrollbar-corner {
     background: transparent;
+  }
+
+  /* Smooth hover fades everywhere (zero specificity, so utilities can override). */
+  :where(a, button, summary, tr, [role="button"], [role="option"], [role="menuitem"], [role="tab"]) {
+    transition-property: background-color, border-color, color, box-shadow;
+    transition-duration: 150ms;
+    transition-timing-function: ease;
   }
 
   :where(a, button, summary, [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
@@ -158,7 +169,7 @@ html[data-app="maxiboard"] {
     text-transform: uppercase;
     letter-spacing: 0.02em;
     white-space: nowrap;
-    background: var(--color-bg-hover);
+    background: var(--color-bg-hover-strong);
     color: var(--color-text-muted);
   }
 
@@ -211,6 +222,8 @@ html[data-app="maxiboard"] {
   .pm-input[readonly] {
     background: var(--pm-col);
     color: var(--color-text-muted);
+    /* Read-only/disabled fields are not typed into: soft border like cards (D013). */
+    border-color: var(--color-border);
   }
 
   .pm-mono {

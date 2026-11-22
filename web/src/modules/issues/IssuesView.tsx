@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getUrlParam, setUrlParams, useUrlEnum } from "../../lib/urlState";
 import {
   AlertCircle,
   AlertTriangle,
@@ -35,6 +36,22 @@ export type IssuesTabMode =
   | "resolved"
   | "ignored"
   | "all";
+
+const ISSUES_TABS: readonly IssuesTabMode[] = [
+  "unresolved",
+  "regressed",
+  "resolved",
+  "ignored",
+  "all",
+];
+
+/** `?issue=<id>` from the URL (positive integer only). */
+function readUrlIssueId(): number | null {
+  const raw = getUrlParam("issue");
+  if (!raw || !/^\d{1,15}$/.test(raw)) return null;
+  const id = Number(raw);
+  return id > 0 ? id : null;
+}
 
 interface IssuesViewProps {
   workspaceName: string;
@@ -76,7 +93,12 @@ export function IssuesView({
   onNavigateToProjects,
   onOpenTrace,
 }: IssuesViewProps) {
-  const [tabMode, setTabMode] = useState<IssuesTabMode>(initialTabMode);
+  const [tabMode, setTabMode] = useUrlEnum<IssuesTabMode>(
+    "status",
+    ISSUES_TABS,
+    "unresolved",
+    initialTabMode,
+  );
   const [localSearch, setLocalSearch] = useState("");
   const [environment, setEnvironment] = useState("");
   const [issueTypeFilter, setIssueTypeFilter] = useState<"" | "error" | "performance">("");
@@ -95,19 +117,37 @@ export function IssuesView({
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
 
-  const [selectedIssueId, setSelectedIssueId] = useState<number | null>(null);
+  const [selectedIssueId, setSelectedIssueId] = useState<number | null>(readUrlIssueId);
+  // Issue opened from the URL is kept on the first list load even when it is
+  // not on the current page (the detail is fetched by id).
+  const pendingUrlIssueRef = useRef<number | null>(selectedIssueId);
+  const urlIssueIdRef = useRef<number | null>(selectedIssueId);
   const [issueDetail, setIssueDetail] = useState<IssueDetailView | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [fullViewOpen, setFullViewOpen] = useState(false);
+  const [fullViewOpen, setFullViewOpen] = useState(
+    () => getUrlParam("full") === "1" && readUrlIssueId() !== null,
+  );
   const [triageBusy, setTriageBusy] = useState(false);
   const [checkedIssueIds, setCheckedIssueIds] = useState<number[]>([]);
   const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
   const [mergeBusy, setMergeBusy] = useState(false);
 
+  // Sidebar Issues / Regressions switch the tab; on mount the URL `status` wins.
+  const prevInitialTabMode = useRef(initialTabMode);
   useEffect(() => {
+    if (prevInitialTabMode.current === initialTabMode) return;
+    prevInitialTabMode.current = initialTabMode;
     setTabMode(initialTabMode);
     setPage(1);
-  }, [initialTabMode]);
+  }, [initialTabMode, setTabMode]);
+
+  useEffect(() => {
+    setUrlParams({ issue: selectedIssueId === null ? null : String(selectedIssueId) });
+  }, [selectedIssueId]);
+
+  useEffect(() => {
+    setUrlParams(fullViewOpen ? { full: "1" } : { full: null, detail: null });
+  }, [fullViewOpen]);
 
   const effectiveQuery = (localSearch.trim() || globalSearchQuery.trim()) || undefined;
 
@@ -140,9 +180,11 @@ export function IssuesView({
       });
       setIssuesPage(resp);
 
+      const keepId = pendingUrlIssueRef.current;
+      pendingUrlIssueRef.current = null;
       if (resp.items.length > 0) {
         setSelectedIssueId((prev) => {
-          if (prev !== null && resp.items.some((i) => i.id === prev)) {
+          if (prev !== null && (prev === keepId || resp.items.some((i) => i.id === prev))) {
             return prev;
           }
           // Auto-open the first issue only where the inspector docks beside
@@ -151,7 +193,7 @@ export function IssuesView({
             ? resp.items[0].id
             : null;
         });
-      } else {
+      } else if (keepId === null) {
         setSelectedIssueId(null);
         setIssueDetail(null);
       }
@@ -183,13 +225,21 @@ export function IssuesView({
     }
     let active = true;
     setLoadingDetail(true);
-    fetchIssueDetail(selectedIssueId)
+    const requestedId = selectedIssueId;
+    fetchIssueDetail(requestedId)
       .then((detail) => {
         if (active) {
           setIssueDetail(detail);
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // A stale/foreign `?issue=` from the URL: drop it instead of showing an empty drawer.
+        if (active && requestedId === urlIssueIdRef.current) {
+          urlIssueIdRef.current = null;
+          setFullViewOpen(false);
+          setSelectedIssueId(null);
+        }
+      })
       .finally(() => {
         if (active) {
           setLoadingDetail(false);
@@ -369,7 +419,7 @@ export function IssuesView({
           <button
             type="button"
             onClick={() => void loadIssuesList()}
-            className="ml-auto h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
+            className="ml-auto h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
             title="Refresh issues stream"
           >
             <RefreshCw size={13} className={loadingList ? "animate-spin" : ""} />
@@ -443,7 +493,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Filter by project"
-            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
           >
             <option value="">Project: All ({projects.length})</option>
             {projects.map((p) => (
@@ -460,7 +510,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Filter by environment"
-            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
           >
             <option value="">Env: All</option>
             {knownEnvs.map((envName) => (
@@ -477,7 +527,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Filter by issue type"
-            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
           >
             <option value="">Type: All</option>
             <option value="error">Type: Errors</option>
@@ -503,7 +553,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Sort issues"
-            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer sm:ml-auto"
+            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer sm:ml-auto"
           >
             <option value="last_seen">Sort: Last seen</option>
             <option value="events">Sort: Most events</option>
@@ -752,7 +802,7 @@ export function IssuesView({
                                 onClick={() =>
                                   void handleTriageStatus(item.id, "ignored")
                                 }
-                                className="h-5 px-1.5 rounded bg-[var(--pm-col)] text-[var(--color-text-muted)] text-[10px] font-semibold inline-flex items-center gap-0.5 hover:bg-[var(--color-bg-hover)] cursor-pointer"
+                                className="h-5 px-1.5 rounded bg-[var(--pm-col)] text-[var(--color-text-muted)] text-[10px] font-semibold inline-flex items-center gap-0.5 hover:bg-[var(--color-bg-hover-strong)] cursor-pointer"
                                 title="Ignore issue"
                               >
                                 <EyeOff size={10} />

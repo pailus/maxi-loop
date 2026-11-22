@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useUrlEnum } from "../../lib/urlState";
 import {
   FileCode2,
   GitCommit,
@@ -30,6 +31,8 @@ interface ReleasesViewProps {
 
 type ReleasesSubTab = "releases" | "sourcemaps";
 
+const RELEASES_TABS: readonly ReleasesSubTab[] = ["releases", "sourcemaps"];
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -43,7 +46,11 @@ export function ReleasesView({
   onOpenReleaseIssues,
   onShowToast,
 }: ReleasesViewProps) {
-  const [activeTab, setActiveTab] = useState<ReleasesSubTab>("releases");
+  const [activeTab, setActiveTab] = useUrlEnum<ReleasesSubTab>(
+    "tab",
+    RELEASES_TABS,
+    "releases",
+  );
   const [filterProject, setFilterProject] = useState("");
   const [releases, setReleases] = useState<ReleaseView[]>([]);
   const [sourceMaps, setSourceMaps] = useState<SourceMapView[]>([]);

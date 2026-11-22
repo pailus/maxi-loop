@@ -40,12 +40,10 @@ import {
 import { AlertsView } from "../modules/alerts/AlertsView";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
+import { getUrlParam, setUrlParams } from "../lib/urlState";
 import { IssuesView, type IssuesTabMode } from "../modules/issues/IssuesView";
 import { McpView } from "../modules/mcp/McpView";
-import {
-  type PerfTab,
-  PerformanceView,
-} from "../modules/performance/PerformanceView";
+import { PerformanceView } from "../modules/performance/PerformanceView";
 import { CreateProjectDialog } from "../modules/projects/CreateProjectDialog";
 import { ProjectTree } from "../modules/projects/ProjectTree";
 import { ProjectsView } from "../modules/projects/ProjectsView";
@@ -67,6 +65,28 @@ type ActiveNav =
   | "projects"
   | "team"
   | "health";
+
+const NAV_IDS: readonly ActiveNav[] = [
+  "issues",
+  "regressed",
+  "performance",
+  "releases",
+  "alerts",
+  "mcp",
+  "projects",
+  "team",
+  "health",
+];
+
+/** Params owned by a single view; dropped when the menu changes (D014). */
+const VIEW_SCOPED_PARAMS = ["tab", "status", "issue", "full", "detail", "trace"] as const;
+
+function readNavFromUrl(): ActiveNav {
+  const view = getUrlParam("view");
+  if (view && (NAV_IDS as readonly string[]).includes(view)) return view as ActiveNav;
+  if (getUrlParam("trace")) return "performance";
+  return "issues";
+}
 
 interface ToastState {
   message: string;
@@ -176,27 +196,17 @@ export function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("trace") ?? "";
   });
-  const [deepLinkPerfTab] = useState<PerfTab | undefined>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (
-      tab === "transactions" ||
-      tab === "traces" ||
-      tab === "slow-queries" ||
-      tab === "compare"
-    ) {
-      return tab;
-    }
-    return undefined;
-  });
+  const [activeNav, setActiveNavState] = useState<ActiveNav>(readNavFromUrl);
 
-  const [activeNav, setActiveNav] = useState<ActiveNav>(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("view") === "performance" || params.get("trace")) {
-      return "performance";
+  // Menu changes get their own history entry; the URL is updated before the next
+  // render so the newly mounted view never reads the previous view's `tab`.
+  const setActiveNav = useCallback((nav: ActiveNav) => {
+    if (readNavFromUrl() !== nav) {
+      const cleared = Object.fromEntries(VIEW_SCOPED_PARAMS.map((k) => [k, null]));
+      setUrlParams({ ...cleared, view: nav === "issues" ? null : nav }, "push");
     }
-    return "issues";
-  });
+    setActiveNavState(nav);
+  }, []);
   const [globalSearch, setGlobalSearch] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [createWsInitialName, setCreateWsInitialName] = useState<string | null>(
@@ -211,9 +221,34 @@ export function App() {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const goTo = useCallback((nav: ActiveNav) => {
-    setActiveNav(nav);
-    setDrawerOpen(false);
+  const goTo = useCallback(
+    (nav: ActiveNav) => {
+      setActiveNav(nav);
+      setDrawerOpen(false);
+    },
+    [setActiveNav],
+  );
+
+  // Keep project / workspace selection in the URL so a refresh keeps them.
+  useEffect(() => {
+    setUrlParams({ project: selectedProjectSlug || null });
+  }, [selectedProjectSlug]);
+
+  useEffect(() => {
+    if (activeWorkspaceSlug) setUrlParams({ workspace: activeWorkspaceSlug });
+  }, [activeWorkspaceSlug]);
+
+  // Back / forward: restore the menu and selection from the URL.
+  useEffect(() => {
+    const onPop = () => {
+      setActiveNavState(readNavFromUrl());
+      setSelectedProjectSlug(getUrlParam("project") ?? "");
+      setDeepLinkTraceId(getUrlParam("trace") ?? "");
+      const ws = getUrlParam("workspace");
+      if (ws) setActiveWorkspaceSlug(ws);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   // Close the mobile drawer on Escape and when the viewport grows to desktop.
@@ -329,11 +364,14 @@ export function App() {
     [session],
   );
 
-  const openTeamTab = useCallback((tab: AdminTab) => {
-    setTeamTabRequest((prev) => ({ tab, nonce: prev.nonce + 1 }));
-    setActiveNav("team");
-    setDrawerOpen(false);
-  }, []);
+  const openTeamTab = useCallback(
+    (tab: AdminTab) => {
+      setTeamTabRequest((prev) => ({ tab, nonce: prev.nonce + 1 }));
+      setActiveNav("team");
+      setDrawerOpen(false);
+    },
+    [setActiveNav],
+  );
 
   async function handleLogout() {
     try {
@@ -708,7 +746,6 @@ export function App() {
             selectedProjectSlug={selectedProjectSlug}
             onSelectProjectSlug={setSelectedProjectSlug}
             initialTraceId={deepLinkTraceId || undefined}
-            initialTab={deepLinkPerfTab}
             onClearInitialTraceId={() => setDeepLinkTraceId("")}
             onShowToast={(msg) => showToast(msg)}
           />

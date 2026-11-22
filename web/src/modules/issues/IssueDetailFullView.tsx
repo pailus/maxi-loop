@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { useUrlEnum } from "../../lib/urlState";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -47,6 +48,9 @@ interface IssueDetailFullViewProps {
   onOpenTrace?: (traceId: string) => void;
 }
 
+type DetailTab = "overview" | "events" | "counters" | "notes";
+const DETAIL_TABS: readonly DetailTab[] = ["overview", "events", "counters", "notes"];
+
 export function IssueDetailFullView({
   detail,
   canTriage,
@@ -58,7 +62,7 @@ export function IssueDetailFullView({
   onBack,
   onOpenTrace,
 }: IssueDetailFullViewProps) {
-  const [activeTab, setActiveTab] = useState<"overview" | "events" | "counters" | "notes">("overview");
+  const [activeTab, setActiveTab] = useUrlEnum<DetailTab>("detail", DETAIL_TABS, "overview");
   const [interval, setInterval] = useState<"1h" | "1d">("1h");
   const [events, setEvents] = useState<IssueEventView[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
@@ -303,7 +307,7 @@ export function IssueDetailFullView({
           className="pm-tab"
         >
           <span>Stored events</span>
-          <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover)] text-[11px] font-bold">
+          <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover-strong)] text-[11px] font-bold">
             {issue.stored_full_events} / 50 cap
           </span>
         </button>
@@ -325,7 +329,7 @@ export function IssueDetailFullView({
         >
           <MessageSquare size={13} />
           <span>Notes &amp; AI Triage</span>
-          <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover)] text-[11px] font-bold">
+          <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover-strong)] text-[11px] font-bold">
             {notes.length}
           </span>
         </button>

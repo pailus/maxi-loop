@@ -123,7 +123,7 @@ export function BreadcrumbsView({
             <h3 className="text-sm font-semibold text-[var(--color-text)]">
               Breadcrumbs
             </h3>
-            <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover)] text-[11px] font-bold text-[var(--color-text-muted)]">
+            <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover-strong)] text-[11px] font-bold text-[var(--color-text-muted)]">
               {filtered.length} / {breadcrumbs.length}
             </span>
           </div>

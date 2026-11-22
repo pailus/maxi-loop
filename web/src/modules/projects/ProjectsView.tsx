@@ -268,7 +268,7 @@ export function ProjectsView({
             <button
               type="button"
               onClick={() => onOpenProjectIssues(p.slug)}
-              className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1 cursor-pointer"
+              className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-xs font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1 cursor-pointer"
             >
               <span>View issues</span>
               <ArrowRight size={12} />

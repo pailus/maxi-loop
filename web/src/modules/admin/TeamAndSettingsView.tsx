@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { useUrlEnum } from "../../lib/urlState";
 import {
   AlertCircle,
   Check,
@@ -37,6 +38,8 @@ import {
 
 export type AdminTab = "members" | "settings" | "api_tokens";
 
+const ADMIN_TABS: readonly AdminTab[] = ["members", "settings", "api_tokens"];
+
 interface TeamAndSettingsViewProps {
   session: AuthSessionView;
   projects: ProjectView[];
@@ -61,11 +64,13 @@ export function TeamAndSettingsView({
   onSettingsChanged,
   onShowToast,
 }: TeamAndSettingsViewProps) {
-  const [tab, setTab] = useState<AdminTab>(initialTab);
+  const [tab, setTab] = useUrlEnum<AdminTab>("tab", ADMIN_TABS, "members", initialTab);
 
+  // Explicit tab requests from elsewhere in the app (nonce > 0); on mount the
+  // URL wins so a refresh keeps the open tab.
   useEffect(() => {
-    setTab(initialTab);
-  }, [initialTab, tabNonce]);
+    if (tabNonce > 0) setTab(initialTab);
+  }, [initialTab, tabNonce, setTab]);
 
   // Members state
   const [members, setMembers] = useState<TenantMemberView[]>([]);

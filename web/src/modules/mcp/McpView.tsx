@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { useUrlEnum } from "../../lib/urlState";
 import {
   Bot,
   Check,
@@ -31,6 +32,9 @@ interface McpViewProps {
   onShowToast: (message: string) => void;
 }
 
+type McpTab = "tokens" | "audit";
+const MCP_TABS: readonly McpTab[] = ["tokens", "audit"];
+
 export function McpView({
   workspaceName,
   workspaceSlug,
@@ -38,7 +42,7 @@ export function McpView({
   canTriage,
   onShowToast,
 }: McpViewProps) {
-  const [tab, setTab] = useState<"tokens" | "audit">("tokens");
+  const [tab, setTab] = useUrlEnum<McpTab>("tab", MCP_TABS, "tokens");
   const [tokens, setTokens] = useState<McpTokenView[]>([]);
   const [auditLogs, setAuditLogs] = useState<McpAuditLogView[]>([]);
   const [loading, setLoading] = useState(true);

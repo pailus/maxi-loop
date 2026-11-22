@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useUrlEnum } from "../../lib/urlState";
 import { Bell, Lock, Plus, RefreshCw, Shield, Trash2, Webhook } from "lucide-react";
 import {
   type AlertChannelType,
@@ -34,13 +35,15 @@ interface AlertsViewProps {
 
 type AlertsTab = "rules" | "channels" | "pii";
 
+const ALERTS_TABS: readonly AlertsTab[] = ["rules", "channels", "pii"];
+
 export function AlertsView({
   workspaceName,
   projects,
   canManage,
   onShowToast,
 }: AlertsViewProps) {
-  const [tab, setTab] = useState<AlertsTab>("rules");
+  const [tab, setTab] = useUrlEnum<AlertsTab>("tab", ALERTS_TABS, "rules");
   const [channels, setChannels] = useState<AlertChannelView[]>([]);
   const [rules, setRules] = useState<AlertRuleView[]>([]);
   const [deliveries, setDeliveries] = useState<AlertDeliveryView[]>([]);
@@ -332,7 +335,7 @@ export function AlertsView({
                           className={`h-7 px-2.5 rounded text-[11px] font-semibold cursor-pointer ${
                             r.is_enabled
                               ? "bg-[#dcfff1] text-[#216e4e]"
-                              : "bg-[var(--color-bg-hover)] text-[var(--color-text-dim)]"
+                              : "bg-[var(--color-bg-hover-strong)] text-[var(--color-text-dim)]"
                           }`}
                         >
                           {r.is_enabled ? "Enabled" : "Paused"}
@@ -532,7 +535,7 @@ export function AlertsView({
                             className={`h-7 px-2.5 rounded text-[11px] font-semibold cursor-pointer ${
                               rule.is_enabled
                                 ? "bg-[#dcfff1] text-[#216e4e]"
-                                : "bg-[var(--color-bg-hover)] text-[var(--color-text-dim)]"
+                                : "bg-[var(--color-bg-hover-strong)] text-[var(--color-text-dim)]"
                             }`}
                           >
                             {rule.is_enabled ? "Enabled" : "Paused"}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { setUrlParams, useUrlEnum } from "../../lib/urlState";
 import {
   Activity,
   ChevronRight,
@@ -26,6 +27,8 @@ import { TraceWaterfallView } from "./TraceWaterfallView";
 
 export type PerfTab = "transactions" | "traces" | "slow-queries" | "compare";
 
+const PERF_TABS: readonly PerfTab[] = ["transactions", "traces", "slow-queries", "compare"];
+
 interface PerformanceViewProps {
   workspaceName: string;
   workspaceSlug?: string;
@@ -33,7 +36,6 @@ interface PerformanceViewProps {
   selectedProjectSlug: string;
   onSelectProjectSlug: (slug: string) => void;
   initialTraceId?: string;
-  initialTab?: PerfTab;
   onClearInitialTraceId?: () => void;
   onShowToast: (message: string) => void;
 }
@@ -63,13 +65,10 @@ export function PerformanceView({
   selectedProjectSlug,
   onSelectProjectSlug,
   initialTraceId,
-  initialTab,
   onClearInitialTraceId,
   onShowToast,
 }: PerformanceViewProps) {
-  const [activeTab, setActiveTab] = useState<PerfTab>(
-    initialTab ?? "transactions",
-  );
+  const [activeTab, setActiveTab] = useUrlEnum<PerfTab>("tab", PERF_TABS, "transactions");
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [environment, setEnvironment] = useState("");
   const [release, setRelease] = useState("");
@@ -97,10 +96,13 @@ export function PerformanceView({
   );
 
   useEffect(() => {
-    if (initialTraceId) {
-      setActiveTraceId(initialTraceId);
-    }
+    setActiveTraceId(initialTraceId || null);
   }, [initialTraceId]);
+
+  // Open trace stays in the URL so a refresh reopens it (D014).
+  useEffect(() => {
+    setUrlParams({ trace: activeTraceId });
+  }, [activeTraceId]);
 
   const loadData = useCallback(async () => {
     setLoading(true);

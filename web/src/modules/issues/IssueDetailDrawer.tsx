@@ -213,7 +213,7 @@ export function IssueDetailDrawer({
                   type="button"
                   disabled={triageBusy}
                   onClick={() => onUpdateStatus(issue.id, "ignored")}
-                  className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
                 >
                   <EyeOff size={13} />
                   <span>Ignore</span>
@@ -237,7 +237,7 @@ export function IssueDetailDrawer({
           <button
             type="button"
             onClick={handleCopyEventId}
-            className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1 cursor-pointer ml-auto"
+            className="h-7 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1 cursor-pointer ml-auto"
           >
             {copiedId ? <Check size={12} /> : <Copy size={12} />}
             <span>{copiedId ? "Copied" : "Copy ID"}</span>
