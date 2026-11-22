@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use maxi_loop_auth::mcp::{McpAccessScope, McpAuthContext};
-use maxi_loop_issues::model::{IssueListFilter, UpdateIssueStatusInput};
+use maxi_loop_issues::assignment::AssigneeTarget;
+use maxi_loop_issues::model::{IssueAssigneeView, IssueListFilter, UpdateIssueStatusInput};
 use maxi_loop_issues::notes::{CreateIssueNoteInput, NoteActor};
 use maxi_loop_issues::service::{IssueScope, IssuesService};
 use maxi_loop_org::service::OrgService;
@@ -59,7 +60,7 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
 
         tools.push(json!({
             "name": "list_issues",
-            "description": "List grouped issues (errors and detected performance problems such as N+1 queries) with filters (project, environment, release, status, regression, issue type, time range, search query, sort order) and pagination. Returns token-efficient summaries with UI links.",
+            "description": "List grouped issues (errors and detected performance problems such as N+1 queries) with filters (project, environment, release, status, regression, issue type, assignee, time range, search query, sort order) and pagination. Returns token-efficient summaries with UI links.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -72,6 +73,7 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
                     "since": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC lower bound on last_seen." },
                     "until": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC upper bound on last_seen." },
                     "query": { "type": "string", "description": "Substring search on issue title or culprit." },
+                    "assigned_to": { "type": "string", "description": "Filter by assignee: 'me' (the token owner), 'none' (unassigned), or a member's email." },
                     "sort": { "type": "string", "enum": ["last_seen", "first_seen", "events", "users", "regressed"], "default": "last_seen", "description": "`users` sorts by distinct affected users (impact)." },
                     "page": { "type": "integer", "minimum": 1, "default": 1 },
                     "per_page": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
@@ -267,6 +269,44 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
         }));
 
         tools.push(json!({
+            "name": "assign_issue",
+            "description": "Assign an issue to a member ('me' = the token owner, or a member's email) or unassign it (assignee null). The assignee must be able to triage the issue's project; use list_assignable_members to see valid choices. The change is recorded on the issue timeline. Requires 'triage' scope.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["issue_id", "assignee"],
+                "properties": {
+                    "issue_id": { "type": "integer", "minimum": 1 },
+                    "assignee": { "type": ["string", "null"], "maxLength": 254, "description": "'me', a member's email, or null to unassign." },
+                    "note": { "type": "string", "maxLength": 3000, "description": "Optional reason recorded with the assignment." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
+
+        tools.push(json!({
+            "name": "list_assignable_members",
+            "description": "List members who can be assigned to an issue (active members allowed to triage its project). Requires 'triage' scope.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["issue_id"],
+                "properties": {
+                    "issue_id": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
+
+        tools.push(json!({
             "name": "add_issue_note",
             "description": "Add an AI analysis or triage note (with optional commit reference) to an issue without changing its status. Requires 'triage' scope.",
             "inputSchema": {
@@ -304,6 +344,8 @@ pub fn is_known_tool(name: &str) -> bool {
             | "compare_releases"
             | "update_issue_status"
             | "add_issue_note"
+            | "assign_issue"
+            | "list_assignable_members"
     )
 }
 
@@ -367,6 +409,16 @@ pub async fn execute_tool(
             require_triage(auth)?;
             let args: AddIssueNoteArgs = parse_args(arguments)?;
             tool_add_issue_note(services, auth, args).await
+        }
+        "assign_issue" => {
+            require_triage(auth)?;
+            let args: AssignIssueArgs = parse_args(arguments)?;
+            tool_assign_issue(services, auth, args).await
+        }
+        "list_assignable_members" => {
+            require_triage(auth)?;
+            let args: ListAssignableMembersArgs = parse_args(arguments)?;
+            tool_list_assignable_members(services, auth, args).await
         }
         _ => Err(AppError::Validation(format!("unknown tool: {tool_name}"))),
     }
@@ -481,6 +533,7 @@ struct ListIssuesArgs {
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     query: Option<String>,
+    assigned_to: Option<String>,
     sort: Option<String>,
     page: Option<u32>,
     per_page: Option<u32>,
@@ -517,6 +570,14 @@ async fn tool_list_issues(
         since: args.since,
         until: args.until,
         query: args.query,
+        // `me` = the token owner; `none` and emails pass through to the service validator.
+        assigned_to: args.assigned_to.map(|v| {
+            if v.trim().eq_ignore_ascii_case("me") {
+                auth.user_id.to_string()
+            } else {
+                v
+            }
+        }),
         sort: args.sort,
         page: args.page,
         per_page: Some(per_page),
@@ -562,6 +623,7 @@ async fn tool_list_issues(
             "issue_type": issue.issue_type,
             "event_count": issue.event_count,
             "user_count": issue.user_count,
+            "assignee": assignee_json(issue.assignee.as_ref()),
             "first_seen": issue.first_seen,
             "last_seen": issue.last_seen,
             "last_environment": issue.last_environment,
@@ -691,6 +753,7 @@ async fn tool_get_issue(
             "issue_type": detail.issue.issue_type,
             "event_count": detail.issue.event_count,
             "user_count": detail.issue.user_count,
+            "assignee": assignee_json(detail.issue.assignee.as_ref()),
             "first_seen": detail.issue.first_seen,
             "last_seen": detail.issue.last_seen,
             "last_environment": detail.issue.last_environment,
@@ -1490,5 +1553,82 @@ async fn tool_compare_releases(
         "total_transactions_compared": cmp.total_transactions_compared,
         "truncated": truncated,
         "ui_url": compare_releases_ui_url(services.public_base_url, &effective_project_slug),
+    })))
+}
+
+/// Assignee as shown to MCP clients (trusted tenant data, not event payload).
+fn assignee_json(assignee: Option<&IssueAssigneeView>) -> Value {
+    match assignee {
+        Some(a) => json!({ "email": a.email, "name": a.name }),
+        None => Value::Null,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssignIssueArgs {
+    issue_id: i64,
+    assignee: Option<String>,
+    note: Option<String>,
+}
+
+async fn tool_assign_issue(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: AssignIssueArgs,
+) -> Result<ToolOutput, AppError> {
+    let target = AssigneeTarget::parse_mcp(args.assignee.as_deref(), auth.user_id)?;
+    let scope = build_issue_scope(auth, None)?;
+    let result = services
+        .issues
+        .assign_issue(
+            auth.tenant_ctx,
+            auth.role,
+            scope,
+            args.issue_id,
+            NoteActor {
+                user_id: auth.user_id,
+                email: &auth.user_email,
+                source: "mcp",
+            },
+            target,
+            args.note.as_deref(),
+        )
+        .await?;
+
+    Ok(ToolOutput::from_json(json!({
+        "updated": result.changed,
+        "issue_id": result.issue.id,
+        "project_slug": result.issue.project_slug,
+        "assignee": assignee_json(result.issue.assignee.as_ref()),
+        "note": result.note,
+        "ui_url": issue_ui_url(services.public_base_url, &result.issue.project_slug, result.issue.id),
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListAssignableMembersArgs {
+    issue_id: i64,
+}
+
+async fn tool_list_assignable_members(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: ListAssignableMembersArgs,
+) -> Result<ToolOutput, AppError> {
+    let scope = build_issue_scope(auth, None)?;
+    let members = services
+        .issues
+        .list_assignable_members(auth.tenant_ctx, auth.role, scope, args.issue_id)
+        .await?;
+    let items: Vec<Value> = members
+        .iter()
+        .map(|m| json!({ "email": m.email, "name": m.name }))
+        .collect();
+    Ok(ToolOutput::from_json(json!({
+        "issue_id": args.issue_id,
+        "total": items.len(),
+        "members": items,
     })))
 }

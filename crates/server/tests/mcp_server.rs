@@ -766,7 +766,7 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     assert_eq!(st, StatusCode::CREATED);
     let triage_token_raw = triage_tok_resp["raw_token"].as_str().unwrap().to_owned();
 
-    // Triage token sees all 11 tools in `tools/list` (9 read + 2 triage).
+    // Triage token sees all 13 tools in `tools/list` (9 read + 4 triage).
     let (st, _, triage_list) = send_mcp(
         &app,
         Some(&triage_token_raw),
@@ -774,7 +774,7 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    assert_eq!(triage_list["result"]["tools"].as_array().unwrap().len(), 11);
+    assert_eq!(triage_list["result"]["tools"].as_array().unwrap().len(), 13);
 
     // Call 2: `add_issue_note` succeeds and attaches a `source = "mcp"` note.
     let (st, _, note_res) = send_mcp(

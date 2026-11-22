@@ -6,7 +6,7 @@ use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 
-use crate::model::IssueSummaryView;
+use crate::model::{IssueAssigneeView, IssueSummaryView};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseView {
@@ -124,6 +124,9 @@ struct LinkedIssueRow {
     sample_event_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    assignee_user_id: Option<i64>,
+    assignee_email: Option<String>,
+    assignee_name: Option<String>,
 }
 
 pub async fn list_releases(
@@ -396,11 +399,13 @@ pub async fn list_release_issues(
                 i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type,
                 i.status, i.is_regressed, i.event_count, i.user_count, i.stored_full_events,
                 i.first_seen, i.last_seen, i.last_environment, i.first_release,
-                i.last_release, i.sample_event_id, i.created_at, i.updated_at
+                i.last_release, i.sample_event_id, i.created_at, i.updated_at,
+                i.assignee_user_id, au.email AS assignee_email, au.name AS assignee_name
          FROM issue_releases ir
          JOIN issues i ON i.tenant_id = ir.tenant_id AND i.project_id = ir.project_id AND i.id = ir.issue_id
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id
          JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
+         LEFT JOIN users au ON au.id = i.assignee_user_id
          WHERE ir.tenant_id = $1 AND ir.project_id = $2 AND ir.release_version = $3
          ORDER BY ir.last_seen DESC, i.id DESC
          LIMIT $4",
@@ -444,6 +449,11 @@ pub async fn list_release_issues(
             first_release: row.first_release,
             last_release: row.last_release,
             sample_event_id: row.sample_event_id,
+            assignee: IssueAssigneeView::from_columns(
+                row.assignee_user_id,
+                row.assignee_email,
+                row.assignee_name,
+            ),
             created_at: row.created_at,
             updated_at: row.updated_at,
         })

@@ -1,20 +1,21 @@
 use chrono::{DateTime, Duration, Utc};
 use maxi_loop_auth::model::Role;
-use maxi_loop_platform::config::is_valid_slug;
+use maxi_loop_platform::config::{is_valid_email, is_valid_slug};
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
 
+use crate::assignment::{AssignIssueResult, AssigneeTarget, assign_issue, list_assignable_members};
 use crate::breadcrumbs::extract_breadcrumbs;
 use crate::merge_split::{
     MergeIssuesInput, MergeIssuesResponse, SplitIssueInput, SplitIssueResponse,
     list_issue_fingerprints_in_tx, merge_issues, split_issue,
 };
 use crate::model::{
-    CounterBucketPoint, IssueDetailView, IssueEventView, IssueListFilter, IssueSort,
-    IssueStatsResponse, IssueStatus, IssueSummaryView, PaginatedIssuesResponse, StatsInterval,
-    UpdateIssueStatusInput,
+    CounterBucketPoint, IssueAssigneeView, IssueDetailView, IssueEventView, IssueListFilter,
+    IssueSort, IssueStatsResponse, IssueStatus, IssueSummaryView, PaginatedIssuesResponse,
+    StatsInterval, UpdateIssueStatusInput,
 };
 use crate::notes::{
     CreateIssueNoteInput, IssueNoteView, NewIssueNote, NoteActor, add_issue_note,
@@ -85,6 +86,33 @@ impl IssuesService {
     ) -> Result<(IssueSummaryView, Option<IssueNoteView>), AppError> {
         update_issue_status_with_actor(&self.db, tenant_ctx, role, scope, issue_id, actor, input)
             .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // see `assignment::assign_issue`
+    pub async fn assign_issue(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        actor: NoteActor<'_>,
+        target: AssigneeTarget,
+        note: Option<&str>,
+    ) -> Result<AssignIssueResult, AppError> {
+        assign_issue(
+            &self.db, tenant_ctx, role, scope, issue_id, actor, target, note,
+        )
+        .await
+    }
+
+    pub async fn list_assignable_members(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+    ) -> Result<Vec<IssueAssigneeView>, AppError> {
+        list_assignable_members(&self.db, tenant_ctx, role, scope, issue_id).await
     }
 
     pub async fn add_issue_note(
@@ -177,6 +205,9 @@ struct IssueSummaryDbRow {
     sample_event_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    assignee_user_id: Option<i64>,
+    assignee_email: Option<String>,
+    assignee_name: Option<String>,
 }
 
 impl From<IssueSummaryDbRow> for IssueSummaryView {
@@ -206,6 +237,11 @@ impl From<IssueSummaryDbRow> for IssueSummaryView {
             first_release: row.first_release,
             last_release: row.last_release,
             sample_event_id: row.sample_event_id,
+            assignee: IssueAssigneeView::from_columns(
+                row.assignee_user_id,
+                row.assignee_email,
+                row.assignee_name,
+            ),
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
@@ -299,6 +335,7 @@ pub async fn list_issues(
          FROM issues i \
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id \
          JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id \
+         LEFT JOIN users au ON au.id = i.assignee_user_id \
          WHERE i.tenant_id = ",
     );
     count_qb.push_bind(tenant_ctx.tenant_id());
@@ -316,10 +353,12 @@ pub async fn list_issues(
                 i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type, \
                 i.status, i.is_regressed, i.event_count, i.user_count, i.stored_full_events, \
                 i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
-                i.sample_event_id, i.created_at, i.updated_at \
+                i.sample_event_id, i.created_at, i.updated_at, \
+                i.assignee_user_id, au.email AS assignee_email, au.name AS assignee_name \
          FROM issues i \
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id \
          JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id \
+         LEFT JOIN users au ON au.id = i.assignee_user_id \
          WHERE i.tenant_id = ",
     );
     list_qb.push_bind(tenant_ctx.tenant_id());
@@ -567,6 +606,28 @@ pub async fn get_issue_event(
     row.map(IssueEventView::from).ok_or(AppError::NotFound)
 }
 
+/// Load one issue's summary within `scope` (cheap alternative to `get_issue_detail` for
+/// permission checks).
+pub async fn get_issue_summary(
+    pool: &PgPool,
+    tenant_ctx: TenantContext,
+    scope: IssueScope<'_>,
+    issue_id: i64,
+) -> Result<IssueSummaryView, AppError> {
+    if issue_id <= 0 {
+        return Err(AppError::Validation(
+            "issue_id must be a positive integer".to_owned(),
+        ));
+    }
+    let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    verify_tenant_slug_in_tx(&mut tx, tenant_ctx, scope.tenant_slug).await?;
+    let issue = load_scoped_issue_in_tx(&mut tx, tenant_ctx, &scope, issue_id).await?;
+    tx.commit()
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("commit get_issue_summary: {err}")))?;
+    Ok(issue)
+}
+
 pub async fn update_issue_status(
     pool: &PgPool,
     tenant_ctx: TenantContext,
@@ -690,6 +751,7 @@ struct ValidatedIssueFilter {
     status: Option<IssueStatus>,
     is_regressed: Option<bool>,
     issue_type: Option<IssueTypeFilter>,
+    assigned_to: Option<AssigneeFilter>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     query: Option<String>,
@@ -834,6 +896,7 @@ impl ValidatedIssueFilter {
             status,
             is_regressed: raw.is_regressed,
             issue_type: IssueTypeFilter::parse(raw.issue_type.as_deref())?,
+            assigned_to: AssigneeFilter::parse(raw.assigned_to.as_deref())?,
             since: raw.since,
             until: raw.until,
             query,
@@ -883,6 +946,18 @@ impl ValidatedIssueFilter {
                 qb.push(" AND i.issue_type = ").push_bind(t);
             }
         }
+        match &self.assigned_to {
+            None => {}
+            Some(AssigneeFilter::Unassigned) => {
+                qb.push(" AND i.assignee_user_id IS NULL");
+            }
+            Some(AssigneeFilter::UserId(id)) => {
+                qb.push(" AND i.assignee_user_id = ").push_bind(*id);
+            }
+            Some(AssigneeFilter::Email(email)) => {
+                qb.push(" AND au.email = ").push_bind(email.clone());
+            }
+        }
         if let Some(since) = self.since {
             qb.push(" AND i.last_seen >= ").push_bind(since);
         }
@@ -913,6 +988,40 @@ pub const ISSUE_TYPES: [&str; 6] = [
     "performance_consecutive_db",
     "performance_consecutive_http",
 ];
+
+/// `assigned_to` list filter (`F024`). `me` must be resolved to a user id by the caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AssigneeFilter {
+    Unassigned,
+    UserId(i64),
+    Email(String),
+}
+
+impl AssigneeFilter {
+    fn parse(raw: Option<&str>) -> Result<Option<Self>, AppError> {
+        let Some(value) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        if value.eq_ignore_ascii_case("none") {
+            return Ok(Some(Self::Unassigned));
+        }
+        if let Ok(id) = value.parse::<i64>() {
+            if id <= 0 {
+                return Err(AppError::Validation(
+                    "assigned_to user id must be positive".to_owned(),
+                ));
+            }
+            return Ok(Some(Self::UserId(id)));
+        }
+        let email = value.to_ascii_lowercase();
+        if !is_valid_email(&email) {
+            return Err(AppError::Validation(
+                "assigned_to must be 'none', a user id, or an email".to_owned(),
+            ));
+        }
+        Ok(Some(Self::Email(email)))
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum IssueTypeFilter {
@@ -1051,10 +1160,12 @@ pub(crate) async fn load_scoped_issue_in_tx(
                 i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type, \
                 i.status, i.is_regressed, i.event_count, i.user_count, i.stored_full_events, \
                 i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
-                i.sample_event_id, i.created_at, i.updated_at \
+                i.sample_event_id, i.created_at, i.updated_at, \
+                i.assignee_user_id, au.email AS assignee_email, au.name AS assignee_name \
          FROM issues i \
          JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id \
          JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id \
+         LEFT JOIN users au ON au.id = i.assignee_user_id \
          WHERE i.tenant_id = ",
     );
     qb.push_bind(tenant_ctx.tenant_id())

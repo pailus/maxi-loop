@@ -111,9 +111,35 @@ pub struct IssueListFilter {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     pub query: Option<String>,
+    /// `none` (unassigned), a user id, or an email. Callers resolve `me` to the user id first.
+    pub assigned_to: Option<String>,
     pub sort: Option<String>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+}
+
+/// The member an issue is assigned to (`F024`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueAssigneeView {
+    pub user_id: i64,
+    pub email: String,
+    pub name: String,
+}
+
+impl IssueAssigneeView {
+    /// Build from the `LEFT JOIN users` columns; `None` when unassigned (or the user row is
+    /// not visible in this tenant).
+    pub fn from_columns(
+        user_id: Option<i64>,
+        email: Option<String>,
+        name: Option<String>,
+    ) -> Option<Self> {
+        Some(Self {
+            user_id: user_id?,
+            email: email?,
+            name: name?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +169,8 @@ pub struct IssueSummaryView {
     pub first_release: Option<String>,
     pub last_release: Option<String>,
     pub sample_event_id: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<IssueAssigneeView>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

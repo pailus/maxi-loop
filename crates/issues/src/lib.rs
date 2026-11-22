@@ -1,3 +1,4 @@
+pub mod assignment;
 pub mod breadcrumbs;
 pub mod http;
 pub mod merge_split;

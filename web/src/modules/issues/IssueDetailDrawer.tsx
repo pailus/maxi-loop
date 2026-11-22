@@ -13,10 +13,12 @@ import {
 import {
   type IssueDetailView,
   type IssueStatus,
+  type IssueSummaryView,
   isPerformanceIssueType,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
 import { BreadcrumbsView } from "./BreadcrumbsView";
+import { AssigneePicker } from "./AssigneePicker";
 import { OccurrenceChart } from "./OccurrenceChart";
 import { PerformanceProblemView } from "./PerformanceProblemView";
 import { StackTraceView } from "./StackTraceView";
@@ -27,6 +29,9 @@ interface IssueDetailDrawerProps {
   canTriage: boolean;
   triageBusy: boolean;
   onUpdateStatus: (issueId: number, status: IssueStatus) => void;
+  currentUserId: number;
+  onAssigned: (issue: IssueSummaryView) => void;
+  onShowToast: (message: string) => void;
   onOpenFullView: () => void;
   onClose: () => void;
   onOpenTrace?: (traceId: string) => void;
@@ -82,6 +87,9 @@ export function IssueDetailDrawer({
   canTriage,
   triageBusy,
   onUpdateStatus,
+  currentUserId,
+  onAssigned,
+  onShowToast,
   onOpenFullView,
   onClose,
   onOpenTrace,
@@ -193,6 +201,14 @@ export function IssueDetailDrawer({
               <span>+{mergedFingerprints.length} merged</span>
             </span>
           )}
+
+          <AssigneePicker
+            issue={issue}
+            canAssign={canTriage}
+            currentUserId={currentUserId}
+            onAssigned={onAssigned}
+            onError={onShowToast}
+          />
 
           {canTriage && (
             <>

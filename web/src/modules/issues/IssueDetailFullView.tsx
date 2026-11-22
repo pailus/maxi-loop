@@ -19,6 +19,7 @@ import {
   type IssueEventView,
   type IssueNoteView,
   type IssueStatus,
+  type IssueSummaryView,
   createIssueNote,
   fetchIssueEvents,
   fetchIssueNotes,
@@ -32,6 +33,7 @@ import {
   formatShortDate,
   normalizeTagsList,
 } from "./IssueDetailDrawer";
+import { AssigneePicker } from "./AssigneePicker";
 import { OccurrenceChart } from "./OccurrenceChart";
 import { PerformanceProblemView } from "./PerformanceProblemView";
 import { StackTraceView } from "./StackTraceView";
@@ -41,6 +43,8 @@ interface IssueDetailFullViewProps {
   canTriage: boolean;
   triageBusy: boolean;
   onUpdateStatus: (issueId: number, status: IssueStatus) => void;
+  currentUserId: number;
+  onAssigned: (issue: IssueSummaryView) => void;
   onRefreshIssue?: () => Promise<void>;
   onSelectIssue?: (issueId: number) => void;
   onShowToast?: (message: string) => void;
@@ -56,6 +60,8 @@ export function IssueDetailFullView({
   canTriage,
   triageBusy,
   onUpdateStatus,
+  currentUserId,
+  onAssigned,
   onRefreshIssue,
   onSelectIssue,
   onShowToast,
@@ -255,37 +261,49 @@ export function IssueDetailFullView({
           </div>
         </div>
 
-        {canTriage && (
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              disabled={triageBusy || issue.status === "resolved"}
-              onClick={() => onUpdateStatus(issue.id, "resolved")}
-              className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Check size={14} />
-              <span>Resolve</span>
-            </button>
-            <button
-              type="button"
-              disabled={triageBusy || issue.status === "ignored"}
-              onClick={() => onUpdateStatus(issue.id, "ignored")}
-              className="h-8 px-3 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <EyeOff size={14} />
-              <span>Ignore</span>
-            </button>
-            <button
-              type="button"
-              disabled={triageBusy || issue.status === "unresolved"}
-              onClick={() => onUpdateStatus(issue.id, "unresolved")}
-              className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <RotateCcw size={13} />
-              <span>Unresolve</span>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          <AssigneePicker
+            issue={issue}
+            canAssign={canTriage}
+            currentUserId={currentUserId}
+            onAssigned={(updated, note) => {
+              onAssigned(updated);
+              if (note) setNotes((prev) => [note, ...prev]);
+            }}
+            onError={(msg) => onShowToast?.(msg)}
+          />
+          {canTriage && (
+            <>
+              <button
+                type="button"
+                disabled={triageBusy || issue.status === "resolved"}
+                onClick={() => onUpdateStatus(issue.id, "resolved")}
+                className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Check size={14} />
+                <span>Resolve</span>
+              </button>
+              <button
+                type="button"
+                disabled={triageBusy || issue.status === "ignored"}
+                onClick={() => onUpdateStatus(issue.id, "ignored")}
+                className="h-8 px-3 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <EyeOff size={14} />
+                <span>Ignore</span>
+              </button>
+              <button
+                type="button"
+                disabled={triageBusy || issue.status === "unresolved"}
+                onClick={() => onUpdateStatus(issue.id, "unresolved")}
+                className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw size={13} />
+                <span>Unresolve</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Horizontal MaxiBoard Tabs */}

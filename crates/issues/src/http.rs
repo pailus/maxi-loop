@@ -7,13 +7,16 @@ use maxi_loop_auth::model::AuthSession;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 
+use crate::assignment::{
+    AssignIssueInput, AssignIssueResult, assign_issue, list_assignable_members,
+};
 use crate::merge_split::{
     MergeIssuesInput, MergeIssuesResponse, SplitIssueInput, SplitIssueResponse, merge_issues,
     split_issue,
 };
 use crate::model::{
-    IssueDetailView, IssueEventView, IssueListFilter, IssueStatsResponse, IssueSummaryView,
-    PaginatedIssuesResponse, UpdateIssueStatusInput,
+    IssueAssigneeView, IssueDetailView, IssueEventView, IssueListFilter, IssueStatsResponse,
+    IssueSummaryView, PaginatedIssuesResponse, UpdateIssueStatusInput,
 };
 use crate::notes::{
     CreateIssueNoteInput, IssueNoteView, NoteActor, add_issue_note, list_issue_notes,
@@ -23,8 +26,8 @@ use crate::releases::{
     upsert_release,
 };
 use crate::service::{
-    IssueScope, get_issue_detail, get_issue_event, get_issue_stats, list_issue_events, list_issues,
-    update_issue_status_with_actor,
+    IssueScope, get_issue_detail, get_issue_event, get_issue_stats, get_issue_summary,
+    list_issue_events, list_issues, update_issue_status_with_actor,
 };
 
 pub fn router<S>() -> Router<S>
@@ -68,6 +71,14 @@ where
             "/issues/{issue_id}/notes",
             get(default_list_issue_notes_handler).post(default_add_issue_note_handler),
         )
+        .route(
+            "/issues/{issue_id}/assignee",
+            patch(default_assign_issue_handler).post(default_assign_issue_handler),
+        )
+        .route(
+            "/issues/{issue_id}/assignable-members",
+            get(default_assignable_members_handler),
+        )
         // Explicit slug-scoped hierarchy routes: /t/{tenant_slug}/...
         .route("/t/{tenant_slug}/issues", get(tenant_list_issues_handler))
         .route(
@@ -106,6 +117,14 @@ where
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/notes",
             get(project_list_issue_notes_handler).post(project_add_issue_note_handler),
         )
+        .route(
+            "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/assignee",
+            patch(project_assign_issue_handler).post(project_assign_issue_handler),
+        )
+        .route(
+            "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/assignable-members",
+            get(project_assignable_members_handler),
+        )
         // Release tracking routes
         .route(
             "/releases",
@@ -139,10 +158,18 @@ struct EventsListQuery {
 
 /// Narrow an `IssueScope` and `IssueListFilter` to the API token's single project when authenticated
 /// via `Authorization: Bearer mlapi_...`, rejecting requests that explicitly target another project.
+/// Also resolves `assigned_to=me` to the caller's user id (every list handler calls this).
 fn apply_token_to_issue_filter(
     session: &AuthSession,
     filter: &mut IssueListFilter,
 ) -> Result<(), AppError> {
+    if filter
+        .assigned_to
+        .as_deref()
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("me"))
+    {
+        filter.assigned_to = Some(session.user.id.to_string());
+    }
     if let Some(tok) = &session.api_token {
         if let Some(pid) = filter.project_id
             && pid != tok.project_id
@@ -857,4 +884,112 @@ async fn project_split_issue_handler(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(res)))
+}
+
+// --- F024: issue assignment ---
+
+async fn assign_issue_in_scope(
+    state: &AuthState,
+    session: &AuthSession,
+    scope: IssueScope<'_>,
+    issue_id: i64,
+    input: AssignIssueInput,
+) -> Result<AssignIssueResult, AppError> {
+    session.enforce_api_token_write()?;
+    let target = input.target()?;
+    let issue = get_issue_summary(&state.db, session.tenant_ctx, scope.clone(), issue_id).await?;
+    session.enforce_project_write(issue.project_id, issue.workspace_id)?;
+    assign_issue(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        scope,
+        issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: if session.is_api_token() { "api" } else { "ui" },
+        },
+        target,
+        input.note.as_deref(),
+    )
+    .await
+}
+
+async fn assignable_members_in_scope(
+    state: &AuthState,
+    session: &AuthSession,
+    scope: IssueScope<'_>,
+    issue_id: i64,
+) -> Result<Vec<IssueAssigneeView>, AppError> {
+    let issue = get_issue_summary(&state.db, session.tenant_ctx, scope.clone(), issue_id).await?;
+    // Only callers who can assign may enumerate assignable members.
+    session.enforce_project_write(issue.project_id, issue.workspace_id)?;
+    list_assignable_members(&state.db, session.tenant_ctx, session.role, scope, issue_id).await
+}
+
+async fn default_assign_issue_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(issue_id): Path<i64>,
+    Json(input): Json<AssignIssueInput>,
+) -> Result<Json<AssignIssueResult>, AppError> {
+    let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    Ok(Json(
+        assign_issue_in_scope(&state, &session, scope, issue_id, input).await?,
+    ))
+}
+
+async fn project_assign_issue_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug, issue_id)): Path<(
+        String,
+        String,
+        String,
+        i64,
+    )>,
+    Json(input): Json<AssignIssueInput>,
+) -> Result<Json<AssignIssueResult>, AppError> {
+    let scope = token_scoped_issue_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    Ok(Json(
+        assign_issue_in_scope(&state, &session, scope, issue_id, input).await?,
+    ))
+}
+
+async fn default_assignable_members_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(issue_id): Path<i64>,
+) -> Result<Json<Vec<IssueAssigneeView>>, AppError> {
+    let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    Ok(Json(
+        assignable_members_in_scope(&state, &session, scope, issue_id).await?,
+    ))
+}
+
+async fn project_assignable_members_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug, issue_id)): Path<(
+        String,
+        String,
+        String,
+        i64,
+    )>,
+) -> Result<Json<Vec<IssueAssigneeView>>, AppError> {
+    let scope = token_scoped_issue_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    Ok(Json(
+        assignable_members_in_scope(&state, &session, scope, issue_id).await?,
+    ))
 }

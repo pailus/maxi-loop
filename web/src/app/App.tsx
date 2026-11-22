@@ -763,6 +763,7 @@ export function App() {
             initialTabMode={issuesTabMode}
             initialReleaseFilter={selectedReleaseFilter}
             canTriage={canTriage}
+            currentUserId={session.user.id}
             onShowToast={showToast}
             onNavigateToProjects={() => {
               setActiveNav("projects");

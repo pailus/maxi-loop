@@ -159,9 +159,17 @@ export interface IssueListFilter {
   /** `error`, `performance`, or an exact performance issue type. */
   issue_type?: string;
   query?: string;
+  /** `me`, `none`, or a user id. */
+  assigned_to?: string;
   sort?: IssueSortKey;
   page?: number;
   per_page?: number;
+}
+
+export interface IssueAssigneeView {
+  user_id: number;
+  email: string;
+  name: string;
 }
 
 /** `users` sorts by distinct affected users (impact). */
@@ -193,6 +201,7 @@ export interface IssueSummaryView {
   first_release: string | null;
   last_release: string | null;
   sample_event_id: string | null;
+  assignee?: IssueAssigneeView | null;
   created_at: string;
   updated_at: string;
 }
@@ -440,6 +449,7 @@ export async function fetchIssues(filter: IssueListFilter = {}): Promise<Paginat
   if (filter.is_regressed !== undefined) params.set("is_regressed", String(filter.is_regressed));
   if (filter.issue_type) params.set("issue_type", filter.issue_type);
   if (filter.query && filter.query.trim()) params.set("query", filter.query.trim());
+  if (filter.assigned_to) params.set("assigned_to", filter.assigned_to);
   if (filter.sort) params.set("sort", filter.sort);
   if (filter.page !== undefined) params.set("page", String(filter.page));
   if (filter.per_page !== undefined) params.set("per_page", String(filter.per_page));
@@ -477,6 +487,27 @@ export async function updateIssueStatus(
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
+}
+
+export interface AssignIssueResult {
+  issue: IssueSummaryView;
+  note: IssueNoteView | null;
+  changed: boolean;
+}
+
+/** Assign an issue to a member (`null` unassigns). */
+export async function assignIssue(
+  issueId: number,
+  assigneeUserId: number | null,
+): Promise<AssignIssueResult> {
+  return requestJson<AssignIssueResult>(`/api/v1/issues/${issueId}/assignee`, {
+    method: "PATCH",
+    body: JSON.stringify({ assignee_user_id: assigneeUserId }),
+  });
+}
+
+export async function fetchAssignableMembers(issueId: number): Promise<IssueAssigneeView[]> {
+  return requestJson<IssueAssigneeView[]>(`/api/v1/issues/${issueId}/assignable-members`);
 }
 
 export async function mergeIssues(

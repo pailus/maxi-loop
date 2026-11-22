@@ -27,6 +27,7 @@ import {
   updateIssueStatus,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
+import { AssigneeAvatar } from "./AssigneePicker";
 import { IssueDetailDrawer, formatRelativeAge } from "./IssueDetailDrawer";
 import { IssueDetailFullView } from "./IssueDetailFullView";
 
@@ -63,6 +64,7 @@ interface IssuesViewProps {
   initialTabMode?: IssuesTabMode;
   initialReleaseFilter?: string;
   canTriage: boolean;
+  currentUserId: number;
   onShowToast: (message: string, undoAction?: () => void) => void;
   onNavigateToProjects: () => void;
   onOpenTrace?: (traceId: string) => void;
@@ -89,6 +91,7 @@ export function IssuesView({
   initialTabMode = "unresolved",
   initialReleaseFilter = "",
   canTriage,
+  currentUserId,
   onShowToast,
   onNavigateToProjects,
   onOpenTrace,
@@ -102,6 +105,7 @@ export function IssuesView({
   const [localSearch, setLocalSearch] = useState("");
   const [environment, setEnvironment] = useState("");
   const [issueTypeFilter, setIssueTypeFilter] = useState<"" | "error" | "performance">("");
+  const [assigneeFilter, setAssigneeFilter] = useState<"" | "me" | "none">("");
   const [release, setRelease] = useState(initialReleaseFilter);
 
   useEffect(() => {
@@ -173,6 +177,7 @@ export function IssuesView({
         status: statusParam,
         is_regressed: isRegressedParam,
         issue_type: issueTypeFilter || undefined,
+        assigned_to: assigneeFilter || undefined,
         query: effectiveQuery,
         sort,
         page,
@@ -207,6 +212,7 @@ export function IssuesView({
     selectedProjectSlug,
     environment,
     issueTypeFilter,
+    assigneeFilter,
     release,
     tabMode,
     effectiveQuery,
@@ -289,6 +295,25 @@ export function IssuesView({
     }
   }
 
+  function handleAssigned(updated: IssueSummaryView) {
+    setIssueDetail((prev) =>
+      prev && prev.issue.id === updated.id ? { ...prev, issue: updated } : prev,
+    );
+    if (assigneeFilter) {
+      // The issue may no longer match "Assigned to me" / "Unassigned".
+      void loadIssuesList();
+    } else {
+      setIssuesPage((prev) =>
+        prev
+          ? { ...prev, items: prev.items.map((i) => (i.id === updated.id ? updated : i)) }
+          : prev,
+      );
+    }
+    onShowToast(
+      updated.assignee ? `Assigned to ${updated.assignee.name}` : "Issue unassigned",
+    );
+  }
+
   const refreshCurrentDetail = useCallback(async () => {
     if (selectedIssueId === null) return;
     try {
@@ -354,6 +379,8 @@ export function IssuesView({
         canTriage={canTriage}
         triageBusy={triageBusy}
         onUpdateStatus={handleTriageStatus}
+        currentUserId={currentUserId}
+        onAssigned={handleAssigned}
         onRefreshIssue={refreshCurrentDetail}
         onSelectIssue={(nextId) => setSelectedIssueId(nextId)}
         onShowToast={(msg) => onShowToast(msg)}
@@ -532,6 +559,20 @@ export function IssuesView({
             <option value="">Type: All</option>
             <option value="error">Type: Errors</option>
             <option value="performance">Type: Performance</option>
+          </select>
+
+          <select
+            value={assigneeFilter}
+            onChange={(e) => {
+              setAssigneeFilter(e.target.value as "" | "me" | "none");
+              setPage(1);
+            }}
+            aria-label="Filter by assignee"
+            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover-strong)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+          >
+            <option value="">Assignee: All</option>
+            <option value="me">Assigned to me</option>
+            <option value="none">Unassigned</option>
           </select>
 
           <input
@@ -763,6 +804,12 @@ export function IssuesView({
                             {item.last_release}
                           </span>
                         )}
+
+                        {item.assignee && (
+                          <span className="ml-auto inline-flex">
+                            <AssigneeAvatar assignee={item.assignee} size={18} />
+                          </span>
+                        )}
                       </div>
 
                       {/* Exception Title */}
@@ -902,6 +949,9 @@ export function IssuesView({
           canTriage={canTriage}
           triageBusy={triageBusy}
           onUpdateStatus={handleTriageStatus}
+          currentUserId={currentUserId}
+          onAssigned={handleAssigned}
+          onShowToast={(msg) => onShowToast(msg)}
           onOpenFullView={() => setFullViewOpen(true)}
           onOpenTrace={onOpenTrace}
           onClose={() => setSelectedIssueId(null)}

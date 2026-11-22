@@ -147,7 +147,7 @@ fn render_triage_issue(
 
     let triage_step = if auth.can_triage {
         format!(
-            "5. Record your findings by calling `add_issue_note(issue_id={issue_id}, body=...)` and, only if confirmed non-actionable or fixed, call `update_issue_status`."
+            "5. Record your findings by calling `add_issue_note(issue_id={issue_id}, body=...)` and, only if confirmed non-actionable or fixed, call `update_issue_status`. If it needs a human owner, call `list_assignable_members(issue_id={issue_id})` and `assign_issue(issue_id={issue_id}, assignee=<email>, note=...)`; use `assignee=\"me\"` only when you will fix it on behalf of the token owner."
         )
     } else {
         "5. This MCP token is read-only: summarize your recommended status (`resolved` / `ignored` / `unresolved`) and next action for the developer.".to_owned()
