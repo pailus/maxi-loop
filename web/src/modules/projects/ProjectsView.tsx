@@ -18,6 +18,7 @@ import {
   rotateProjectDsn,
   updateProjectSettings,
 } from "../../lib/api";
+import { PlatformChip } from "./PlatformLogo";
 import {
   PROJECT_ICON_OPTIONS,
   PROJECT_SWATCH_COLORS,
@@ -326,9 +327,7 @@ export function ProjectsView({
                 <span className="pm-mono text-xs text-[var(--color-text-dim)]">
                   ({p.slug})
                 </span>
-                <span className="pm-lozenge pm-lozenge-primary">
-                  {p.platform}
-                </span>
+                <PlatformChip platform={p.platform} />
                 {projectTags.map((tag) => (
                   <button
                     key={tag}
