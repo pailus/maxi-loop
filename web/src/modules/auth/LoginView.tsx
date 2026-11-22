@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Eye,
+  EyeOff,
   Lock,
   Mail,
   Terminal,
@@ -23,6 +25,7 @@ interface LoginViewProps {
 export function LoginView({ health, onAuthenticated }: LoginViewProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [tenantSlug, setTenantSlug] = useState("");
   const [showTenantInput, setShowTenantInput] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -160,14 +163,24 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                 />
                 <input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="pm-input pl-10 h-10 text-sm"
+                  className="pm-input pl-10 pr-10 h-10 text-sm"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  title={showPassword ? "Hide password" : "Show password"}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition cursor-pointer"
+                >
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
               </div>
             </div>
 
