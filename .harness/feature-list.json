@@ -476,6 +476,73 @@
         "F020"
       ],
       "notes": "Agreed with user 2026-11-22 (after F020; production packaging last). Done 2026-11-22: loadgen --kind error|transaction|mixed + bench_phase2.py + docs/benchmarks-phase2.md. 240,600 accepted envelopes across 8 runs (no-spool & spool), 0 lost, 0 5xx; idle RSS 12.0 MiB, peak RSS 115.3 / 106.0 MiB, sustained persist 3.67k err / 3.22k tx / 2.22k mixed items/s (spool overhead 0.5%–3.2%)."
+    },
+    {
+      "id": "F022",
+      "title": "Invite-by-link member onboarding",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Admins with member-management rights create single-use invite links (7-day expiry) for an email + role + tenant/workspace scope; same privilege rules as direct member creation",
+        "Only the SHA-256 of the 256-bit token is stored; the raw link is shown once; token travels in the URL fragment",
+        "Invitee previews the invite and either creates an account (name + own password) or proves an existing account's password, then is signed in",
+        "Pending invites listed and revocable per scope; re-inviting replaces the old link; expired/revoked/used links are rejected"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "depends_on": [
+        "F003"
+      ],
+      "notes": "Done 2026-11-22 (D015). Email delivery of the link is not implemented: admin copies the link. Direct creation with admin-set password kept as 'Create directly'."
+    },
+    {
+      "id": "F023",
+      "title": "Self-service password change",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Signed-in user changes password after verifying the current one (12-256 chars, Argon2id)",
+        "All other sessions of the user are revoked; current session stays",
+        "Rate-limited; wrong current password -> 403"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "depends_on": [
+        "F003"
+      ],
+      "notes": "Done 2026-11-22. Forgot-password/reset by email not implemented (needs email delivery)."
+    },
+    {
+      "id": "F024",
+      "title": "Issue assignment (UI + MCP)",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "One optional assignee per issue; triage-capable callers can assign/reassign/unassign; viewers and read-only tokens cannot",
+        "Only active members who can triage the issue's project are assignable (SQL `user_can_triage_project`, single rule shared by API, list and trigger)",
+        "Assignment changes recorded on the issue timeline; removed/downgraded members are auto-unassigned (trigger)",
+        "Issue list filter `assigned_to=me|none|<user id>|<email>`; assignee shown in list, drawer and full view",
+        "MCP: `assign_issue` ('me' | email | null) and `list_assignable_members` (triage scope), `assigned_to` filter on `list_issues`, assignee in `list_issues`/`get_issue`; triage prompt suggests assignment"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "depends_on": [
+        "F003",
+        "F011"
+      ],
+      "notes": "Done 2026-11-22 (D016). Stage B (per-member project access, invite project picker) agreed as next step: tighten `user_can_triage_project`. Auto-unassign by trigger does not write a timeline note. No assignee notification yet."
     }
   ]
 }

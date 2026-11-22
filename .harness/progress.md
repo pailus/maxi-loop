@@ -33,6 +33,96 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F024 issue assignment (UI + MCP)
+
+**Status at end of session:** done (browser click-through pending by user)
+
+**Done:**
+- `migrations/0015_issue_assignment.sql` (column, `user_can_triage_project`, unassign trigger); `crates/issues/src/assignment.rs`; `assignee` on `IssueSummaryView` (all three issue SELECTs); `assigned_to` list filter (`me` resolved in HTTP/MCP layers); routes `/issues/{id}/assignee` (PATCH/POST) and `/issues/{id}/assignable-members` (+ `/t/.../p/...` variants); `get_issue_summary` helper.
+- MCP: `assign_issue`, `list_assignable_members`, `list_issues.assigned_to`, assignee in `list_issues`/`get_issue`, triage prompt step; `mcp_server.rs` tool count 11 → 13 (intended: two new triage tools).
+- Web: `issues/AssigneePicker.tsx` (drawer + full view, "Assign to me", unassign, search), assignee avatar on list rows, "Assignee" filter (All / Assigned to me / Unassigned).
+
+**Verification run:**
+- `cargo test -p maxi-loop --test f024_issue_assignment` → PASS (eligibility incl. other workspace/viewer/other tenant/unknown, viewer 403, cross-tenant 404, no-op, filters me/none/email/invalid, timeline notes, auto-unassign on delete + downgrade, MCP assign me/email-rejected/null, read-only token denied)
+- `npm --prefix web run build`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace --no-fail-fast` → all PASS except known flake `phase2_pii_releases_alerts.rs:777` (passes 2/2 when run alone; see handoff)
+- Release build + restart `maxi-loop-dev`; :8080 anon assign/assignable → 401; bundle contains new UI. No browser click-through.
+
+**Security notes:**
+- Server-side checks: triage role + `enforce_project_write` (API tokens need write + same project), tenant RLS (foreign/unknown users resolve as not assignable without revealing existence), assignable list limited to triagers, LIMIT 500. Parameterized SQL only; `tracing` added to issues crate from the existing workspace dependency (no new package).
+
+**Key decisions & why:**
+- D016.
+
+**Not finished / blockers:**
+- Stage B (per-member project access + invite project picker) not started. Trigger-based unassign writes no timeline note. No notification to the assignee.
+
+---
+
+### 2026-11-22 — Claude Code — F022 invite links + F023 change password (+ Team & settings full width)
+
+**Status at end of session:** done (browser click-through pending by user)
+
+**Done:**
+- `migrations/0014_invitations.sql`; `crates/auth/src/invitations.rs` (create/list/revoke, public preview/accept); `members::resolve_grant_target` and `service::open_session` extracted for reuse; `service::change_password` + `POST /api/v1/auth/password`.
+- Web: Members tab "Invite link" / "Create directly" toggle, show-once link box, pending invitations table with revoke; `auth/AcceptInviteView.tsx` (opened from `/#invite=`); `auth/ChangePasswordDialog.tsx` (sidebar "Change password").
+- Team & settings tabs no longer capped at `max-w-5xl/6xl`.
+
+**Verification run:**
+- `cargo test -p maxi-loop --test f022_invitations_password` → PASS (new: isolation, single-use, revoke, re-invite, expiry, existing-account password, weak password, member forbidden, CSRF, other sessions revoked)
+- `npm --prefix web run build`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` → PASS; `cargo test --workspace --no-fail-fast` → PASS (0 failures)
+- Release build + restart `maxi-loop-dev`; curl on :8080: preview/accept bad token 401, anon `/invitations` and `/auth/password` 401; served bundle contains the new UI. No browser click-through (no account credentials for the dev DB).
+
+**Security notes:**
+- Token: CSPRNG 256-bit, SHA-256 at rest, fragment-only, 7-day expiry, single-use with row lock; hash never returned. Admin endpoints: session + CSRF, scope/role hierarchy checks, tenant RLS; cross-tenant revoke → 404. Accept for existing accounts verifies password and uses the login rate limiter; password change rate-limited, verifies current password, revokes other sessions. Generic errors; tokens/passwords not logged. No new dependencies.
+
+**Key decisions & why:**
+- D015.
+
+**Not finished / blockers:**
+- Invite email delivery and forgot-password reset (both need an email sender outside `alerts`).
+
+---
+
+### 2026-11-22 — Claude Code — UI: menu & tabs kept in URL (refresh-safe)
+
+**Status at end of session:** done (browser check pending by user)
+
+**Done:**
+- New `web/src/lib/urlState.ts`; App menu (`view`), project/workspace, back/forward (`popstate`); tabs in Issues (`status`), issue selection (`issue`, `full`), full-view tab (`detail`), Performance (`tab`, `trace`), Releases, Alerts, MCP, Team & settings (`tab`).
+
+**Verification run:**
+- `npm run build` (tsc + vite) → PASS; `cargo build --release -p maxi-loop` + restart `maxi-loop-dev` → PASS
+- Automated browser check NOT run (creating a throwaway test tenant in the dev DB was denied).
+
+**Key decisions & why:**
+- D014.
+
+**Not finished / blockers:**
+- Manual check by user on :8080.
+
+---
+
+### 2026-11-22 — Claude Code — UI polish: softer hover & card borders
+
+**Status at end of session:** done
+
+**Done:**
+- `web/src/index.css`: lighter `--pm-col` / `--color-bg-muted` / `--pm-card-hover` surfaces, softer `--color-bg-hover`, new `--color-bg-hover-strong`, lighter `--color-border`, card shadow without extra ring, 150ms colour transitions on interactive elements.
+- Filled (`--pm-col`) buttons in Issues/IssueDetail/Projects and neutral badges (Alerts, Breadcrumbs, IssueDetailFullView) switched to `--color-bg-hover-strong` so they keep contrast.
+
+**Verification run:**
+- `npm run build` (web) → PASS; `npx tsc --noEmit` → PASS
+- `cargo build --release -p maxi-loop` + `systemctl --user restart maxi-loop-dev` → new CSS served on :8080 (UI is embedded via rust-embed; restart needed after web changes)
+
+**Key decisions & why:**
+- D013 (user-approved deviation from D009 MaxiBoard tokens).
+
+**Not finished / blockers:**
+- none (visual check left to user on the running dev server)
+
+---
+
 ### 2026-11-22 — Claude Code + Antigravity — F021: Phase 2 load test & benchmark report
 
 **Status at end of session:** done
@@ -186,56 +276,3 @@
 
 **Verification run:**
 - `npm --prefix web run build` → PASS; `cargo build --release -p maxi-loop` → PASS; dev service restarted; headless Chrome screenshots (desktop Issues, Projects + toast, mobile) OK
-
-### 2026-11-22 — Claude Code — UI polish: MaxiBoard menu typography + responsive shell
-
-**Status at end of session:** done (fba02cc, merged to main)
-
-**Done:**
-- Compared against MaxiBoard source (`maxi-code/static/src/pm/shell/BoardShell.jsx`, `maxiboard.css`): sidebar nav was 12px/16px icons vs MaxiBoard 14px/18px; no mobile layout at all (sidebar always visible, topbar overflowing at 390px).
-- `web/src/app/App.tsx`: nav buttons → `NAV_ITEMS` + `NavItem` (text-sm, 18px icons, `min-h-11 md:min-h-9`); topbar responsive (hamburger, search icon → drop-down search row, `+` icon on mobile; lozenges hidden < lg/xl); sidebar becomes off-canvas drawer < md (backdrop, Esc, closes on navigation); new mobile bottom tab bar (Issues / Performance / Releases / Alerts / More→drawer); toast centered above tab bar on mobile; `h-[100dvh]`.
-- `ProjectTree`, `WorkspaceSwitcher`: rows text-sm, touch heights on mobile.
-- `index.css`: `.pm-tab` 14px / 40px (44px mobile); `.pm-input` 14px; inputs/selects 16px on phones (no iOS focus-zoom).
-- All views: `h-8/h-9` controls text-xs → text-sm; `px-6` → `px-4 md:px-6`; page H1 `text-xl md:text-2xl font-semibold`; header rows wrap; tables scroll horizontally on mobile (`overflow-x-auto`, `max-md:min-w-[640px]`, base 13px).
-- Side panels < lg: Issue/Transaction/Span inspectors become full-screen overlays under the topbar; Releases/Alerts/Projects action panels stack below content. Issues no longer auto-opens the first issue < lg; filter toolbar is a 2-col grid on mobile.
-
-**Verification run:**
-- `npm --prefix web run build` → PASS; `cargo build --release -p maxi-loop` → PASS; `maxi-loop-dev.service` restarted
-- Headless Chrome (CDP) screenshots at 390×844, 900×1000, 1440×900 of Issues, issue inspector, drawer, Performance, Releases, Alerts, MCP, Projects, Team, Create-project wizard → layouts render without overflow
-
-### 2026-11-22 — Claude Code — Official stack logos in Create Project wizard
-
-**Status at end of session:** done
-
-**Done:**
-- Replaced text badges in the platform picker with official stack logos: `web/src/modules/projects/platformLogos.ts` (SVG paths vendored from Simple Icons v16.38.1, CC0-1.0, no new npm dependency) + `PlatformLogo.tsx` tile (brand color tinted to the light theme; black brands Rust/Express use navy `#172B4D`, React cyan darkened to `#149ECA` for contrast)
-- `ProjectsView` project cards: replaced the plain platform lozenge with `PlatformChip` (logo + platform label; unknown platforms fall back to a neutral `</>` icon + raw id). Smoke: Projects & DSN page renders chips with logos for all cards.
-- Removed the legacy inline "Create project" form from the `ProjectsView` right drawer (state, handler, unused imports); the drawer keeps the SDK quickstart and all project creation goes through the `CreateProjectDialog` wizard. Smoke: old form gone, header "Create project" opens the wizard.
-- `ProjectsView` SDK quickstart rebuilt on the wizard's snippets: project DSN selector + logo tabs for all 10 platforms (defaults to the project's own platform); shared `SdkSetupSteps`/`CodeBlock` extracted to `web/src/modules/projects/SdkSetupSteps.tsx` and reused by `CreateProjectDialog`. Smoke: Go tab renders Go install/configure/verify with the selected project's DSN.
-
-**Verification run:**
-- `npm --prefix web run build` → PASS; `cargo build --release -p maxi-loop` → PASS
-- Live headless Chrome screenshot of the picker on `maxi-loop-dev.service` → all 10 logos render
-
-**Security notes:**
-- Vendored SVG path data validated (only SVG path-command characters, 6-digit hex colors) before embedding; rendered via React `d=` attribute (no innerHTML)
-
-### 2026-11-22 — Claude Code — Sentry-style Create Project onboarding wizard
-
-**Status at end of session:** done
-
-**Done:**
-- Rebuilt `web/src/modules/projects/CreateProjectDialog.tsx` as a 3-step wizard: (1) choose platform (searchable/filterable card grid), (2) name project (name, slug, icon, tags, collapsible advanced retention/rate limit), (3) set up SDK — DSN + platform-specific Install/Configure/Verify snippets with copy buttons, and a live "Waiting to receive first event…" indicator that polls issues + transactions for the new project every 3s until the first event arrives ("Take me to my event" → Issues filtered to the project)
-- Added `web/src/modules/projects/onboardingPlatforms.ts` (platform catalogue + snippet builder: Python, FastAPI, Django, Flask, Go, Rust, Node.js, Express, React, Browser JS, Other)
-- `web/src/app/App.tsx`: dialog stays open after create; new `onViewIssues` handler
-
-**Verification run:**
-- `npm --prefix web run build` → PASS; `npm --prefix web audit` → 0 vulnerabilities
-- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (95/95), `cargo build --workspace` → PASS
-- Live headless Chrome smoke on `maxi-loop-dev.service`: wizard FastAPI → create → waiting state → sent a real `ZeroDivisionError` via official `sentry-sdk` → dialog showed "First error received" → navigated to Issues filtered to the project. Smoke project deleted from DB afterwards.
-
-**Security notes:**
-- No backend/API changes; uses existing CSRF-protected `POST /api/v1/projects` and authenticated read endpoints. Platform id still validated server-side by `parse_platform`.
-
-**Not finished / blockers:**
-- None
