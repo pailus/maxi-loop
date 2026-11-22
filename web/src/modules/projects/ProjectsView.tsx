@@ -1,6 +1,5 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  AlertCircle,
   ArrowRight,
   Check,
   ChevronDown,
@@ -14,18 +13,11 @@ import {
 } from "lucide-react";
 import {
   type ProjectView,
-  createProject,
   rotateProjectDsn,
   updateProjectSettings,
 } from "../../lib/api";
 import { PlatformChip } from "./PlatformLogo";
-import {
-  PROJECT_ICON_OPTIONS,
-  PROJECT_SWATCH_COLORS,
-  ProjectIcon,
-  type ProjectIconId,
-  saveProjectVisual,
-} from "./ProjectIcon";
+import { ProjectIcon } from "./ProjectIcon";
 
 interface ProjectsViewProps {
   workspaceName: string;
@@ -37,15 +29,6 @@ interface ProjectsViewProps {
   onProjectsChanged: () => Promise<void>;
   onOpenProjectIssues: (projectSlug: string) => void;
   onShowToast: (message: string) => void;
-}
-
-function slugifyName(raw: string): string {
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
 }
 
 function parseTagsCsv(raw: string): string[] {
@@ -74,15 +57,6 @@ export function ProjectsView({
   onOpenProjectIssues,
   onShowToast,
 }: ProjectsViewProps) {
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [slugTouched, setSlugTouched] = useState(false);
-  const [platform, setPlatform] = useState("python");
-  const [tagsInput, setTagsInput] = useState("");
-  const [retentionOverride, setRetentionOverride] = useState("");
-  const [rateLimit, setRateLimit] = useState("");
-  const [selectedIcon, setSelectedIcon] = useState<ProjectIconId>("software-development");
-  const [selectedColor, setSelectedColor] = useState(PROJECT_SWATCH_COLORS[0]);
   const [sdkLang, setSdkLang] = useState<"python" | "go" | "rust">("python");
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [editTags, setEditTags] = useState("");
@@ -94,74 +68,8 @@ export function ProjectsView({
   const [groupByTag, setGroupByTag] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
 
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [rotatingSlug, setRotatingSlug] = useState<string | null>(null);
-
-  function handleNameChange(val: string) {
-    setName(val);
-    if (!slugTouched) {
-      setSlug(slugifyName(val));
-    }
-  }
-
-  async function handleCreateProject(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const cleanName = name.trim();
-    const cleanSlug = slug.trim();
-    if (!cleanName || !cleanSlug) {
-      setFormError("Project name and URL-safe slug are required.");
-      return;
-    }
-
-    const parsedRetention = retentionOverride.trim()
-      ? Number.parseInt(retentionOverride.trim(), 10)
-      : null;
-    if (
-      parsedRetention !== null &&
-      (Number.isNaN(parsedRetention) ||
-        parsedRetention < 1 ||
-        parsedRetention > globalRetentionDays)
-    ) {
-      setFormError(
-        `Retention override must be between 1 and ${globalRetentionDays} days.`,
-      );
-      return;
-    }
-
-    const parsedRate = rateLimit.trim()
-      ? Number.parseInt(rateLimit.trim(), 10)
-      : null;
-
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      const created = await createProject({
-        name: cleanName,
-        slug: cleanSlug,
-        platform,
-        tags: parseTagsCsv(tagsInput),
-        retention_days_override: parsedRetention,
-        rate_limit_per_minute: parsedRate,
-        workspace_slug: workspaceSlug,
-      });
-      saveProjectVisual(created.slug, selectedIcon, selectedColor);
-      setName("");
-      setSlug("");
-      setSlugTouched(false);
-      setTagsInput("");
-      setRetentionOverride("");
-      await onProjectsChanged();
-      onShowToast(`Project ${created.slug} created and DSN cached`);
-    } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : "Failed to create project.",
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   function handleCopyDsn(proj: ProjectView) {
     navigator.clipboard?.writeText(proj.dsn).catch(() => {});
@@ -714,218 +622,8 @@ export function ProjectsView({
         </div>
       </section>
 
-      {/* Right Docked Drawer: Create Project + SDK Quickstart */}
+      {/* Right Docked Drawer: SDK Quickstart (project creation lives in the CreateProjectDialog wizard) */}
       <aside className="w-full lg:w-[440px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel p-5 overflow-y-auto max-h-[calc(100vh-56px)]">
-        <div className="pb-3 border-b border-[var(--color-border)]">
-          <h2 className="text-base font-semibold text-[var(--color-text)]">
-            Create project
-          </h2>
-          <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
-            Generates a new DSN and updates the in-memory ingest cache.
-          </p>
-        </div>
-
-        {formError && (
-          <div className="mt-3 p-2.5 rounded bg-[var(--color-danger-light)] border border-[#f87168] text-[var(--color-danger-text)] text-xs font-medium flex items-center gap-2">
-            <AlertCircle size={14} className="shrink-0" />
-            <span>{formError}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleCreateProject} className="mt-4 space-y-3.5">
-          {/* MaxiBoard Project Icon & Color Picker */}
-          <div>
-            <span className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1.5">
-              Project icon &amp; accent (MaxiBoard icons)
-            </span>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {PROJECT_ICON_OPTIONS.slice(0, 8).map((opt) => {
-                const active = selectedIcon === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedIcon(opt.id);
-                      setSelectedColor(opt.defaultColor);
-                    }}
-                    title={opt.label}
-                    className={`p-1.5 rounded-md border cursor-pointer transition ${
-                      active
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]"
-                        : "border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)]"
-                    }`}
-                  >
-                    <ProjectIcon
-                      slug="preview"
-                      iconOverride={opt.id}
-                      colorOverride={
-                        active ? selectedColor : opt.defaultColor
-                      }
-                      size={22}
-                    />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <label
-              htmlFor="proj-name"
-              className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-            >
-              Project name
-            </label>
-            <input
-              id="proj-name"
-              type="text"
-              required
-              disabled={!canManageProjects}
-              value={name}
-              onChange={(e) => handleNameChange(e.target.value)}
-              placeholder="Checkout API"
-              className="pm-input"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="proj-slug"
-              className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-            >
-              Project slug (URL-safe)
-            </label>
-            <input
-              id="proj-slug"
-              type="text"
-              required
-              disabled={!canManageProjects}
-              value={slug}
-              onChange={(e) => {
-                setSlugTouched(true);
-                setSlug(slugifyName(e.target.value));
-              }}
-              placeholder="checkout-api"
-              className="pm-input pm-mono"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="proj-platform"
-              className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-            >
-              Platform / SDK
-            </label>
-            <select
-              id="proj-platform"
-              disabled={!canManageProjects}
-              value={platform}
-              onChange={(e) => setPlatform(e.target.value)}
-              className="pm-input"
-            >
-              <option value="python">python (FastAPI / Django)</option>
-              <option value="rust">rust (sentry + tracing)</option>
-              <option value="go">go (sentry-go)</option>
-              <option value="javascript-react">javascript-react (Browser)</option>
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="proj-tags"
-              className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-            >
-              Group tags (optional, comma-separated)
-            </label>
-            <input
-              id="proj-tags"
-              type="text"
-              disabled={!canManageProjects}
-              value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="e.g. backend, payments"
-              className="pm-input pm-mono"
-            />
-            {existingTags.length > 0 && (
-              <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-                {existingTags.map((t) => {
-                  const selected = parseTagsCsv(tagsInput).includes(t);
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      disabled={!canManageProjects}
-                      onClick={() => setTagsInput((cur) => appendTagCsv(cur, t))}
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold cursor-pointer transition ${
-                        selected
-                          ? "bg-[var(--color-primary)] text-white"
-                          : "bg-[var(--color-bg-muted)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                      }`}
-                    >
-                      {selected ? `✓ ${t}` : `+ ${t}`}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label
-                htmlFor="proj-retention"
-                className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-              >
-                Retention (max {globalRetentionDays}d)
-              </label>
-              <input
-                id="proj-retention"
-                type="number"
-                min={1}
-                max={globalRetentionDays}
-                disabled={!canManageProjects}
-                value={retentionOverride}
-                onChange={(e) => setRetentionOverride(e.target.value)}
-                placeholder={`${globalRetentionDays} (default)`}
-                className="pm-input pm-mono"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="proj-rate"
-                className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
-              >
-                Rate limit (/min)
-              </label>
-              <input
-                id="proj-rate"
-                type="number"
-                min={1}
-                max={1000000}
-                disabled={!canManageProjects}
-                value={rateLimit}
-                onChange={(e) => setRateLimit(e.target.value)}
-                placeholder="Inherit default"
-                className="pm-input pm-mono"
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting || !canManageProjects}
-            className="h-9 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus size={14} />
-            <span>{submitting ? "Creating..." : "Create project"}</span>
-          </button>
-        </form>
-
-        <hr className="my-5 border-[var(--color-border)]" />
-
         <div>
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-xs font-bold text-[var(--color-text)]">
