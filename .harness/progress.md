@@ -33,6 +33,30 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F026 per-member project access (Stage B)
+
+**Status at end of session:** done (browser click-through pending by user)
+
+**Done:**
+- Migration 0016; `auth/src/project_limits.rs`; limits in `AuthSession` (`workspace_project_limits`, loaded per request) and `project_access()`; MCP `role_within_scope` honours limits; members API (`project_ids`, `PUT /members/{id}/projects`, promotion clears limits, `projects`/`project_limited` in views); invitations carry limits to accept.
+- Web: `admin/ProjectAccessPicker.tsx` (All / Selected checklist) in add/invite form and inline "Edit project access" per member; limits shown in members/invites tables and on the accept page.
+
+**Verification run:**
+- `cargo test -p maxi-loop --test f026_project_access` → PASS (visibility, issue reads/writes, assignment eligibility + auto-unassign on narrowing, validation, member can't widen self, deleted last project → no projects, MCP workspace/project tokens, promotion clears, invite limits end to end)
+- b0/f024/f022/mcp_server/phase5/auth_org suites → PASS; `npm --prefix web run build`, fmt, clippy → PASS; `cargo test --workspace --no-fail-fast` → 144 passed, 1 failed (known `phase2_pii_releases_alerts.rs:777` shared-DB spike flake, fails on pre-B0 code too)
+- Release build + restart `maxi-loop-dev`; anon `PUT /members/1/projects` → 401; bundle contains new UI.
+
+**Security notes:**
+- Limits fail closed (flag + cascade), checked server-side on every path via D017; only workspace managers edit limits; parameterized SQL; no new dependencies.
+
+**Key decisions & why:**
+- D018.
+
+**Not finished / blockers:**
+- None for this feature. Invite e-mail delivery, forgot-password and assignee notifications remain open (need an e-mail sender outside `alerts`).
+
+---
+
 ### 2026-11-22 — Claude Code — F025 workspace isolation hardening (B0)
 
 **Status at end of session:** done
@@ -255,36 +279,3 @@
 
 **Not finished / blockers:**
 - None. Python SDK drops `user.ip_address` unless `send_default_pii=True`, so IP-only users count only when sent.
-
-### 2026-11-22 — Claude Code + Antigravity — F017: Performance Issues (N+1 DB, N+1 API, Slow DB Query, Consecutive DB/HTTP)
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0011_performance_issues.sql`: added `issues.issue_type` (`TEXT NOT NULL DEFAULT 'error'` with `CHECK` constraint across `error` and 5 `performance_*` types + composite index `(tenant_id, project_id, issue_type, last_seen DESC)`) and expanded `traces.sample_reason` `CHECK` constraint to allow `'issue'`
-- Added `crates/performance/src/detectors.rs` (`detect_performance_problems`) running on every ingested transaction before sampling with Sentry-like thresholds: N+1 DB (`>=5` identical normalized queries, `>=50ms`), N+1 API (`>=5` identical `http.client` calls, `>=100ms`), Slow DB Query (`>=1s`), Consecutive DB (`>=2` sequential sibling queries `>=30ms` each, savings `>=100ms`), Consecutive HTTP (`>=3` sequential calls `>=500ms` each, savings `>=1s`); triggering transactions are always retained as sampled traces (`sample_reason = 'issue'`)
-- Added `crates/ingest/src/perf_issue.rs` converting detected `PerformanceProblem`s into `ProcessedEvent`s grouped by `(issue_type, transaction_name, group_hash)` with normalized (literal-free) span descriptions, wired into `crates/ingest/src/worker.rs` to reuse regression, releases, hourly counters, and alerts
-- Extended `crates/issues` (`model.rs`, `service.rs`, `releases.rs`, `merge_split.rs`) and `crates/mcp/src/tools.rs` with allow-listed `issue_type` filtering (`error`, `performance`, or exact `performance_*`), `issue_type` in issue/MCP views, `performance_problem` in compact MCP event extraction, and cross-type merge rejection
-- Extended `crates/performance/src/service.rs` & `web/src/modules/performance/PerformanceView.tsx` to support `sample_reason = 'issue'`
-- Built UI in `web/src/modules/issues/PerformanceProblemView.tsx`, `IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `web/src/app/App.tsx`, and `web/src/lib/api.ts`: `Type` filter + `PERFORMANCE` lozenge, Performance Problem summary card with offending normalized spans table, and `View trace` deep link straight into the trace waterfall
-- Added permanent E2E test `tests/e2e/python/verify_performance_issues.py` using official Python `sentry-sdk` + Django covering all 5 detectors, negative cases, grouping, and PII literal stripping
-- Recorded follow-up roadmap items `F018` (users affected + impact sorting) and `F019` (p95/error-rate performance alerts) in `.harness/feature-list.json`; archived `F015` and React SDK CORS E2E entries to `.harness/progress-archive.md`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS
-- `cargo test --workspace` → PASS (107 passed, 0 failed)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency, `D006` preserved)
-- Live E2E (`tests/e2e/python/verify_performance_issues.py` + regression Sentry SDK & MCP E2E) on restarted `maxi-loop-dev.service` → PASS
-- Headless Chrome UI screenshots (desktop Issues + N+1 drawer, `View trace` waterfall with `SAMPLE: ISSUE` & 12 N+1 spans, mobile overlay) → PASS
-
-**Security notes:**
-- Self-review passed: `issue_type` and `sample_reason` validated server-side against strict static allow-lists matching DB `CHECK` constraints; cross-type merge rejected with `400`; all queries parameterized inside `begin_tenant_tx`/`begin_worker_tx` (existing Postgres RLS inherited); performance issue payloads store only normalized (literal-free) span descriptions and PII-scrubbed transaction metadata (verified in E2E & MCP output); 0 new Rust or npm dependencies added; `cargo-audit` and `gitleaks` not installed on this host
-
-**Key decisions & why:**
-- Reused the existing `issues` table with `issue_type` rather than a separate table so performance problems automatically inherit grouping, regression detection, release links, hourly counters, alerts, RLS, and MCP/UI triage workflows
-
-**Not finished / blockers:**
-- Ready for `F018` (users affected per issue) or `F019` (performance p95/error-rate alerts)

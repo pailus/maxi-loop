@@ -1,6 +1,6 @@
 use axum::extract::{FromRef, Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use maxi_loop_platform::bootstrap::hash_password_argon2id;
@@ -13,6 +13,10 @@ use tracing::info;
 
 use crate::http::AuthState;
 use crate::model::{AuthSession, Role};
+use crate::project_limits::{
+    ProjectRef, load_membership_limits_in_tx, normalize_project_ids,
+    replace_membership_limits_in_tx, validate_limits_in_tx,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TenantMemberView {
@@ -27,6 +31,12 @@ pub struct TenantMemberView {
     pub workspace_slug: Option<String>,
     pub workspace_name: Option<String>,
     pub role: Role,
+    /// Projects this workspace membership is limited to; empty = every project.
+    #[serde(default)]
+    pub projects: Vec<ProjectRef>,
+    /// `true` when access is limited to `projects` (which may be empty).
+    #[serde(default)]
+    pub project_limited: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -41,11 +51,20 @@ pub struct CreateMemberInput {
     /// `None` for tenant-wide role (`tenant_owner`, `tenant_admin`, `member`, `viewer`);
     /// `Some(slug)` for workspace-scoped role (`workspace_admin`, `member`, `viewer`).
     pub workspace_slug: Option<String>,
+    /// Limit a workspace `member`/`viewer` to these projects; omitted/empty = all projects.
+    #[serde(default)]
+    pub project_ids: Option<Vec<i64>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct UpdateMemberRoleInput {
     pub role: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SetMemberProjectsInput {
+    /// Empty = every project of the membership's workspace.
+    pub project_ids: Vec<i64>,
 }
 
 #[derive(FromRow)]
@@ -85,6 +104,8 @@ impl TryFrom<MemberDbRow> for TenantMemberView {
             workspace_slug: row.workspace_slug,
             workspace_name: row.workspace_name,
             role,
+            projects: Vec::new(),
+            project_limited: false,
             created_at: row.created_at,
         })
     }
@@ -103,6 +124,10 @@ where
         .route(
             "/members/{membership_id}",
             patch(update_member_role_handler).delete(delete_member_handler),
+        )
+        .route(
+            "/members/{membership_id}/projects",
+            put(set_member_projects_handler),
         )
 }
 
@@ -213,11 +238,24 @@ pub async fn list_members(
         .map_err(|err| AppError::DatabaseQuery(format!("list self memberships: {err}")))?
     };
 
+    let ids: Vec<i64> = rows.iter().map(|r| r.membership_id).collect();
+    let mut limits = load_membership_limits_in_tx(&mut tx, tenant_id, &ids).await?;
     tx.commit()
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit list_members: {err}")))?;
 
-    rows.into_iter().map(TenantMemberView::try_from).collect()
+    rows.into_iter()
+        .map(|row| {
+            let id = row.membership_id;
+            TenantMemberView::try_from(row).map(|mut view| {
+                if let Some(projects) = limits.remove(&id) {
+                    view.projects = projects;
+                    view.project_limited = true;
+                }
+                view
+            })
+        })
+        .collect()
 }
 
 pub async fn create_member(
@@ -245,6 +283,7 @@ pub async fn create_member(
     // 1. Validate scope, workspace existence, and caller privilege hierarchy BEFORE touching `users`.
     let (target_role, target_workspace) =
         resolve_grant_target(pool, session, input.role.trim(), ws_slug).await?;
+    let project_ids = normalize_project_ids(input.project_ids.as_deref())?;
 
     // 2. Look up or create the user record via worker tx (users table is global across tenants).
     // Never overwrite an existing user's password so cross-tenant credential takeover is impossible.
@@ -322,6 +361,9 @@ pub async fn create_member(
         }
         Err(err) => return Err(AppError::DatabaseQuery(format!("insert membership: {err}"))),
     };
+    let projects =
+        validate_limits_in_tx(&mut tx, tenant_id, ws_id_opt, target_role, &project_ids).await?;
+    replace_membership_limits_in_tx(&mut tx, tenant_id, membership_id, &project_ids).await?;
 
     tx.commit()
         .await
@@ -353,6 +395,8 @@ pub async fn create_member(
         workspace_slug,
         workspace_name,
         role: target_role,
+        projects,
+        project_limited: !project_ids.is_empty(),
         created_at,
     })
 }
@@ -527,6 +571,11 @@ pub async fn update_member_role(
         .execute(&mut *tx)
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("update membership role: {err}")))?;
+    // Admin roles always cover the whole workspace, so their project limits are dropped.
+    if !matches!(new_role, Role::Member | Role::Viewer) {
+        replace_membership_limits_in_tx(&mut tx, tenant_id, membership_id, &[]).await?;
+    }
+    let mut limits = load_membership_limits_in_tx(&mut tx, tenant_id, &[membership_id]).await?;
 
     tx.commit()
         .await
@@ -542,7 +591,86 @@ pub async fn update_member_role(
     );
 
     row.role = new_role.as_str().to_owned();
-    TenantMemberView::try_from(row)
+    let mut view = TenantMemberView::try_from(row)?;
+    if let Some(projects) = limits.remove(&membership_id) {
+        view.projects = projects;
+        view.project_limited = true;
+    }
+    Ok(view)
+}
+
+async fn set_member_projects_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(membership_id): Path<i64>,
+    Json(input): Json<SetMemberProjectsInput>,
+) -> Result<Json<TenantMemberView>, AppError> {
+    let updated = set_member_projects(&state.db, &session, membership_id, input).await?;
+    Ok(Json(updated))
+}
+
+/// Limit a workspace `member`/`viewer` membership to specific projects (empty = all).
+/// Only callers who manage that workspace may change it.
+pub async fn set_member_projects(
+    pool: &PgPool,
+    session: &AuthSession,
+    membership_id: i64,
+    input: SetMemberProjectsInput,
+) -> Result<TenantMemberView, AppError> {
+    session.require_user_session()?;
+    if membership_id <= 0 {
+        return Err(AppError::Validation("invalid membership_id".to_owned()));
+    }
+    let project_ids = normalize_project_ids(Some(&input.project_ids))?;
+    let tenant_id = session.tenant_ctx.tenant_id();
+    let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
+
+    let row: Option<MemberDbRow> = sqlx::query_as(
+        "SELECT m.id AS membership_id, m.tenant_id, m.user_id,
+                u.email, u.name, u.is_active,
+                m.workspace_id, w.slug AS workspace_slug, w.name AS workspace_name,
+                m.role, m.created_at
+         FROM memberships m
+         JOIN users u ON u.id = m.user_id
+         LEFT JOIN workspaces w ON w.tenant_id = m.tenant_id AND w.id = m.workspace_id
+         WHERE m.tenant_id = $1 AND m.id = $2
+         FOR UPDATE OF m",
+    )
+    .bind(tenant_id)
+    .bind(membership_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("load membership for limits: {err}")))?;
+    let Some(row) = row else {
+        return Err(AppError::NotFound);
+    };
+    let Some(ws_id) = row.workspace_id else {
+        return Err(AppError::Validation(
+            "only workspace-scoped memberships can be limited to projects".to_owned(),
+        ));
+    };
+    if !session.can_manage_workspace(ws_id) {
+        return Err(AppError::Forbidden("insufficient permissions"));
+    }
+    let role = Role::parse(&row.role)?;
+    let projects =
+        validate_limits_in_tx(&mut tx, tenant_id, Some(ws_id), role, &project_ids).await?;
+    replace_membership_limits_in_tx(&mut tx, tenant_id, membership_id, &project_ids).await?;
+    tx.commit()
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("commit set_member_projects: {err}")))?;
+
+    info!(
+        tenant_id,
+        actor_user_id = session.user.id,
+        membership_id,
+        project_count = project_ids.len(),
+        "membership project limits updated"
+    );
+    let mut view = TenantMemberView::try_from(row)?;
+    view.projects = projects;
+    view.project_limited = !project_ids.is_empty();
+    Ok(view)
 }
 
 pub async fn delete_member(

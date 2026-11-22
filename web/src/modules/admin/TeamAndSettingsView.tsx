@@ -30,11 +30,13 @@ import {
   fetchWorkspaces,
   revokeApiToken,
   revokeInvitation,
+  setMemberProjects,
   updateMemberRole,
   updateTenantSettings,
   updateWorkspaceSettings,
 } from "../../lib/api";
 import { WorkspaceMark } from "../workspaces/WorkspaceMark";
+import { ProjectAccessPicker, ProjectAccessSummary } from "./ProjectAccessPicker";
 import {
   WORKSPACE_COLORS,
   resolveWorkspaceColor,
@@ -88,6 +90,14 @@ export function TeamAndSettingsView({
   const [newPassword, setNewPassword] = useState("");
   const [newScopeWs, setNewScopeWs] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
+  // `null` = all projects of the workspace; an array = only these projects.
+  const [newProjectIds, setNewProjectIds] = useState<number[] | null>(null);
+  const [editingProjects, setEditingProjects] = useState<{
+    membershipId: number;
+    workspaceSlug: string;
+    value: number[] | null;
+  } | null>(null);
+  const [savingProjects, setSavingProjects] = useState(false);
   const [creatingMember, setCreatingMember] = useState(false);
   // Invite link (default) vs. creating the account directly with an admin-chosen password.
   const [addMode, setAddMode] = useState<"invite" | "direct">("invite");
@@ -130,6 +140,10 @@ export function TeamAndSettingsView({
     projectSlug: string;
   } | null>(null);
   const [copiedRaw, setCopiedRaw] = useState(false);
+
+  const canLimitNew = !!newScopeWs && (newRole === "member" || newRole === "viewer");
+  const newLimitIds = canLimitNew && newProjectIds !== null ? newProjectIds : undefined;
+  const newLimitInvalid = newLimitIds !== undefined && newLimitIds.length === 0;
 
   const canManageTenant =
     session.tenant_role === "tenant_owner" ||
@@ -241,6 +255,7 @@ export function TeamAndSettingsView({
           email: newEmail.trim(),
           role: newRole,
           workspace_slug: newScopeWs || null,
+          project_ids: newLimitIds,
         });
         setCreatedInvite({ email: created.invitation.email, url: created.invite_url });
         setCopiedInvite(false);
@@ -263,6 +278,7 @@ export function TeamAndSettingsView({
         password: newPassword || undefined,
         role: newRole,
         workspace_slug: newScopeWs || null,
+        project_ids: newLimitIds,
       });
       setNewEmail("");
       setNewName("");
@@ -301,6 +317,29 @@ export function TeamAndSettingsView({
       setMemberError(
         err instanceof Error ? err.message : "Failed to remove membership",
       );
+    }
+  }
+
+  async function handleSaveProjects() {
+    if (!editingProjects) return;
+    setSavingProjects(true);
+    setMemberError(null);
+    try {
+      const updated = await setMemberProjects(
+        editingProjects.membershipId,
+        editingProjects.value ?? [],
+      );
+      setEditingProjects(null);
+      await loadMembersAndWorkspaces();
+      onShowToast(
+        updated.project_limited
+          ? `${updated.email} limited to ${updated.projects?.length ?? 0} project(s)`
+          : `${updated.email} can access all projects`,
+      );
+    } catch (err) {
+      setMemberError(err instanceof Error ? err.message : "Failed to update project access");
+    } finally {
+      setSavingProjects(false);
     }
   }
 
@@ -561,9 +600,71 @@ export function TeamAndSettingsView({
                                   TENANT
                                 </span>
                               ) : (
-                                <span className="pm-lozenge">
-                                  WS: {m.workspace_slug}
-                                </span>
+                                <div className="space-y-1">
+                                  <span className="pm-lozenge">
+                                    WS: {m.workspace_slug}
+                                  </span>
+                                  <div>
+                                    <ProjectAccessSummary
+                                      limited={m.project_limited}
+                                      projects={m.projects}
+                                    />
+                                  </div>
+                                  {canEditRow &&
+                                    (m.role === "member" || m.role === "viewer") &&
+                                    m.workspace_slug && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setEditingProjects({
+                                            membershipId: m.membership_id,
+                                            workspaceSlug: m.workspace_slug ?? "",
+                                            value: m.project_limited
+                                              ? (m.projects ?? []).map((p) => p.id)
+                                              : null,
+                                          })
+                                        }
+                                        className="text-[11px] font-medium text-[var(--color-link)] hover:underline cursor-pointer"
+                                      >
+                                        Edit project access
+                                      </button>
+                                    )}
+                                  {editingProjects?.membershipId === m.membership_id && (
+                                    <div className="mt-1 p-2 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] space-y-2 w-64">
+                                      <ProjectAccessPicker
+                                        workspaceSlug={editingProjects.workspaceSlug}
+                                        value={editingProjects.value}
+                                        disabled={savingProjects}
+                                        onChange={(value) =>
+                                          setEditingProjects((prev) =>
+                                            prev ? { ...prev, value } : prev,
+                                          )
+                                        }
+                                      />
+                                      <div className="flex justify-end gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingProjects(null)}
+                                          className="h-7 px-2 rounded text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            savingProjects ||
+                                            (editingProjects.value !== null &&
+                                              editingProjects.value.length === 0)
+                                          }
+                                          onClick={() => void handleSaveProjects()}
+                                          className="h-7 px-2.5 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                                        >
+                                          {savingProjects ? "Saving..." : "Save"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="py-2.5 px-3">
@@ -653,7 +754,15 @@ export function TeamAndSettingsView({
                                 {inv.scope === "tenant" ? (
                                   <span className="pm-lozenge pm-lozenge-primary">TENANT</span>
                                 ) : (
-                                  <span className="pm-lozenge">WS: {inv.workspace_slug}</span>
+                                  <div className="space-y-1">
+                                    <span className="pm-lozenge">WS: {inv.workspace_slug}</span>
+                                    <div>
+                                      <ProjectAccessSummary
+                                        limited={inv.project_limited}
+                                        projects={inv.projects}
+                                      />
+                                    </div>
+                                  </div>
                                 )}
                               </td>
                               <td className="py-2.5 px-3">
@@ -806,6 +915,7 @@ export function TeamAndSettingsView({
                     onChange={(e) => {
                       const val = e.target.value;
                       setNewScopeWs(val);
+                      setNewProjectIds(null);
                       if (val && (newRole === "tenant_owner" || newRole === "tenant_admin")) {
                         setNewRole("workspace_admin");
                       } else if (!val && newRole === "workspace_admin") {
@@ -843,9 +953,23 @@ export function TeamAndSettingsView({
                   </select>
                 </div>
 
+                {canLimitNew && (
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
+                      Project access
+                    </label>
+                    <ProjectAccessPicker
+                      workspaceSlug={newScopeWs}
+                      value={newProjectIds}
+                      onChange={setNewProjectIds}
+                      disabled={!canManageAnyWorkspace}
+                    />
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={creatingMember || !canManageAnyWorkspace}
+                  disabled={creatingMember || !canManageAnyWorkspace || newLimitInvalid}
                   className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   {addMode === "invite" ? <Link2 size={14} /> : <Plus size={14} />}

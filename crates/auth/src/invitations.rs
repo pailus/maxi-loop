@@ -23,6 +23,9 @@ use tracing::{info, warn};
 use crate::http::AuthState;
 use crate::members::resolve_grant_target;
 use crate::model::{AuthSession, AuthenticatedUser, Role};
+use crate::project_limits::{
+    ProjectRef, load_invitation_limits_in_tx, normalize_project_ids, validate_limits_in_tx,
+};
 use crate::service::open_session;
 use crate::token::{build_session_set_cookie, generate_random_token_hex, hash_session_token};
 
@@ -41,6 +44,11 @@ pub struct InvitationView {
     pub workspace_slug: Option<String>,
     pub workspace_name: Option<String>,
     pub invited_by_email: Option<String>,
+    /// Projects the invite is limited to; empty = every project of the scope.
+    pub projects: Vec<ProjectRef>,
+    /// `true` when access is limited to `projects` (which may be empty).
+    #[serde(default)]
+    pub project_limited: bool,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub is_expired: bool,
@@ -58,6 +66,9 @@ pub struct CreateInvitationInput {
     pub email: String,
     pub role: String,
     pub workspace_slug: Option<String>,
+    /// Limit a workspace `member`/`viewer` invite to these projects; omitted/empty = all.
+    #[serde(default)]
+    pub project_ids: Option<Vec<i64>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -72,6 +83,11 @@ pub struct InvitationPreview {
     pub role: Role,
     pub scope: &'static str,
     pub workspace_name: Option<String>,
+    /// Projects the invitee will get access to; empty = every project of the scope.
+    pub projects: Vec<ProjectRef>,
+    /// `true` when access is limited to `projects` (which may be empty).
+    #[serde(default)]
+    pub project_limited: bool,
     /// `true` when the email already has an account: the invitee must enter that password.
     pub account_exists: bool,
     pub expires_at: DateTime<Utc>,
@@ -110,6 +126,8 @@ impl InvitationRow {
             workspace_slug: self.workspace_slug,
             workspace_name: self.workspace_name,
             invited_by_email: self.invited_by_email,
+            projects: Vec::new(),
+            project_limited: false,
             is_expired: self.expires_at <= now,
             expires_at: self.expires_at,
             created_at: self.created_at,
@@ -241,12 +259,25 @@ pub async fn list_invitations(
     .fetch_all(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("list invitations: {err}")))?;
+    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let mut limits = load_invitation_limits_in_tx(&mut tx, tenant_id, &ids).await?;
     tx.commit()
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit list invitations: {err}")))?;
 
     let now = Utc::now();
-    rows.into_iter().map(|row| row.into_view(now)).collect()
+    rows.into_iter()
+        .map(|row| {
+            let id = row.id;
+            row.into_view(now).map(|mut v| {
+                if let Some(projects) = limits.remove(&id) {
+                    v.projects = projects;
+                    v.project_limited = true;
+                }
+                v
+            })
+        })
+        .collect()
 }
 
 pub async fn create_invitation(
@@ -271,6 +302,7 @@ pub async fn create_invitation(
     let (role, target_workspace) =
         resolve_grant_target(pool, session, input.role.trim(), ws_slug).await?;
     let ws_id = target_workspace.as_ref().map(|(id, _, _)| *id);
+    let project_ids = normalize_project_ids(input.project_ids.as_deref())?;
     let tenant_id = session.tenant_ctx.tenant_id();
 
     let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
@@ -328,6 +360,27 @@ pub async fn create_invitation(
     .fetch_one(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("insert invitation: {err}")))?;
+    let projects = validate_limits_in_tx(&mut tx, tenant_id, ws_id, role, &project_ids).await?;
+    if !project_ids.is_empty() {
+        sqlx::query(
+            "UPDATE invitations SET project_limited = TRUE WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("flag limited invitation: {err}")))?;
+        sqlx::query(
+            "INSERT INTO invitation_projects (tenant_id, invitation_id, project_id)
+             SELECT $1, $2, unnest($3::BIGINT[])",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .bind(&project_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("insert invitation projects: {err}")))?;
+    }
     tx.commit()
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit create invitation: {err}")))?;
@@ -361,6 +414,8 @@ pub async fn create_invitation(
             workspace_slug,
             workspace_name,
             invited_by_email: Some(session.user.email.clone()),
+            projects,
+            project_limited: !project_ids.is_empty(),
             expires_at,
             created_at,
             is_expired: false,
@@ -461,6 +516,7 @@ pub async fn preview_invitation(
     let Some(row) = row else {
         return Err(AppError::Unauthorized(INVALID_INVITATION));
     };
+    let mut limits = load_invitation_limits_in_tx(&mut tx, row.tenant_id, &[row.id]).await?;
     let account_exists: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE email = $1)")
             .bind(&row.email)
@@ -477,6 +533,8 @@ pub async fn preview_invitation(
         role: Role::parse(&row.role)?,
         scope: scope_label(row.workspace_id),
         workspace_name: row.workspace_name,
+        project_limited: limits.contains_key(&row.id),
+        projects: limits.remove(&row.id).unwrap_or_default(),
         account_exists,
         expires_at: row.expires_at,
     })
@@ -576,17 +634,32 @@ pub async fn accept_invitation(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("check invitee membership: {err}")))?;
     if !already_member {
-        sqlx::query(
-            "INSERT INTO memberships (tenant_id, workspace_id, user_id, role)
-             VALUES ($1, $2, $3, $4)",
+        let membership_id: i64 = sqlx::query_scalar(
+            "INSERT INTO memberships (tenant_id, workspace_id, user_id, role, project_limited)
+             SELECT $1, $2, $3, $4, project_limited FROM invitations
+             WHERE tenant_id = $1 AND id = $5
+             RETURNING id",
         )
         .bind(invite.tenant_id)
         .bind(invite.workspace_id)
         .bind(user.id)
         .bind(&invite.role)
-        .execute(&mut *tx)
+        .bind(invite.id)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("insert invited membership: {err}")))?;
+        // Projects deleted since the invite was sent simply drop out (FK cascade).
+        sqlx::query(
+            "INSERT INTO membership_projects (tenant_id, membership_id, project_id)
+             SELECT tenant_id, $2, project_id FROM invitation_projects
+             WHERE tenant_id = $1 AND invitation_id = $3",
+        )
+        .bind(invite.tenant_id)
+        .bind(membership_id)
+        .bind(invite.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("copy invitation projects: {err}")))?;
     }
 
     sqlx::query(

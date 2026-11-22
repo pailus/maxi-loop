@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::http::HeaderMap;
 use maxi_loop_platform::access::{AccessGuard, ProjectAccess};
@@ -134,6 +134,9 @@ pub struct AuthSession {
     pub tenant_role: Option<Role>,
     /// Explicit per-workspace roles (`memberships.workspace_id IS NOT NULL`).
     pub workspace_roles: BTreeMap<i64, Role>,
+    /// Workspace memberships limited to specific projects (`membership_projects`). Absent =
+    /// every project of that workspace. Ignored when the user has a tenant-level role.
+    pub workspace_project_limits: BTreeMap<i64, BTreeSet<i64>>,
     /// Present only when authenticated via a per-project API token (`Authorization: Bearer mlapi_...`).
     pub api_token: Option<ApiTokenAuthScope>,
     pub csrf_token: String,
@@ -226,10 +229,14 @@ impl AuthSession {
         if self.tenant_role.is_some() {
             return None;
         }
-        Some(ProjectAccess {
-            workspace_ids: self.workspace_roles.keys().copied().collect(),
-            project_ids: Vec::new(),
-        })
+        let mut access = ProjectAccess::default();
+        for ws_id in self.workspace_roles.keys() {
+            match self.workspace_project_limits.get(ws_id) {
+                Some(projects) => access.project_ids.extend(projects.iter().copied()),
+                None => access.workspace_ids.push(*ws_id),
+            }
+        }
+        Some(access)
     }
 
     /// Whether the caller may read this project's data (issues, events, performance, ...).

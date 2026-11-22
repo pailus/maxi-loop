@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use axum::http::HeaderMap;
@@ -146,6 +146,7 @@ pub(crate) async fn open_session(
     let tenant = load_tenant_summary(&mut tx, tenant_id).await?;
     let (role, tenant_role, workspace_roles) =
         load_user_memberships(&mut tx, tenant_id, user.id).await?;
+    let workspace_project_limits = load_project_limits(&mut tx, tenant_id, user.id).await?;
     let default_workspace =
         load_default_workspace_for_user(&mut tx, tenant_id, tenant_role, &workspace_roles).await?;
 
@@ -190,6 +191,7 @@ pub(crate) async fn open_session(
         role,
         tenant_role,
         workspace_roles,
+        workspace_project_limits,
         api_token: None,
         csrf_token,
     };
@@ -253,6 +255,7 @@ pub async fn authenticate_cookie(
     let tenant = load_tenant_summary(&mut tx, tenant_id).await?;
     let (role, tenant_role, workspace_roles) =
         load_user_memberships(&mut tx, tenant_id, user_id).await?;
+    let workspace_project_limits = load_project_limits(&mut tx, tenant_id, user_id).await?;
     let default_workspace =
         load_default_workspace_for_user(&mut tx, tenant_id, tenant_role, &workspace_roles).await?;
 
@@ -273,6 +276,7 @@ pub async fn authenticate_cookie(
         role,
         tenant_role,
         workspace_roles,
+        workspace_project_limits,
         api_token: None,
         csrf_token,
     })
@@ -525,4 +529,34 @@ async fn load_default_workspace_for_user(
         default_rate_limit_per_minute_override: row.default_rate_limit_per_minute_override,
         is_default: row.is_default,
     })
+}
+
+/// Project limits of the user's workspace memberships in this tenant (Stage B).
+pub(crate) async fn load_project_limits(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: i64,
+    user_id: i64,
+) -> Result<BTreeMap<i64, BTreeSet<i64>>, AppError> {
+    // A limited membership with no remaining projects yields an empty set (no projects).
+    let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT m.workspace_id, mp.project_id
+         FROM memberships m
+         LEFT JOIN membership_projects mp
+           ON mp.tenant_id = m.tenant_id AND mp.membership_id = m.id
+         WHERE m.tenant_id = $1 AND m.user_id = $2
+           AND m.workspace_id IS NOT NULL AND m.project_limited",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("load membership project limits: {err}")))?;
+    let mut limits: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for (ws, project) in rows {
+        let entry = limits.entry(ws).or_default();
+        if let Some(p) = project {
+            entry.insert(p);
+        }
+    }
+    Ok(limits)
 }

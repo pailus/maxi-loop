@@ -565,6 +565,31 @@
         "F011"
       ],
       "notes": "Done 2026-11-22 (D017). Test crates/server/tests/b0_workspace_isolation.rs. Prepares Stage B (per-project access): all checks go through AuthSession::project_access / can_read_project / AccessGuard."
+    },
+    {
+      "id": "F026",
+      "title": "Per-member project access (Stage B)",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Workspace member/viewer memberships and invitations can be limited to selected projects of that workspace (empty selection = all projects)",
+        "Limits apply to every project-data path (lists in SQL, single records, performance, MCP tokens, assignment eligibility)",
+        "Deleting the last allowed project never widens access (explicit project_limited flag)",
+        "Only workspace managers can change limits; promotion to workspace_admin clears them; narrowing unassigns issues the member can no longer triage",
+        "UI: project picker when adding/inviting, editable project access per member, limits shown in members/invitations and on the accept page"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "depends_on": [
+        "F022",
+        "F024",
+        "F025"
+      ],
+      "notes": "Done 2026-11-22 (D018). Test crates/server/tests/f026_project_access.rs."
     }
   ]
 }

@@ -1421,7 +1421,17 @@ export interface TenantMemberView {
   workspace_slug: string | null;
   workspace_name: string | null;
   role: Role;
+  /** Projects a workspace member/viewer is limited to (see `project_limited`). */
+  projects?: ProjectRef[];
+  /** `true` = access limited to `projects` (possibly none); `false` = every project. */
+  project_limited?: boolean;
   created_at: string;
+}
+
+export interface ProjectRef {
+  id: number;
+  slug: string;
+  name: string;
 }
 
 export interface CreateMemberInput {
@@ -1430,6 +1440,19 @@ export interface CreateMemberInput {
   password?: string;
   role: Role;
   workspace_slug?: string | null;
+  /** Limit a workspace member/viewer to these projects; omit or empty = all. */
+  project_ids?: number[];
+}
+
+/** Limit a workspace member/viewer membership to projects (empty = all projects). */
+export async function setMemberProjects(
+  membershipId: number,
+  projectIds: number[],
+): Promise<TenantMemberView> {
+  return requestJson<TenantMemberView>(`/api/v1/members/${membershipId}/projects`, {
+    method: "PUT",
+    body: JSON.stringify({ project_ids: projectIds }),
+  });
 }
 
 export async function fetchMembers(): Promise<TenantMemberView[]> {
@@ -1480,6 +1503,8 @@ export interface InvitationView {
   workspace_slug: string | null;
   workspace_name: string | null;
   invited_by_email: string | null;
+  projects?: ProjectRef[];
+  project_limited?: boolean;
   expires_at: string;
   created_at: string;
   is_expired: boolean;
@@ -1495,6 +1520,7 @@ export interface CreateInvitationInput {
   email: string;
   role: Role;
   workspace_slug?: string | null;
+  project_ids?: number[];
 }
 
 export interface InvitationPreview {
@@ -1503,6 +1529,8 @@ export interface InvitationPreview {
   role: Role;
   scope: "tenant" | "workspace";
   workspace_name: string | null;
+  projects?: ProjectRef[];
+  project_limited?: boolean;
   account_exists: boolean;
   expires_at: string;
 }

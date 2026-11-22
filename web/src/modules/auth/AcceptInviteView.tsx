@@ -136,6 +136,14 @@ export function AcceptInviteView({ token, onAuthenticated, onCancel }: AcceptInv
                 You were invited to <strong>{preview.tenant_name}</strong> as{" "}
                 <span className="pm-lozenge">{preview.role}</span> ({scopeText}).
               </p>
+              {preview.project_limited && (
+                <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                  Access limited to:{" "}
+                  {(preview.projects ?? []).length > 0
+                    ? (preview.projects ?? []).map((p) => p.name).join(", ")
+                    : "no projects yet"}
+                </p>
+              )}
               <p className="mt-2 text-xs text-[var(--color-text-dim)]">
                 {isNewAccount
                   ? "Choose your name and a password to create your account."

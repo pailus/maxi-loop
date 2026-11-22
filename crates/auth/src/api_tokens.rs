@@ -561,6 +561,7 @@ pub async fn authenticate_api_token(
         role: effective_role,
         tenant_role: None,
         workspace_roles,
+        workspace_project_limits: BTreeMap::new(),
         api_token: Some(ApiTokenAuthScope {
             token_id: row.id,
             token_name: row.name,

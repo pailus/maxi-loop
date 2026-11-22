@@ -4,6 +4,7 @@ pub mod invitations;
 pub mod mcp;
 pub mod members;
 pub mod model;
+pub mod project_limits;
 pub mod rate_limit;
 pub mod service;
 pub mod token;

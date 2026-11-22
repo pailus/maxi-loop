@@ -778,8 +778,15 @@ pub async fn authenticate_mcp_bearer_token(
 
     // The owner's current memberships decide the token's power on every request, so a token
     // stops working (or loses triage) as soon as the owner loses access to its scope.
-    let raw_memberships: Vec<(Option<i64>, String)> = sqlx::query_as(
-        "SELECT workspace_id, role FROM memberships WHERE tenant_id = $1 AND user_id = $2",
+    // `limited_to` = project limits of a workspace membership (NULL = all its projects).
+    let raw_memberships: Vec<(Option<i64>, String, Option<Vec<i64>>)> = sqlx::query_as(
+        "SELECT m.workspace_id, m.role,
+                CASE WHEN m.project_limited THEN
+                    COALESCE((SELECT array_agg(mp.project_id) FROM membership_projects mp
+                              WHERE mp.tenant_id = m.tenant_id AND mp.membership_id = m.id),
+                             '{}'::BIGINT[])
+                END AS limited_to
+         FROM memberships m WHERE m.tenant_id = $1 AND m.user_id = $2",
     )
     .bind(tenant_id)
     .bind(row.user_id)
@@ -788,7 +795,13 @@ pub async fn authenticate_mcp_bearer_token(
     .map_err(|err| AppError::DatabaseQuery(format!("load mcp token memberships: {err}")))?;
     let memberships = raw_memberships
         .into_iter()
-        .map(|(ws, r)| Role::parse(&r).map(|role| (ws, role)))
+        .map(|(ws, r, limited_to)| {
+            Role::parse(&r).map(|role| ScopedMembership {
+                workspace_id: ws,
+                role,
+                limited_to,
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let access_scope = match row.access_scope.as_str() {
@@ -984,19 +997,41 @@ mod tests {
     }
 }
 
+/// One membership of a token owner, as needed to evaluate a token scope.
+struct ScopedMembership {
+    workspace_id: Option<i64>,
+    role: Role,
+    /// Project limits of a workspace membership; `None` = every project of the workspace.
+    limited_to: Option<Vec<i64>>,
+}
+
 /// Effective role of a token owner inside the token's scope (`None` = no access any more).
-/// Tenant scope needs a tenant-level membership; workspace/project scopes accept tenant-level
-/// or same-workspace memberships, taking the highest.
-fn role_within_scope(memberships: &[(Option<i64>, Role)], scope: &McpAccessScope) -> Option<Role> {
-    let applies = |ws: Option<i64>| match scope {
-        McpAccessScope::Tenant => ws.is_none(),
-        McpAccessScope::Workspace { workspace_id, .. }
-        | McpAccessScope::Project { workspace_id, .. } => ws.is_none() || ws == Some(*workspace_id),
+/// Tenant scope needs a tenant-level membership; a workspace scope needs tenant-level or an
+/// unlimited membership of that workspace; a project scope also accepts a workspace membership
+/// limited to projects that include it. The highest applicable role wins.
+fn role_within_scope(memberships: &[ScopedMembership], scope: &McpAccessScope) -> Option<Role> {
+    let applies = |m: &ScopedMembership| match scope {
+        McpAccessScope::Tenant => m.workspace_id.is_none(),
+        McpAccessScope::Workspace { workspace_id, .. } => {
+            m.workspace_id.is_none()
+                || (m.workspace_id == Some(*workspace_id) && m.limited_to.is_none())
+        }
+        McpAccessScope::Project {
+            workspace_id,
+            project_id,
+            ..
+        } => {
+            m.workspace_id.is_none()
+                || (m.workspace_id == Some(*workspace_id)
+                    && m.limited_to
+                        .as_ref()
+                        .is_none_or(|projects| projects.contains(project_id)))
+        }
     };
     memberships
         .iter()
-        .filter(|(ws, _)| applies(*ws))
-        .map(|(_, role)| *role)
+        .filter(|m| applies(m))
+        .map(|m| m.role)
         .max_by_key(|role| role.privilege_rank())
 }
 
@@ -1011,23 +1046,51 @@ mod scope_role_tests {
         }
     }
 
+    fn project(ws: i64, id: i64) -> McpAccessScope {
+        McpAccessScope::Project {
+            workspace_id: ws,
+            workspace_slug: "w".to_owned(),
+            project_id: id,
+            project_slug: "p".to_owned(),
+        }
+    }
+
+    fn m(ws: Option<i64>, role: Role, limited_to: Option<Vec<i64>>) -> ScopedMembership {
+        ScopedMembership {
+            workspace_id: ws,
+            role,
+            limited_to,
+        }
+    }
+
     #[test]
     fn workspace_member_has_no_role_in_tenant_or_other_workspace_scope() {
-        let m = vec![(Some(1), Role::Member)];
-        assert_eq!(role_within_scope(&m, &McpAccessScope::Tenant), None);
-        assert_eq!(role_within_scope(&m, &ws(2)), None);
-        assert_eq!(role_within_scope(&m, &ws(1)), Some(Role::Member));
+        let ms = vec![m(Some(1), Role::Member, None)];
+        assert_eq!(role_within_scope(&ms, &McpAccessScope::Tenant), None);
+        assert_eq!(role_within_scope(&ms, &ws(2)), None);
+        assert_eq!(role_within_scope(&ms, &ws(1)), Some(Role::Member));
     }
 
     #[test]
     fn takes_highest_applicable_role() {
-        let m = vec![(None, Role::Viewer), (Some(1), Role::WorkspaceAdmin)];
+        let ms = vec![
+            m(None, Role::Viewer, None),
+            m(Some(1), Role::WorkspaceAdmin, None),
+        ];
         assert_eq!(
-            role_within_scope(&m, &McpAccessScope::Tenant),
+            role_within_scope(&ms, &McpAccessScope::Tenant),
             Some(Role::Viewer)
         );
-        assert_eq!(role_within_scope(&m, &ws(1)), Some(Role::WorkspaceAdmin));
-        assert_eq!(role_within_scope(&m, &ws(9)), Some(Role::Viewer));
+        assert_eq!(role_within_scope(&ms, &ws(1)), Some(Role::WorkspaceAdmin));
+        assert_eq!(role_within_scope(&ms, &ws(9)), Some(Role::Viewer));
         assert_eq!(role_within_scope(&[], &ws(1)), None);
+    }
+
+    #[test]
+    fn project_limited_membership_only_reaches_its_projects() {
+        let ms = vec![m(Some(1), Role::Member, Some(vec![10]))];
+        assert_eq!(role_within_scope(&ms, &ws(1)), None);
+        assert_eq!(role_within_scope(&ms, &project(1, 10)), Some(Role::Member));
+        assert_eq!(role_within_scope(&ms, &project(1, 11)), None);
     }
 }
