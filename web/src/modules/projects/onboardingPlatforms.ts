@@ -8,23 +8,20 @@ export interface OnboardingPlatform {
   label: string;
   language: string;
   category: PlatformCategory;
-  /** Short badge text shown on the platform card. */
-  badge: string;
-  badgeColor: string;
 }
 
 export const ONBOARDING_PLATFORMS: OnboardingPlatform[] = [
-  { id: "python", label: "Python", language: "Python", category: "backend", badge: "PY", badgeColor: "#3776AB" },
-  { id: "python-fastapi", label: "FastAPI", language: "Python", category: "backend", badge: "FA", badgeColor: "#009688" },
-  { id: "python-django", label: "Django", language: "Python", category: "backend", badge: "DJ", badgeColor: "#0C4B33" },
-  { id: "python-flask", label: "Flask", language: "Python", category: "backend", badge: "FL", badgeColor: "#3D3D3D" },
-  { id: "go", label: "Go", language: "Go", category: "backend", badge: "GO", badgeColor: "#00ADD8" },
-  { id: "rust", label: "Rust", language: "Rust", category: "backend", badge: "RS", badgeColor: "#B7410E" },
-  { id: "node", label: "Node.js", language: "JavaScript", category: "backend", badge: "JS", badgeColor: "#5FA04E" },
-  { id: "node-express", label: "Express", language: "JavaScript", category: "backend", badge: "EX", badgeColor: "#444444" },
-  { id: "javascript-react", label: "React", language: "JavaScript", category: "frontend", badge: "RE", badgeColor: "#149ECA" },
-  { id: "javascript", label: "Browser JavaScript", language: "JavaScript", category: "frontend", badge: "JS", badgeColor: "#C9A400" },
-  { id: "other", label: "Other", language: "Any Sentry SDK", category: "other", badge: "··", badgeColor: "#626F86" },
+  { id: "python", label: "Python", language: "Python", category: "backend" },
+  { id: "python-fastapi", label: "FastAPI", language: "Python", category: "backend" },
+  { id: "python-django", label: "Django", language: "Python", category: "backend" },
+  { id: "python-flask", label: "Flask", language: "Python", category: "backend" },
+  { id: "go", label: "Go", language: "Go", category: "backend" },
+  { id: "rust", label: "Rust", language: "Rust", category: "backend" },
+  { id: "node", label: "Node.js", language: "JavaScript", category: "backend" },
+  { id: "node-express", label: "Express", language: "JavaScript", category: "backend" },
+  { id: "javascript-react", label: "React", language: "JavaScript", category: "frontend" },
+  { id: "javascript", label: "Browser JavaScript", language: "JavaScript", category: "frontend" },
+  { id: "other", label: "Other", language: "Any Sentry SDK", category: "other" },
 ];
 
 export const PLATFORM_CATEGORY_LABELS: Record<PlatformCategory | "all", string> = {

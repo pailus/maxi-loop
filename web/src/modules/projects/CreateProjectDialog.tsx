@@ -34,6 +34,7 @@ import {
   buildSdkSteps,
   findPlatform,
 } from "./onboardingPlatforms";
+import { PlatformLogo } from "./PlatformLogo";
 
 interface CreateProjectDialogProps {
   workspaceName: string;
@@ -112,18 +113,6 @@ function CodeBlock({ code }: { code: string }) {
         <span>{copied ? "Copied" : "Copy"}</span>
       </button>
     </div>
-  );
-}
-
-function PlatformBadge({ text, color, size = 36 }: { text: string; color: string; size?: number }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="shrink-0 rounded-lg inline-flex items-center justify-center font-bold text-white pm-mono"
-      style={{ width: size, height: size, background: color, fontSize: size * 0.36 }}
-    >
-      {text}
-    </span>
   );
 }
 
@@ -421,7 +410,7 @@ export function CreateProjectDialog({
                     : "border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
-                <PlatformBadge text={p.badge} color={p.badgeColor} />
+                <PlatformLogo platform={p.id} />
                 <span className="min-w-0">
                   <span className="block text-xs font-semibold text-[var(--color-text)] truncate">
                     {p.label}
@@ -476,7 +465,7 @@ export function CreateProjectDialog({
       >
         {selectedPlatform && (
           <div className="flex items-center gap-2.5 p-2.5 rounded-lg bg-[var(--color-bg-muted)] border border-[var(--color-border)]">
-            <PlatformBadge text={selectedPlatform.badge} color={selectedPlatform.badgeColor} size={28} />
+            <PlatformLogo platform={selectedPlatform.id} size={28} />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-[var(--color-text)]">{selectedPlatform.label}</p>
               <p className="text-[10px] text-[var(--color-text-dim)]">Platform</p>
@@ -696,7 +685,7 @@ export function CreateProjectDialog({
       <div className="p-5 space-y-4">
         <div className="flex items-center gap-2.5">
           {platformInfo && (
-            <PlatformBadge text={platformInfo.badge} color={platformInfo.badgeColor} size={28} />
+            <PlatformLogo platform={platformInfo.id} size={28} />
           )}
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-[var(--color-text)] truncate">
