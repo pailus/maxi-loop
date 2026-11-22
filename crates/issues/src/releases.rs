@@ -114,6 +114,7 @@ struct LinkedIssueRow {
     status: String,
     is_regressed: bool,
     event_count: i64,
+    user_count: i64,
     stored_full_events: i32,
     first_seen: DateTime<Utc>,
     last_seen: DateTime<Utc>,
@@ -393,7 +394,7 @@ pub async fn list_release_issues(
         "SELECT i.id, i.tenant_id, p.workspace_id, w.slug AS workspace_slug,
                 i.project_id, p.slug AS project_slug, i.fingerprint, i.title,
                 i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type,
-                i.status, i.is_regressed, i.event_count, i.stored_full_events,
+                i.status, i.is_regressed, i.event_count, i.user_count, i.stored_full_events,
                 i.first_seen, i.last_seen, i.last_environment, i.first_release,
                 i.last_release, i.sample_event_id, i.created_at, i.updated_at
          FROM issue_releases ir
@@ -435,6 +436,7 @@ pub async fn list_release_issues(
             status: row.status,
             is_regressed: row.is_regressed,
             event_count: row.event_count,
+            user_count: row.user_count,
             stored_full_events: row.stored_full_events,
             first_seen: row.first_seen,
             last_seen: row.last_seen,

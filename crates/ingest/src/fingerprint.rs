@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::model::QueuedEvent;
 use crate::scrub::scrub_event_payload_with_rules;
+use crate::user_identity::{UserDigest, user_digest_from_payload};
 
 const MAX_TITLE_CHARS: usize = 512;
 const MAX_CULPRIT_CHARS: usize = 256;
@@ -58,6 +59,9 @@ pub struct ProcessedEvent {
     /// `issues.issue_type`: `"error"` for SDK error events, `performance_*` for detected
     /// performance problems (`F017`). Only used when the issue row is first created.
     pub issue_type: String,
+    /// In-memory digest of the event user (`F018`), derived before PII scrubbing. Never persisted
+    /// as-is: the worker stores only a tenant-scoped keyed hash.
+    pub user_digest: Option<UserDigest>,
 }
 
 pub const ERROR_ISSUE_TYPE: &str = "error";
@@ -91,10 +95,12 @@ pub fn process_queued_event_with_rules(
     let mut payload: Value = serde_json::from_slice(&queued.raw_payload)
         .map_err(|_| AppError::Validation("invalid event json payload".to_owned()))?;
 
+    let user_digest = user_digest_from_payload(&payload);
+
     // 1. Always scrub baseline + inherited custom PII before extracting any fields or persisting!
     scrub_event_payload_with_rules(&mut payload, custom_rules);
 
-    finalize_processed_event(queued, payload)
+    finalize_processed_event(queued, payload, user_digest)
 }
 
 /// Scrub mandatory baseline + custom PII, resolve minified JS/React stack frames via the bounded
@@ -106,6 +112,8 @@ pub async fn process_queued_event_with_rules_and_sourcemaps(
 ) -> Result<ProcessedEvent, AppError> {
     let mut payload: Value = serde_json::from_slice(&queued.raw_payload)
         .map_err(|_| AppError::Validation("invalid event json payload".to_owned()))?;
+
+    let user_digest = user_digest_from_payload(&payload);
 
     // 1. Always scrub baseline + inherited custom PII first.
     scrub_event_payload_with_rules(&mut payload, custom_rules);
@@ -123,12 +131,13 @@ pub async fn process_queued_event_with_rules_and_sourcemaps(
             .await;
     }
 
-    finalize_processed_event(queued, payload)
+    finalize_processed_event(queued, payload, user_digest)
 }
 
 fn finalize_processed_event(
     queued: QueuedEvent,
     payload: Value,
+    user_digest: Option<UserDigest>,
 ) -> Result<ProcessedEvent, AppError> {
     // 2. Extract primary exception (type, value, raw frames) and fallback message.
     let (exc_type, exc_value, mut raw_frames) = extract_primary_exception(&payload);
@@ -217,6 +226,7 @@ fn finalize_processed_event(
         tags,
         payload,
         issue_type: ERROR_ISSUE_TYPE.to_owned(),
+        user_digest,
     })
 }
 

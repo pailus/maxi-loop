@@ -40,6 +40,7 @@ pub enum IssueSort {
     LastSeenDesc,
     FirstSeenDesc,
     EventsDesc,
+    UsersDesc,
     RegressedDesc,
 }
 
@@ -49,9 +50,11 @@ impl IssueSort {
             None | Some("last_seen") => Ok(Self::LastSeenDesc),
             Some("first_seen") => Ok(Self::FirstSeenDesc),
             Some("events" | "event_count") => Ok(Self::EventsDesc),
+            Some("users" | "user_count") => Ok(Self::UsersDesc),
             Some("regressed" | "regression") => Ok(Self::RegressedDesc),
             Some(_) => Err(AppError::Validation(
-                "sort must be 'last_seen', 'first_seen', 'events', or 'regressed'".to_owned(),
+                "sort must be 'last_seen', 'first_seen', 'events', 'users', or 'regressed'"
+                    .to_owned(),
             )),
         }
     }
@@ -61,6 +64,9 @@ impl IssueSort {
             Self::LastSeenDesc => " ORDER BY i.last_seen DESC, i.id DESC",
             Self::FirstSeenDesc => " ORDER BY i.first_seen DESC, i.id DESC",
             Self::EventsDesc => " ORDER BY i.event_count DESC, i.last_seen DESC, i.id DESC",
+            Self::UsersDesc => {
+                " ORDER BY i.user_count DESC, i.event_count DESC, i.last_seen DESC, i.id DESC"
+            }
             Self::RegressedDesc => " ORDER BY i.is_regressed DESC, i.last_seen DESC, i.id DESC",
         }
     }
@@ -128,6 +134,8 @@ pub struct IssueSummaryView {
     pub status: String,
     pub is_regressed: bool,
     pub event_count: i64,
+    /// Distinct (hashed) users affected (`F018`).
+    pub user_count: i64,
     pub stored_full_events: i32,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,

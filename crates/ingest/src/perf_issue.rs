@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::fingerprint::ProcessedEvent;
+use crate::user_identity::UserDigest;
 
 const MAX_TITLE_DESC_CHARS: usize = 200;
 const MAX_EXCEPTION_VALUE_CHARS: usize = 1024;
@@ -15,14 +16,23 @@ const PERFORMANCE_ISSUE_LEVEL: &str = "warning";
 
 /// Build one issue event per detected problem. The transaction payload was already PII-scrubbed,
 /// and problems only carry normalized (parameter-stripped) span descriptions.
-pub fn performance_problem_events(tx: &ProcessedTransaction) -> Vec<ProcessedEvent> {
+/// `user_digest` is the transaction's user (derived from the raw payload before scrubbing) so
+/// performance issues also count affected users (`F018`).
+pub fn performance_problem_events(
+    tx: &ProcessedTransaction,
+    user_digest: Option<UserDigest>,
+) -> Vec<ProcessedEvent> {
     tx.performance_problems
         .iter()
-        .map(|problem| problem_to_event(tx, problem))
+        .map(|problem| problem_to_event(tx, problem, user_digest))
         .collect()
 }
 
-fn problem_to_event(tx: &ProcessedTransaction, problem: &PerformanceProblem) -> ProcessedEvent {
+fn problem_to_event(
+    tx: &ProcessedTransaction,
+    problem: &PerformanceProblem,
+    user_digest: Option<UserDigest>,
+) -> ProcessedEvent {
     let kind = problem.problem_type;
     // Same pattern in the same endpoint = same issue, independent of environment or release.
     let fingerprint = sha256_hex(&format!(
@@ -83,6 +93,7 @@ fn problem_to_event(tx: &ProcessedTransaction, problem: &PerformanceProblem) -> 
         tags: tx.tags.clone(),
         payload,
         issue_type: kind.issue_type().to_owned(),
+        user_digest,
     }
 }
 
@@ -157,7 +168,8 @@ mod tests {
 
     #[test]
     fn builds_performance_issue_event_with_type_title_and_trace_link() {
-        let events = performance_problem_events(&tx_with("/books/", "e1", vec![n_plus_one()]));
+        let events =
+            performance_problem_events(&tx_with("/books/", "e1", vec![n_plus_one()]), None);
         assert_eq!(events.len(), 1);
         let ev = &events[0];
         assert_eq!(ev.issue_type, "performance_n_plus_one_db");
@@ -177,9 +189,10 @@ mod tests {
 
     #[test]
     fn same_pattern_and_endpoint_groups_together_but_other_endpoints_do_not() {
-        let a = &performance_problem_events(&tx_with("/books/", "e1", vec![n_plus_one()]))[0];
-        let b = &performance_problem_events(&tx_with("/books/", "e2", vec![n_plus_one()]))[0];
-        let c = &performance_problem_events(&tx_with("/authors/", "e3", vec![n_plus_one()]))[0];
+        let a = &performance_problem_events(&tx_with("/books/", "e1", vec![n_plus_one()]), None)[0];
+        let b = &performance_problem_events(&tx_with("/books/", "e2", vec![n_plus_one()]), None)[0];
+        let c =
+            &performance_problem_events(&tx_with("/authors/", "e3", vec![n_plus_one()]), None)[0];
         assert_eq!(a.fingerprint, b.fingerprint);
         assert_ne!(a.event_id, b.event_id);
         assert_ne!(a.fingerprint, c.fingerprint);

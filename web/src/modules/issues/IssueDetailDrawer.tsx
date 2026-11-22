@@ -286,6 +286,11 @@ export function IssueDetailDrawer({
             {issue.event_count.toLocaleString()} events ({issue.stored_full_events} full stored)
           </dd>
 
+          <dt className="font-semibold text-[var(--color-text-dim)]">Users affected</dt>
+          <dd className="font-medium text-[var(--color-text)]">
+            {issue.user_count.toLocaleString()}
+          </dd>
+
           <dt className="font-semibold text-[var(--color-text-dim)]">First / Last</dt>
           <dd className="text-[var(--color-text-muted)]">
             {formatShortDate(issue.first_seen)} · {formatRelativeAge(issue.last_seen)}

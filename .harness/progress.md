@@ -33,6 +33,36 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F018: Users affected per issue + impact sorting
+
+**Status at end of session:** done
+
+**Done:**
+- `migrations/0012_issue_users.sql`: `instance_secrets` (worker-only `user_hash_key`), `issues.user_count` + impact index, `events.user_hash`, RLS-enforced `issue_users`, `alert_rules.spike_metric` (`events`/`users`)
+- `crates/ingest/src/user_identity.rs`: pre-scrub user digest (`id` > `email` > `username` > `ip_address`), tenant-scoped HMAC hash; worker upserts `issue_users` and bumps `user_count`; performance issues count the transaction user too
+- `crates/issues`: `user_count` in views, `sort=users`; merge unions users, split carries users of moved events
+- `crates/alerts`: spike rules with `spike_metric = users` (distinct users seen in window), allow-listed on create/update
+- MCP `list_issues`/`get_issue`: `user_count` + `sort=users`
+- UI: Users column + "Sort: Most users" in Issues, "Users affected" in drawer & full view, metric picker for spike rules
+- Tests: `crates/server/tests/f018_users_affected.rs`, unit tests in `user_identity.rs`, E2E `tests/e2e/python/verify_users_affected.py` (official sentry-sdk)
+
+**Verification run:**
+- `npm --prefix web run build` → PASS
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace` → PASS (112 passed, 0 failed)
+- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; dev service restarted (migration 0012 applied)
+- `verify_users_affected.py` → PASS; `verify_performance_issues.py` regression → PASS
+- Headless Chrome screenshots (Issues list + drawer desktop, mobile) → OK
+
+**Security notes:**
+- Raw user identity never persisted for counting (keyed HMAC, 16 bytes, tenant-scoped); key readable only by `maxi_loop_worker` (test asserts `maxi_loop_app` is denied); `sort`/`spike_metric` allow-listed (+ DB CHECK), negative tests for both; no new dependencies (`hmac` already in workspace). Stored event payloads still contain the SDK-sent `user` object as before (unchanged behaviour; scrub via PII rules).
+
+**Key decisions & why:**
+- D010 (keyed tenant-scoped user hash, exact distinct counts in `issue_users`)
+
+**Not finished / blockers:**
+- None. Python SDK drops `user.ip_address` unless `send_default_pii=True`, so IP-only users count only when sent.
+
 ### 2026-11-22 — Claude Code + Antigravity — F017: Performance Issues (N+1 DB, N+1 API, Slow DB Query, Consecutive DB/HTTP)
 
 **Status at end of session:** done
@@ -226,42 +256,3 @@
 
 **Not finished / blockers:**
 - None
-
-### 2026-11-22 — Antigravity — F016: P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0009_p2_span_operations.sql` adding `span_minute_metrics` (`PRIMARY KEY (tenant_id, project_id, op, description_hash, environment, release, minute_bucket)` with 76-bucket duration histograms and optional `sample_trace_id`) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
-- Extended `crates/performance`:
-  - `normalize.rs`: zero-regex linear-time span description normalizer (SQL comments/strings/numbers/UUIDs/`$N` params/`IN (?, ...)` → `?`; HTTP client query/fragment stripping + numeric/UUID path `:id`; cache/Redis numeric/UUID key normalization) + SHA-256 `description_hash`
-  - `ingest_proc.rs`: extracts normalized span operations from ALL ingested transactions (sampled or unsampled) and batch-upserts 1-minute `span_minute_metrics` buckets (preserving `sample_trace_id` when sampled)
-  - `service.rs` (`list_slow_operations`) & `compare.rs` (`compare_releases`): RLS-enforced slow DB queries/operations aggregation (`p50`/`p95`/`p99`/`avg`/`total_ms`/`count`/`error_rate`, `db_only`/op/query/sort filters) and release comparison (`base_release` vs `target_release` across latency percentiles, throughput RPM, error rate, per-transaction deltas/statuses, linked/new/regressed issue counts, top newly introduced issues, and overall verdict)
-  - `http.rs`: mounted `/api/v1/performance/slow-operations`, `/api/v1/performance/compare-releases`, project convenience routes, and `/t/{tenant}/w/{workspace}/p/{project}/...` slug routes with API token scoping
-- Extended `crates/retention` (`model.rs`, `service.rs`) to clean expired `span_minute_metrics` rows during both shorter project-override and global retention cycles
-- Extended `crates/mcp` (preserving **zero direct `sqlx` dependency**, `D006`):
-  - `tools.rs` (`F-MCP-14`): added read-scoped `list_slow_queries` (defaults to `db_only: true`, includes `sample_trace_id` & UI deep link) and `compare_releases` (output PII-scrubbed, `<<<UNTRUSTED_EVENT_DATA>>>` wrapped, truncation markers)
-  - `prompts.rs`, `protocol.rs`, `http.rs` (`F-MCP-15`): advertised `capabilities.prompts` on `initialize`, implemented `prompts/list` & `prompts/get` (audit-logged & rate-limited) with 4 curated templates (`triage_issue`, `fix_issue`, `triage_release_regression`, `investigate_slow_queries`)
-- Updated MaxiBoard React UI (`web/src/lib/api.ts`, `web/src/modules/performance/SlowOperationsView.tsx`, `CompareReleasesView.tsx`, `PerformanceView.tsx`, `web/src/app/App.tsx`) with **Slow Queries & Ops** and **Compare Releases** sub-tabs + `?view=performance&tab=slow-queries|compare` deep links
-- Added PostgreSQL 16 integration test `crates/server/tests/p2_performance_mcp.rs` and updated `crates/server/tests/mcp_server.rs` `tools/list` assertions (9 read / 11 total); archived `F009` to `.harness/progress-archive.md` and updated `.harness/ARCHITECTURE.md`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo check --workspace` → PASS
-- `cargo test --workspace` → PASS (89/89 passed across 39 suites, incl. 13 `maxi-loop-performance`, 7 `maxi-loop-mcp`, and `p2_performance_mcp` Postgres 16 integration test)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
-- Live smoke check on restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth `401`, normalized SQL `SELECT * FROM smoke_items WHERE id = ? AND state = ?`, compare-releases verdict `regressed`, MCP `initialize`/`prompts/list`/`prompts/get`/`list_slow_queries`/`compare_releases` + token revocation `401`, embedded SPA `200`)
-
-**Security notes:**
-- Self-review passed: all query/compare/prompt arguments validated server-side (slugs, non-whitespace distinct release versions, allow-listed sort keys, escaped `ILIKE`, 90-day time-window cap, positive integer/no-control-char prompt args); zero-regex O(n) SQL/URL normalization eliminates ReDoS risk; all DB access runs inside parameterized `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + `span_minute_metrics` RLS); API token & MCP scope boundaries enforced on every endpoint/tool/prompt; MCP outputs scrub baseline + custom PII and wrap untrusted text in `<<<UNTRUSTED_EVENT_DATA>>>` with `UNTRUSTED_SECURITY_NOTICE`; negative tests verify unauth (`401`), identical-release compare (`400`), cross-project API token (`403`) & MCP tool/prompt denial, invalid prompt args, and cross-tenant isolation (`404`/empty)
-- Dependencies: 0 new external Rust or npm dependencies added. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Aggregated `span_minute_metrics` from ALL ingested transactions (not just sampled traces) keyed by `(op, SHA-256(normalized_description))` with 76-bucket log histograms so p50/p95/total_ms remain accurate under low trace sampling rates while keeping PKs compact and storage bounded via retention cleanup
-
-**Not finished / blockers:**
-- All roadmap features (`F001`–`F016`, Phases 1–5 + all PRD P2 features) are now 100% complete!

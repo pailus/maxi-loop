@@ -40,6 +40,33 @@ pub enum AlertTriggerType {
     Spike,
 }
 
+/// What a `spike` rule counts in its window (`F018`): occurrences or distinct affected users.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpikeMetric {
+    Events,
+    Users,
+}
+
+impl SpikeMetric {
+    pub fn parse(raw: &str) -> Result<Self, AppError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "events" => Ok(Self::Events),
+            "users" => Ok(Self::Users),
+            _ => Err(AppError::Validation(
+                "spike_metric must be 'events' or 'users'".to_owned(),
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Events => "events",
+            Self::Users => "users",
+        }
+    }
+}
+
 impl AlertTriggerType {
     pub fn parse(raw: &str) -> Result<Self, AppError> {
         match raw.trim().to_ascii_lowercase().as_str() {
@@ -112,6 +139,7 @@ pub struct AlertRuleView {
     pub environment_filter: Option<String>,
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
+    pub spike_metric: String,
     pub cooldown_minutes: i32,
     pub is_enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -128,6 +156,7 @@ pub struct CreateAlertRuleInput {
     pub environment_filter: Option<String>,
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
+    pub spike_metric: Option<String>,
     pub cooldown_minutes: Option<i32>,
     pub is_enabled: Option<bool>,
 }
@@ -138,6 +167,7 @@ pub struct UpdateAlertRuleInput {
     pub environment_filter: Option<String>,
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
+    pub spike_metric: Option<String>,
     pub cooldown_minutes: Option<i32>,
     pub is_enabled: Option<bool>,
 }

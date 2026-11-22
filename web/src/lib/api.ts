@@ -159,10 +159,13 @@ export interface IssueListFilter {
   /** `error`, `performance`, or an exact performance issue type. */
   issue_type?: string;
   query?: string;
-  sort?: "last_seen" | "first_seen" | "events";
+  sort?: IssueSortKey;
   page?: number;
   per_page?: number;
 }
+
+/** `users` sorts by distinct affected users (impact). */
+export type IssueSortKey = "last_seen" | "first_seen" | "events" | "users";
 
 export interface IssueSummaryView {
   id: number;
@@ -181,6 +184,8 @@ export interface IssueSummaryView {
   status: IssueStatus;
   is_regressed: boolean;
   event_count: number;
+  /** Distinct (hashed) users affected. */
+  user_count: number;
   stored_full_events: number;
   first_seen: string;
   last_seen: string;
@@ -648,11 +653,15 @@ export interface AlertRuleView {
   environment_filter: string | null;
   spike_threshold: number | null;
   spike_window_minutes: number | null;
+  spike_metric: SpikeMetric;
   cooldown_minutes: number;
   is_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
+
+/** What a spike rule counts in its window. */
+export type SpikeMetric = "events" | "users";
 
 export interface CreateAlertRuleInput {
   name: string;
@@ -662,6 +671,7 @@ export interface CreateAlertRuleInput {
   environment_filter?: string;
   spike_threshold?: number;
   spike_window_minutes?: number;
+  spike_metric?: SpikeMetric;
   cooldown_minutes?: number;
 }
 

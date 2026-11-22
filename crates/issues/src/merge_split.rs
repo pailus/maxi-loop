@@ -362,6 +362,25 @@ pub async fn merge_issues(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("merge issue_hourly_counters: {err}")))?;
 
+    // 2b. Union distinct hashed users into the target issue (`F018`); `user_count` is recomputed below.
+    sqlx::query(
+        "INSERT INTO issue_users (tenant_id, project_id, issue_id, user_hash, first_seen, last_seen) \
+         SELECT tenant_id, project_id, $3, user_hash, MIN(first_seen), MAX(last_seen) \
+         FROM issue_users \
+         WHERE tenant_id = $1 AND project_id = $2 AND issue_id = ANY($4) \
+         GROUP BY tenant_id, project_id, user_hash \
+         ON CONFLICT (tenant_id, project_id, issue_id, user_hash) DO UPDATE SET \
+            first_seen = LEAST(issue_users.first_seen, EXCLUDED.first_seen), \
+            last_seen = GREATEST(issue_users.last_seen, EXCLUDED.last_seen)",
+    )
+    .bind(tenant_id)
+    .bind(project_id)
+    .bind(target_id)
+    .bind(&source_ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("merge issue_users: {err}")))?;
+
     // 3. Merge issue_releases into target issue.
     sqlx::query(
         "INSERT INTO issue_releases (tenant_id, project_id, issue_id, release_version, first_seen, last_seen, event_count) \
@@ -514,6 +533,10 @@ pub async fn merge_issues(
              first_release = $9, \
              last_release = $10, \
              sample_event_id = COALESCE($11, sample_event_id), \
+             user_count = ( \
+                SELECT COUNT(*) FROM issue_users u \
+                WHERE u.tenant_id = $1 AND u.project_id = $2 AND u.issue_id = $3 \
+             ), \
              updated_at = NOW() \
          WHERE tenant_id = $1 AND project_id = $2 AND id = $3",
     )
@@ -1003,6 +1026,36 @@ async fn create_split_issue_and_move_events(
         .execute(&mut **tx)
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("move events to split issue: {err}")))?;
+
+        // Users of the moved stored events follow them (`F018`). The source keeps its users: the
+        // same person may also have hit the remaining events.
+        sqlx::query(
+            "INSERT INTO issue_users (tenant_id, project_id, issue_id, user_hash, first_seen, last_seen) \
+             SELECT tenant_id, project_id, issue_id, user_hash, MIN(received_at), MAX(received_at) \
+             FROM events \
+             WHERE tenant_id = $1 AND project_id = $2 AND issue_id = $3 AND user_hash IS NOT NULL \
+             GROUP BY tenant_id, project_id, issue_id, user_hash \
+             ON CONFLICT (tenant_id, project_id, issue_id, user_hash) DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(new_issue_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("copy split issue users: {err}")))?;
+        sqlx::query(
+            "UPDATE issues SET user_count = ( \
+                SELECT COUNT(*) FROM issue_users u \
+                WHERE u.tenant_id = $1 AND u.project_id = $2 AND u.issue_id = $3 \
+             ) \
+             WHERE tenant_id = $1 AND project_id = $2 AND id = $3",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(new_issue_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("count split issue users: {err}")))?;
 
         // Re-allocate hourly counters for the moved events.
         let mut hour_counts: BTreeMap<DateTime<Utc>, i64> = BTreeMap::new();

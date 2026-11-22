@@ -12,6 +12,7 @@ chrono.workspace = true
 flate2.workspace = true
 governor.workspace = true
 hex.workspace = true
+hmac.workspace = true
 http.workspace = true
 maxi-loop-performance.workspace = true
 maxi-loop-platform.workspace = true

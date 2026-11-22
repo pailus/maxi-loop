@@ -359,6 +359,11 @@ export function IssueDetailFullView({
               {issue.event_count.toLocaleString()}
             </dd>
 
+            <dt className="font-semibold text-[var(--color-text-dim)]">Users affected</dt>
+            <dd className="font-bold text-[var(--color-text)]">
+              {issue.user_count.toLocaleString()}
+            </dd>
+
             <dt className="font-semibold text-[var(--color-text-dim)]">Full payloads</dt>
             <dd className="text-[var(--color-text)]">
               {issue.stored_full_events} / 50 stored (+ sample)

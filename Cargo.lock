@@ -1185,6 +1185,7 @@ dependencies = [
  "flate2",
  "governor",
  "hex",
+ "hmac",
  "http",
  "maxi-loop-performance",
  "maxi-loop-platform",

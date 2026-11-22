@@ -7,4 +7,5 @@ pub mod model;
 pub mod perf_issue;
 pub mod scrub;
 pub mod scrub_cache;
+pub mod user_identity;
 pub mod worker;

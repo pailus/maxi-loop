@@ -384,7 +384,7 @@
     {
       "id": "F018",
       "title": "Users affected per issue and impact-based sorting",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "Ingest derives a hashed user identity from event `user` (id / email / ip) without storing raw PII for the count",
@@ -396,12 +396,13 @@
         "cargo fmt --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
         "cargo test --workspace",
-        "cargo build --workspace"
+        "cargo build --workspace",
+        "tests/e2e/python/.venv/bin/python tests/e2e/python/verify_users_affected.py"
       ],
       "depends_on": [
         "F017"
       ],
-      "notes": "Agreed with user 2026-11-22 as high-value follow-up."
+      "notes": "Agreed with user 2026-11-22 as high-value follow-up. Done 2026-11-22: migration 0012, keyed tenant-scoped user hash (D010), sort=users, spike_metric=users. The Python SDK strips user.ip_address unless send_default_pii=True, so IP-only users are only counted when the SDK sends the IP."
     },
     {
       "id": "F019",

@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
 use crate::delivery::{AlertPayload, DeliveryPolicy, dispatch_alert};
-use crate::model::AlertChannelType;
+use crate::model::{AlertChannelType, SpikeMetric};
 
 /// Non-blocking handle implementing `AlertSignalObserver` for `crates/ingest`.
 #[derive(Clone)]
@@ -56,6 +56,7 @@ struct SpikeRuleRow {
     environment_filter: Option<String>,
     spike_threshold: i32,
     spike_window_minutes: i32,
+    spike_metric: String,
     cooldown_minutes: i32,
 }
 
@@ -260,7 +261,7 @@ pub async fn evaluate_spike_rules(
         "SELECT r.id AS rule_id, r.tenant_id, r.workspace_id, r.project_id,
                 r.channel_id, c.channel_type, c.config AS channel_config,
                 r.environment_filter, r.spike_threshold, r.spike_window_minutes,
-                r.cooldown_minutes
+                r.spike_metric, r.cooldown_minutes
          FROM alert_rules r
          JOIN alert_channels c ON c.tenant_id = r.tenant_id AND c.id = r.channel_id
          WHERE r.trigger_type = 'spike'
@@ -284,8 +285,10 @@ pub async fn evaluate_spike_rules(
             Utc::now() - ChronoDuration::minutes(i64::from(rule.spike_window_minutes));
         let hour_bucket_start = truncate_to_hour(window_start);
 
+        let metric = SpikeMetric::parse(&rule.spike_metric).unwrap_or(SpikeMetric::Events);
         let mut tx = begin_worker_tx(pool).await?;
-        let candidates: Vec<SpikeCandidateRow> = sqlx::query_as(
+        let candidates: Vec<SpikeCandidateRow> = match metric {
+            SpikeMetric::Events => sqlx::query_as(
             "SELECT i.project_id, p.slug AS project_slug, i.id AS issue_id,
                     i.title, i.exception_type, i.exception_value, i.culprit,
                     i.level, i.last_environment, i.last_release,
@@ -314,7 +317,39 @@ pub async fn evaluate_spike_rules(
         .bind(&rule.environment_filter)
         .bind(i64::from(rule.spike_threshold))
         .fetch_all(&mut *tx)
-        .await
+        .await,
+            // Distinct affected users whose latest occurrence falls inside the window (`F018`).
+            SpikeMetric::Users => sqlx::query_as(
+                "SELECT i.project_id, p.slug AS project_slug, i.id AS issue_id,
+                        i.title, i.exception_type, i.exception_value, i.culprit,
+                        i.level, i.last_environment, i.last_release,
+                        i.event_count AS total_event_count,
+                        COUNT(u.user_hash)::BIGINT AS window_event_count
+                 FROM issues i
+                 JOIN projects p ON p.tenant_id = i.tenant_id AND p.id = i.project_id
+                 JOIN issue_users u
+                   ON u.tenant_id = i.tenant_id AND u.project_id = i.project_id AND u.issue_id = i.id
+                 WHERE i.tenant_id = $1
+                   AND i.status = 'unresolved'
+                   AND u.last_seen >= $2
+                   AND ($3::BIGINT IS NULL OR p.workspace_id = $3)
+                   AND ($4::BIGINT IS NULL OR i.project_id = $4)
+                   AND ($5::TEXT IS NULL OR LOWER(i.last_environment) = LOWER($5))
+                 GROUP BY i.project_id, p.slug, i.id, i.title, i.exception_type, i.exception_value,
+                          i.culprit, i.level, i.last_environment, i.last_release, i.event_count
+                 HAVING COUNT(u.user_hash) >= $6
+                 ORDER BY window_event_count DESC
+                 LIMIT 50",
+            )
+            .bind(rule.tenant_id)
+            .bind(window_start)
+            .bind(rule.workspace_id)
+            .bind(rule.project_id)
+            .bind(&rule.environment_filter)
+            .bind(i64::from(rule.spike_threshold))
+            .fetch_all(&mut *tx)
+            .await,
+        }
         .map_err(|err| AppError::DatabaseQuery(format!("query spike candidates: {err}")))?;
         tx.commit()
             .await
@@ -360,8 +395,14 @@ pub async fn evaluate_spike_rules(
                 issue_url,
                 triggered_at: Utc::now(),
                 details: Some(format!(
-                    "{} events observed (threshold {} in {}m window)",
-                    cand.window_event_count, rule.spike_threshold, rule.spike_window_minutes
+                    "{} {} observed (threshold {} in {}m window)",
+                    cand.window_event_count,
+                    match metric {
+                        SpikeMetric::Events => "events",
+                        SpikeMetric::Users => "affected users",
+                    },
+                    rule.spike_threshold,
+                    rule.spike_window_minutes
                 )),
             };
 

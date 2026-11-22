@@ -9,7 +9,8 @@ use sqlx::{FromRow, PgPool};
 use crate::delivery::{redact_channel_config_for_api, validate_channel_config};
 use crate::model::{
     AlertChannelType, AlertChannelView, AlertDeliveryView, AlertRuleView, AlertTriggerType,
-    CreateAlertChannelInput, CreateAlertRuleInput, UpdateAlertChannelInput, UpdateAlertRuleInput,
+    CreateAlertChannelInput, CreateAlertRuleInput, SpikeMetric, UpdateAlertChannelInput,
+    UpdateAlertRuleInput,
 };
 
 #[derive(FromRow)]
@@ -69,6 +70,7 @@ struct RuleRow {
     environment_filter: Option<String>,
     spike_threshold: Option<i32>,
     spike_window_minutes: Option<i32>,
+    spike_metric: String,
     cooldown_minutes: i32,
     is_enabled: bool,
     created_at: DateTime<Utc>,
@@ -98,6 +100,7 @@ fn map_rule(row: RuleRow) -> AlertRuleView {
         environment_filter: row.environment_filter,
         spike_threshold: row.spike_threshold,
         spike_window_minutes: row.spike_window_minutes,
+        spike_metric: row.spike_metric,
         cooldown_minutes: row.cooldown_minutes,
         is_enabled: row.is_enabled,
         created_at: row.created_at,
@@ -334,7 +337,7 @@ pub async fn list_alert_rules(
                 r.project_id, p.slug AS project_slug,
                 r.channel_id, c.name AS channel_name, c.channel_type,
                 r.name, r.trigger_type, r.environment_filter,
-                r.spike_threshold, r.spike_window_minutes, r.cooldown_minutes,
+                r.spike_threshold, r.spike_window_minutes, r.spike_metric, r.cooldown_minutes,
                 r.is_enabled, r.created_at, r.updated_at
          FROM alert_rules r
          JOIN alert_channels c ON c.tenant_id = r.tenant_id AND c.id = r.channel_id
@@ -415,6 +418,11 @@ pub async fn create_alert_rule(
         AlertTriggerType::NewIssue | AlertTriggerType::Regression => (None, None),
     };
 
+    let spike_metric = match input.spike_metric.as_deref() {
+        Some(raw) => SpikeMetric::parse(raw)?,
+        None => SpikeMetric::Events,
+    };
+
     let cooldown_minutes = input.cooldown_minutes.unwrap_or(15);
     if !(1..=1440).contains(&cooldown_minutes) {
         return Err(AppError::Validation(
@@ -449,8 +457,9 @@ pub async fn create_alert_rule(
     let inserted: (i64, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
         "INSERT INTO alert_rules (
              tenant_id, workspace_id, project_id, channel_id, name, trigger_type,
-             environment_filter, spike_threshold, spike_window_minutes, cooldown_minutes, is_enabled
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             environment_filter, spike_threshold, spike_window_minutes, cooldown_minutes, is_enabled,
+             spike_metric
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id, created_at, updated_at",
     )
     .bind(tenant_ctx.tenant_id())
@@ -464,6 +473,7 @@ pub async fn create_alert_rule(
     .bind(spike_window_minutes)
     .bind(cooldown_minutes)
     .bind(is_enabled)
+    .bind(spike_metric.as_str())
     .fetch_one(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("insert alert_rule: {err}")))?;
@@ -487,6 +497,7 @@ pub async fn create_alert_rule(
         environment_filter,
         spike_threshold,
         spike_window_minutes,
+        spike_metric: spike_metric.as_str().to_owned(),
         cooldown_minutes,
         is_enabled,
         created_at: inserted.1,
@@ -521,6 +532,12 @@ pub async fn update_alert_rule(
             "spike_window_minutes must be between 1 and 1440".to_owned(),
         ));
     }
+    let spike_metric = input
+        .spike_metric
+        .as_deref()
+        .map(SpikeMetric::parse)
+        .transpose()?
+        .map(SpikeMetric::as_str);
     if let Some(cd) = input.cooldown_minutes
         && !(1..=1440).contains(&cd)
     {
@@ -551,6 +568,7 @@ pub async fn update_alert_rule(
              spike_window_minutes = COALESCE($6, spike_window_minutes),
              cooldown_minutes = COALESCE($7, cooldown_minutes),
              is_enabled = COALESCE($8, is_enabled),
+             spike_metric = COALESCE($9, spike_metric),
              updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2
          RETURNING id",
@@ -568,6 +586,7 @@ pub async fn update_alert_rule(
     .bind(input.spike_window_minutes)
     .bind(input.cooldown_minutes)
     .bind(input.is_enabled)
+    .bind(spike_metric)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("update alert_rule: {err}")))?;
@@ -581,7 +600,7 @@ pub async fn update_alert_rule(
                 r.project_id, p.slug AS project_slug,
                 r.channel_id, c.name AS channel_name, c.channel_type,
                 r.name, r.trigger_type, r.environment_filter,
-                r.spike_threshold, r.spike_window_minutes, r.cooldown_minutes,
+                r.spike_threshold, r.spike_window_minutes, r.spike_metric, r.cooldown_minutes,
                 r.is_enabled, r.created_at, r.updated_at
          FROM alert_rules r
          JOIN alert_channels c ON c.tenant_id = r.tenant_id AND c.id = r.channel_id

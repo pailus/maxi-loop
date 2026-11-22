@@ -8,6 +8,12 @@
 
 ---
 
+### D010 — 2026-11-22 — Users affected = keyed, tenant-scoped user hash (F018)
+**Decision:** Count users from the event `user` interface (`id` > `email` (lowercased) > `username` > `ip_address`, `{{auto}}`/`[Filtered]` ignored), derived *before* PII scrubbing as an in-memory SHA-256 digest, then persisted only as `HMAC-SHA256(instance_secrets.user_hash_key, tenant_id || digest)[..16]` in `issue_users` / `events.user_hash`. The key is generated in migration 0012 (`gen_random_uuid`-based, 32 bytes), readable only by `maxi_loop_worker`. `issues.user_count` is a lifetime distinct count kept by the worker (merge = union, split = users of moved stored events). Spike rules get `spike_metric = events | users` (users = distinct `issue_users.last_seen` inside the window).
+**Why:** Exact distinct counts and impact sorting without storing raw PII, no dictionary reversal of emails without the DB-held key, no cross-tenant correlation, and no new config/env needed.
+**Rejected:** Unkeyed SHA-256 of the identity (brute-forceable emails/IPs); HyperLogLog sketches (no exact counts, harder merge/split); hashing after scrubbing (custom email rules would collapse all users into `[Filtered]`).
+**Decided by:** assistant (F018 acceptance criteria agreed with user)
+
 ### D009 — 2026-11-22 — Colours & fonts identical to MaxiBoard (supersedes parts of D007)
 **Decision:** Use MaxiBoard's exact tokens and type: white sidebar (`--color-bg-sidebar: #ffffff`, was `#F7F8F9`), font stack `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif` (no Noto Sans), mono `ui-monospace, SFMono-Regular, Menlo, monospace`, lozenges 12px / radius 4 / `#E9F2FF` primary, sonner-style light toast bottom-center (was `#172B4D` navy toast), avatar initials+colour from MaxiBoard `initials.js` (`web/src/lib/avatar.ts`), touch-device 16px input guard. Off-palette hex values mapped to the MaxiBoard/Atlassian set.
 **Why:** User asked for one design pattern across MaxiBoard and MaxiLoop — same colours and same font.

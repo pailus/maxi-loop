@@ -15,6 +15,7 @@ import {
 import {
   type IssueDetailView,
   type IssueStatus,
+  type IssueSortKey,
   type IssueSummaryView,
   type PaginatedIssuesResponse,
   type ProjectView,
@@ -87,7 +88,7 @@ export function IssuesView({
       setPage(1);
     }
   }, [initialReleaseFilter]);
-  const [sort, setSort] = useState<"last_seen" | "first_seen" | "events">("last_seen");
+  const [sort, setSort] = useState<IssueSortKey>("last_seen");
   const [page, setPage] = useState(1);
 
   const [issuesPage, setIssuesPage] = useState<PaginatedIssuesResponse | null>(null);
@@ -498,7 +499,7 @@ export function IssuesView({
           <select
             value={sort}
             onChange={(e) => {
-              setSort(e.target.value as "last_seen" | "first_seen" | "events");
+              setSort(e.target.value as IssueSortKey);
               setPage(1);
             }}
             aria-label="Sort issues"
@@ -506,6 +507,7 @@ export function IssuesView({
           >
             <option value="last_seen">Sort: Last seen</option>
             <option value="events">Sort: Most events</option>
+            <option value="users">Sort: Most users</option>
             <option value="first_seen">Sort: Newest first</option>
           </select>
         </div>
@@ -577,10 +579,11 @@ export function IssuesView({
 
         {/* Issues Table Card */}
         <div className="mt-3.5 flex-1 max-md:flex-none rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-[var(--pm-shadow-card)] flex flex-col overflow-hidden max-md:overflow-visible">
-          <div className="px-4 py-2.5 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] grid grid-cols-[1fr_44px_64px] sm:grid-cols-[1fr_92px_72px_76px] gap-3 text-xs font-semibold text-[var(--color-text-dim)]">
+          <div className="px-4 py-2.5 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] grid grid-cols-[1fr_44px_40px_56px] sm:grid-cols-[1fr_92px_72px_64px_76px] gap-3 text-xs font-semibold text-[var(--color-text-dim)]">
             <span>Issue &amp; culprit</span>
             <span className="hidden sm:block">24h trend</span>
             <span className="text-right">Events</span>
+            <span className="text-right">Users</span>
             <span className="text-right">Last seen</span>
           </div>
 
@@ -639,7 +642,7 @@ export function IssuesView({
                         setSelectedIssueId(item.id);
                       }
                     }}
-                    className={`px-4 py-3 grid grid-cols-[1fr_44px_64px] sm:grid-cols-[1fr_92px_72px_76px] gap-3 items-center text-left transition cursor-pointer relative ${
+                    className={`px-4 py-3 grid grid-cols-[1fr_44px_40px_56px] sm:grid-cols-[1fr_92px_72px_64px_76px] gap-3 items-center text-left transition cursor-pointer relative ${
                       isSelected
                         ? "bg-[var(--color-primary-light)]"
                         : "hover:bg-[var(--pm-card-hover)]"
@@ -779,6 +782,14 @@ export function IssuesView({
                     {/* Event Count */}
                     <div className="text-right font-bold text-sm text-[var(--color-text)]">
                       {item.event_count.toLocaleString()}
+                    </div>
+
+                    {/* Distinct users affected */}
+                    <div
+                      className="text-right text-sm font-medium text-[var(--color-text-muted)]"
+                      title={`${item.user_count.toLocaleString()} distinct users affected`}
+                    >
+                      {item.user_count.toLocaleString()}
                     </div>
 
                     {/* Last Seen Age */}

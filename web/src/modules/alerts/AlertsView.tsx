@@ -6,6 +6,7 @@ import {
   type AlertDeliveryView,
   type AlertRuleView,
   type AlertTriggerType,
+  type SpikeMetric,
   ApiError,
   type PiiScrubRuleType,
   type PiiScrubRuleView,
@@ -66,6 +67,7 @@ export function AlertsView({
   const [ruleEnv, setRuleEnv] = useState("");
   const [spikeThreshold, setSpikeThreshold] = useState("10");
   const [spikeWindow, setSpikeWindow] = useState("60");
+  const [spikeMetric, setSpikeMetric] = useState<SpikeMetric>("events");
   const [cooldownMinutes, setCooldownMinutes] = useState("15");
 
   // Create PII Rule form state
@@ -164,6 +166,7 @@ export function AlertsView({
         environment_filter: ruleEnv.trim() || undefined,
         spike_threshold: ruleTrigger === "spike" ? Number(spikeThreshold) : undefined,
         spike_window_minutes: ruleTrigger === "spike" ? Number(spikeWindow) : undefined,
+        spike_metric: ruleTrigger === "spike" ? spikeMetric : undefined,
         cooldown_minutes: Number(cooldownMinutes) || 15,
       });
       setRuleName("");
@@ -299,7 +302,7 @@ export function AlertsView({
                         Channel: <strong>{r.channel_name}</strong>
                         {r.environment_filter ? ` · Env: ${r.environment_filter}` : ""}
                         {r.trigger_type === "spike"
-                          ? ` · Threshold: >= ${r.spike_threshold} in ${r.spike_window_minutes}m`
+                          ? ` · Threshold: >= ${r.spike_threshold} ${r.spike_metric === "users" ? "users" : "events"} in ${r.spike_window_minutes}m`
                           : ""}
                         {` · Cooldown: ${r.cooldown_minutes}m`}
                       </div>
@@ -629,8 +632,21 @@ export function AlertsView({
 
               {ruleTrigger === "spike" && (
                 <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="block text-xs font-semibold mb-1">Count</label>
+                    <select
+                      value={spikeMetric}
+                      onChange={(e) => setSpikeMetric(e.target.value as SpikeMetric)}
+                      className="pm-input h-9 text-sm"
+                    >
+                      <option value="events">Events (occurrences)</option>
+                      <option value="users">Users affected (distinct)</option>
+                    </select>
+                  </div>
                   <div>
-                    <label className="block text-xs font-semibold mb-1">Events &gt;=</label>
+                    <label className="block text-xs font-semibold mb-1">
+                      {spikeMetric === "users" ? "Users" : "Events"} &gt;=
+                    </label>
                     <input
                       type="number"
                       min={2}

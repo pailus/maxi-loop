@@ -23,6 +23,7 @@ use crate::fingerprint::{
 use crate::model::{QueuedEnvelope, QueuedEvent};
 use crate::perf_issue::performance_problem_events;
 use crate::scrub_cache::ScrubRulesCache;
+use crate::user_identity::{load_user_hash_key, tenant_user_hash, user_digest_from_raw};
 
 #[derive(Clone, Copy, Debug)]
 pub struct IngestWorkerConfig {
@@ -73,7 +74,11 @@ struct EventToInsert {
     tags: serde_json::Value,
     payload: serde_json::Value,
     is_sample: bool,
+    user_hash: Option<Vec<u8>>,
 }
+
+/// `(tenant_id, project_id, issue_id, user_hash)` for the `issue_users` upsert (`F018`).
+type IssueUserKey = (i64, i64, i64, Vec<u8>);
 
 #[derive(sqlx::FromRow)]
 struct ExistingIssueRow {
@@ -231,9 +236,11 @@ async fn append_envelope_items(
     }
 
     for raw_tx in envelope.transactions {
+        // Derived before scrubbing; only used if a performance problem is detected (`F018`).
+        let user_digest = user_digest_from_raw(&raw_tx.raw_payload);
         match process_queued_transaction_with_rules(raw_tx, &custom_rules, trace_sampling) {
             Ok(processed) => {
-                out_events.extend(performance_problem_events(&processed));
+                out_events.extend(performance_problem_events(&processed, user_digest));
                 out_txs.push(processed);
             }
             Err(err) => {
@@ -330,6 +337,22 @@ pub async fn flush_processed_batch_with_signals(
         }
     }
 
+    // Users affected (`F018`): the keyed hash needs the installation key; load it once per batch
+    // only when at least one event carries a user. A missing key disables user tracking (logged).
+    let user_hash_key = if batch.iter().any(|ev| ev.user_digest.is_some()) {
+        let key = load_user_hash_key(&mut tx).await?;
+        if key.is_none() {
+            warn!("instance_secrets.user_hash_key missing; users affected will not be counted");
+        }
+        key
+    } else {
+        None
+    };
+    let user_hash_of = |ev: &ProcessedEvent| -> Option<Vec<u8>> {
+        let key = user_hash_key.as_deref()?;
+        tenant_user_hash(key, ev.tenant_id, ev.user_digest.as_ref()?)
+    };
+
     // 2. Group events by `(tenant_id, project_id, fingerprint)` in deterministic BTreeMap order.
     let mut grouped: BTreeMap<(i64, i64, String), Vec<&ProcessedEvent>> = BTreeMap::new();
     for ev in batch {
@@ -343,6 +366,7 @@ pub async fn flush_processed_batch_with_signals(
     let mut hourly_increments: BTreeMap<(i64, i64, i64, DateTime<Utc>), i64> = BTreeMap::new();
     let mut release_agg: BTreeMap<(i64, i64, String), ReleaseAgg> = BTreeMap::new();
     let mut issue_release_agg: BTreeMap<(i64, i64, i64, String), IssueReleaseAgg> = BTreeMap::new();
+    let mut user_agg: BTreeMap<IssueUserKey, (DateTime<Utc>, DateTime<Utc>)> = BTreeMap::new();
     let mut alert_signals: Vec<AlertSignal> = Vec::new();
     let mut regressed_issues = 0usize;
 
@@ -571,6 +595,7 @@ pub async fn flush_processed_batch_with_signals(
                 tags: ev.tags.clone(),
                 payload: ev.payload.clone(),
                 is_sample: is_first_for_issue || is_regression_sample,
+                user_hash: user_hash_of(ev),
             });
         }
 
@@ -594,6 +619,7 @@ pub async fn flush_processed_batch_with_signals(
                 tags: latest_ev.tags.clone(),
                 payload: latest_ev.payload.clone(),
                 is_sample: true,
+                user_hash: user_hash_of(latest_ev),
             });
         }
 
@@ -604,6 +630,14 @@ pub async fn flush_processed_batch_with_signals(
             *hourly_increments
                 .entry((*tenant_id, *project_id, resolved_issue_id, hour_bucket))
                 .or_insert(0) += 1;
+
+            if let Some(user_hash) = user_hash_of(ev) {
+                let seen = user_agg
+                    .entry((*tenant_id, *project_id, resolved_issue_id, user_hash))
+                    .or_insert((ev.received_at, ev.received_at));
+                seen.0 = seen.0.min(ev.received_at);
+                seen.1 = seen.1.max(ev.received_at);
+            }
 
             if let Some(version) = ev.release.as_deref() {
                 let rel_entry = release_agg
@@ -745,7 +779,7 @@ pub async fn flush_processed_batch_with_signals(
             "INSERT INTO events ( \
                 tenant_id, project_id, issue_id, event_id, fingerprint, received_at, \
                 environment, release, level, platform, exception_type, \
-                exception_value, stack_frames, tags, payload, is_sample \
+                exception_value, stack_frames, tags, payload, is_sample, user_hash \
              ) ",
         );
         qb.push_values(&events_to_insert, |mut b, ev| {
@@ -764,7 +798,8 @@ pub async fn flush_processed_batch_with_signals(
                 .push_bind(&ev.stack_frames)
                 .push_bind(&ev.tags)
                 .push_bind(&ev.payload)
-                .push_bind(ev.is_sample);
+                .push_bind(ev.is_sample)
+                .push_bind(&ev.user_hash);
         });
         qb.push(" ON CONFLICT (tenant_id, project_id, received_at, event_id) DO NOTHING");
         qb.build()
@@ -799,6 +834,56 @@ pub async fn flush_processed_batch_with_signals(
         qb.build().execute(&mut *tx).await.map_err(|err| {
             AppError::DatabaseQuery(format!("batch upsert issue_hourly_counters: {err}"))
         })?;
+    }
+
+    // 5. Distinct users per issue (`F018`): upsert hashed users and bump `issues.user_count` by the
+    // number of users that are new for each issue.
+    if !user_agg.is_empty() {
+        let user_rows: Vec<_> = user_agg.iter().collect();
+        let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO issue_users ( \
+                tenant_id, project_id, issue_id, user_hash, first_seen, last_seen \
+             ) ",
+        );
+        qb.push_values(&user_rows, |mut b, ((t, p, i, hash), (first, last))| {
+            b.push_bind(*t)
+                .push_bind(*p)
+                .push_bind(*i)
+                .push_bind(hash)
+                .push_bind(*first)
+                .push_bind(*last);
+        });
+        qb.push(
+            " ON CONFLICT (tenant_id, project_id, issue_id, user_hash) DO UPDATE SET \
+                first_seen = LEAST(issue_users.first_seen, EXCLUDED.first_seen), \
+                last_seen = GREATEST(issue_users.last_seen, EXCLUDED.last_seen) \
+             RETURNING tenant_id, project_id, issue_id, (xmax = 0) AS inserted",
+        );
+        let upserted: Vec<(i64, i64, i64, bool)> = qb
+            .build_query_as()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|err| AppError::DatabaseQuery(format!("batch upsert issue_users: {err}")))?;
+
+        let mut new_users: BTreeMap<(i64, i64, i64), i64> = BTreeMap::new();
+        for (t, p, i, inserted) in upserted {
+            if inserted {
+                *new_users.entry((t, p, i)).or_insert(0) += 1;
+            }
+        }
+        for ((t, p, i), added) in new_users {
+            sqlx::query(
+                "UPDATE issues SET user_count = user_count + $4 \
+                 WHERE tenant_id = $1 AND project_id = $2 AND id = $3",
+            )
+            .bind(t)
+            .bind(p)
+            .bind(i)
+            .bind(added)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| AppError::DatabaseQuery(format!("update issue user_count: {err}")))?;
+        }
     }
 
     tx.commit()
