@@ -40,6 +40,7 @@ import {
   type PerfTab,
   PerformanceView,
 } from "../modules/performance/PerformanceView";
+import { CreateProjectDialog } from "../modules/projects/CreateProjectDialog";
 import { ProjectTree } from "../modules/projects/ProjectTree";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
@@ -149,6 +150,7 @@ export function App() {
   const [createWsInitialName, setCreateWsInitialName] = useState<string | null>(
     null,
   );
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [teamTabRequest, setTeamTabRequest] = useState<{
     tab: AdminTab;
     nonce: number;
@@ -267,6 +269,7 @@ export function App() {
     setProjects([]);
     setSelectedProjectSlug("");
     setCreateWsInitialName(null);
+    setCreateProjectOpen(false);
   }
 
   if (bootstrapping) {
@@ -365,7 +368,13 @@ export function App() {
 
         <button
           type="button"
-          onClick={() => setActiveNav("projects")}
+          onClick={() => {
+            if (canManageProjects) {
+              setCreateProjectOpen(true);
+            } else {
+              setActiveNav("projects");
+            }
+          }}
           className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
         >
           <Plus size={14} />
@@ -548,14 +557,17 @@ export function App() {
             <div className="mt-4 pt-3 border-t border-[var(--color-border)]">
               <div className="px-2.5 pb-1.5 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
                 <span>Projects</span>
-                <button
-                  type="button"
-                  onClick={() => setActiveNav("projects")}
-                  className="hover:text-[var(--color-text)] cursor-pointer"
-                  title="Manage or create projects"
-                >
-                  <Plus size={14} />
-                </button>
+                {canManageProjects && (
+                  <button
+                    type="button"
+                    onClick={() => setCreateProjectOpen(true)}
+                    className="w-6 h-6 -mr-1 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer transition"
+                    title="Create project"
+                    aria-label="Create project"
+                  >
+                    <Plus size={15} />
+                  </button>
+                )}
               </div>
 
               {projects.length === 0 ? (
@@ -627,7 +639,10 @@ export function App() {
             initialReleaseFilter={selectedReleaseFilter}
             canTriage={canTriage}
             onShowToast={showToast}
-            onNavigateToProjects={() => setActiveNav("projects")}
+            onNavigateToProjects={() => {
+              setActiveNav("projects");
+              if (canManageProjects) setCreateProjectOpen(true);
+            }}
           />
         )}
 
@@ -688,6 +703,9 @@ export function App() {
             }
             projects={projects}
             canManageProjects={canManageProjects}
+            onOpenCreateProject={
+              canManageProjects ? () => setCreateProjectOpen(true) : undefined
+            }
             onProjectsChanged={() =>
               loadWorkspaceResources(
                 activeWorkspaceSlug || session.default_workspace.slug,
@@ -744,6 +762,32 @@ export function App() {
             );
             handleSelectWorkspace(created.slug);
             showToast(`Workspace ${created.name} created`);
+          }}
+        />
+      )}
+
+      {/* Create Project Modal (MaxiBoard style, triggered from sidebar '+' or topbar) */}
+      {createProjectOpen && (
+        <CreateProjectDialog
+          workspaceName={currentWorkspaceName}
+          workspaceSlug={activeWorkspaceSlug || session.default_workspace.slug}
+          maxRetentionDays={
+            activeWorkspace?.effective_retention_days ??
+            session.tenant.retention_days
+          }
+          defaultRateLimitPerMinute={
+            activeWorkspace?.effective_rate_limit_per_minute ??
+            session.tenant.default_rate_limit_per_minute
+          }
+          existingProjects={projects}
+          onClose={() => setCreateProjectOpen(false)}
+          onCreated={async (created) => {
+            setCreateProjectOpen(false);
+            await loadWorkspaceResources(
+              activeWorkspaceSlug || session.default_workspace.slug,
+            );
+            setActiveNav("projects");
+            showToast(`Project ${created.slug} created and DSN cached`);
           }}
         />
       )}

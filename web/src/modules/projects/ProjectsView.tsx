@@ -32,6 +32,7 @@ interface ProjectsViewProps {
   globalRetentionDays: number;
   projects: ProjectView[];
   canManageProjects: boolean;
+  onOpenCreateProject?: () => void;
   onProjectsChanged: () => Promise<void>;
   onOpenProjectIssues: (projectSlug: string) => void;
   onShowToast: (message: string) => void;
@@ -67,6 +68,7 @@ export function ProjectsView({
   globalRetentionDays,
   projects,
   canManageProjects,
+  onOpenCreateProject,
   onProjectsChanged,
   onOpenProjectIssues,
   onShowToast,
@@ -558,17 +560,29 @@ export function ProjectsView({
             </p>
           </div>
 
-          {existingTags.length > 0 && activeTagFilter === "__all__" && (
-            <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-xs font-medium text-[var(--color-text)] cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={groupByTag}
-                onChange={(e) => setGroupByTag(e.target.checked)}
-                className="accent-[var(--color-primary)]"
-              />
-              <span>Group by tag</span>
-            </label>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {existingTags.length > 0 && activeTagFilter === "__all__" && (
+              <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-xs font-medium text-[var(--color-text)] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={groupByTag}
+                  onChange={(e) => setGroupByTag(e.target.checked)}
+                  className="accent-[var(--color-primary)]"
+                />
+                <span>Group by tag</span>
+              </label>
+            )}
+            {canManageProjects && onOpenCreateProject && (
+              <button
+                type="button"
+                onClick={onOpenCreateProject}
+                className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus size={14} />
+                <span>Create project</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Tag Filter Pills */}
@@ -637,8 +651,18 @@ export function ProjectsView({
                 No projects created yet
               </h3>
               <p className="mt-1 text-xs text-[var(--color-text-dim)] max-w-md mx-auto">
-                Use the Create project form on the right to provision your first project and generate an instant Sentry DSN.
+                Provision your first project in {workspaceName} to generate an instant Sentry DSN.
               </p>
+              {canManageProjects && onOpenCreateProject && (
+                <button
+                  type="button"
+                  onClick={onOpenCreateProject}
+                  className="mt-4 h-9 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>Create project</span>
+                </button>
+              )}
             </div>
           ) : groupedSections ? (
             groupedSections.map((section) => {
