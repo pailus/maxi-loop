@@ -33,6 +33,18 @@ pub fn trace_ui_url(public_base_url: &str, trace_id: &str) -> String {
     format!("{base}/?view=performance&trace={trace_id}")
 }
 
+/// Build a direct deep link to the Slow Queries & Operations view in MaxiLoop UI (`F-MCP-14`).
+pub fn slow_queries_ui_url(public_base_url: &str, project_slug: &str) -> String {
+    let base = public_base_url.trim_end_matches('/');
+    format!("{base}/?view=performance&tab=slow-queries&project={project_slug}")
+}
+
+/// Build a direct deep link to the Compare Releases view in MaxiLoop UI (`F-MCP-14`).
+pub fn compare_releases_ui_url(public_base_url: &str, project_slug: &str) -> String {
+    let base = public_base_url.trim_end_matches('/');
+    format!("{base}/?view=performance&tab=compare&project={project_slug}")
+}
+
 /// Scrub PII from an untrusted text field, bound its length with an explicit truncation marker,
 /// and wrap it in untrusted-data delimiters (`F-MCP-8`, `F-MCP-10`).
 pub fn wrap_untrusted_text(

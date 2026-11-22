@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{error, warn};
 
+use crate::prompts::{is_known_prompt, list_prompt_definitions, render_prompt};
 use crate::protocol::{
     ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JsonRpcRequest,
     JsonRpcResponse, build_initialize_result, build_tool_error_result, build_tool_success_result,
@@ -212,6 +213,15 @@ async fn mcp_post_handler(
             Json(JsonRpcResponse::ok(req_id, json!({ "tools": tools }))).into_response()
         }
         "tools/call" => handle_tool_call(&state, &auth, req_id, req.params).await,
+        "prompts/list" => {
+            let prompts = if auth.can_read {
+                list_prompt_definitions()
+            } else {
+                Vec::new()
+            };
+            Json(JsonRpcResponse::ok(req_id, json!({ "prompts": prompts }))).into_response()
+        }
+        "prompts/get" => handle_prompt_get(&state, &auth, req_id, req.params).await,
         other => Json(JsonRpcResponse::err(
             req_id,
             ERR_METHOD_NOT_FOUND,
@@ -382,6 +392,123 @@ async fn handle_tool_call(
     }
 }
 
+#[derive(Deserialize)]
+struct PromptGetParams {
+    name: String,
+    #[serde(default)]
+    arguments: Option<Value>,
+}
+
+async fn handle_prompt_get(
+    state: &McpState,
+    auth: &maxi_loop_auth::mcp::McpAuthContext,
+    req_id: Value,
+    params: Option<Value>,
+) -> Response {
+    let started = Instant::now();
+    let parsed: PromptGetParams = match params.and_then(|v| serde_json::from_value(v).ok()) {
+        Some(p) => p,
+        None => {
+            return Json(JsonRpcResponse::err(
+                req_id,
+                ERR_INVALID_PARAMS,
+                "prompts/get requires params.name and optional params.arguments",
+                None,
+            ))
+            .into_response();
+        }
+    };
+
+    let prompt_name = parsed.name.trim().to_owned();
+    let audit_label = format!("prompt:{prompt_name}");
+    let args_for_audit = parsed.arguments.clone().unwrap_or_else(|| json!({}));
+
+    if !is_known_prompt(&prompt_name) {
+        let duration_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        let _ = state
+            .auth
+            .record_audit(
+                auth,
+                &audit_label,
+                &args_for_audit,
+                McpAuditStatus::Error,
+                Some("unknown_prompt"),
+                duration_ms,
+            )
+            .await;
+        return Json(JsonRpcResponse::err(
+            req_id,
+            ERR_INVALID_PARAMS,
+            format!("unknown prompt: {prompt_name}"),
+            None,
+        ))
+        .into_response();
+    }
+
+    let result = render_prompt(auth, &prompt_name, parsed.arguments.as_ref());
+    let duration_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+    match result {
+        Ok(rendered) => {
+            let _ = state
+                .auth
+                .record_audit(
+                    auth,
+                    &audit_label,
+                    &args_for_audit,
+                    McpAuditStatus::Ok,
+                    None,
+                    duration_ms,
+                )
+                .await;
+            Json(JsonRpcResponse::ok(req_id, rendered)).into_response()
+        }
+        Err(AppError::Forbidden(msg)) => {
+            let _ = state
+                .auth
+                .record_audit(
+                    auth,
+                    &audit_label,
+                    &args_for_audit,
+                    McpAuditStatus::Denied,
+                    Some("forbidden"),
+                    duration_ms,
+                )
+                .await;
+            Json(JsonRpcResponse::err(
+                req_id,
+                ERR_INVALID_PARAMS,
+                format!("Permission denied: {msg}"),
+                None,
+            ))
+            .into_response()
+        }
+        Err(AppError::Validation(msg)) => {
+            let _ = state
+                .auth
+                .record_audit(
+                    auth,
+                    &audit_label,
+                    &args_for_audit,
+                    McpAuditStatus::Error,
+                    Some("validation_error"),
+                    duration_ms,
+                )
+                .await;
+            Json(JsonRpcResponse::err(req_id, ERR_INVALID_PARAMS, msg, None)).into_response()
+        }
+        Err(err) => {
+            error!(error = %err, prompt = %prompt_name, "mcp prompt render failed");
+            Json(JsonRpcResponse::err(
+                req_id,
+                ERR_INVALID_REQUEST,
+                "failed to render prompt template",
+                None,
+            ))
+            .into_response()
+        }
+    }
+}
+
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     if raw.len() < 8 {
@@ -408,6 +535,15 @@ fn extract_audit_method_label(req: &JsonRpcRequest) -> String {
             .and_then(Value::as_str)
     {
         return tool.to_owned();
+    }
+    if req.method == "prompts/get"
+        && let Some(prompt) = req
+            .params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+    {
+        return format!("prompt:{prompt}");
     }
     req.method.clone()
 }

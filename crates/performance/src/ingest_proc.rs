@@ -11,9 +11,10 @@ use sqlx::{Postgres, QueryBuilder, Transaction};
 use crate::codec::compress_trace_blob;
 use crate::histogram::{HistogramBuckets, NUM_HISTOGRAM_BUCKETS, observe_duration};
 use crate::model::{
-    ProcessedTransaction, QueuedTransaction, SampleReason, TraceBlobPayload, TraceSpanRecord,
-    TransactionFlushStats,
+    ProcessedSpanOp, ProcessedTransaction, QueuedTransaction, SampleReason, TraceBlobPayload,
+    TraceSpanRecord, TransactionFlushStats,
 };
+use crate::normalize::normalize_span_operation;
 
 const MAX_SPANS_PER_TRANSACTION: usize = 500;
 const MAX_TRANSACTION_NAME_LEN: usize = 512;
@@ -175,15 +176,79 @@ pub fn process_queued_transaction_with_rules(
     let span_count = i32::try_from(raw_spans.len().min(MAX_SPANS_PER_TRANSACTION)).unwrap_or(0);
 
     let sample_reason = decide_sample_reason(&trace_id, duration_ms, is_error, policy);
-    let spans_zstd = if sample_reason.is_some() {
-        let mut parsed_spans = Vec::with_capacity(raw_spans.len().min(MAX_SPANS_PER_TRANSACTION));
-        let root_start_ms = timestamp_to_ms(start_timestamp);
-        let root_end_ms = timestamp_to_ms(end_timestamp);
+    let root_start_ms = timestamp_to_ms(start_timestamp);
+    let root_end_ms = timestamp_to_ms(end_timestamp);
+    let bounded_span_len = raw_spans.len().min(MAX_SPANS_PER_TRANSACTION);
+    let mut parsed_spans = if sample_reason.is_some() {
+        Vec::with_capacity(bounded_span_len)
+    } else {
+        Vec::new()
+    };
+    let mut span_ops = Vec::with_capacity(bounded_span_len);
 
-        for (idx, span_val) in raw_spans.iter().take(MAX_SPANS_PER_TRANSACTION).enumerate() {
-            let Some(obj) = span_val.as_object() else {
-                continue;
-            };
+    for (idx, span_val) in raw_spans.iter().take(MAX_SPANS_PER_TRANSACTION).enumerate() {
+        let Some(obj) = span_val.as_object() else {
+            continue;
+        };
+
+        let span_op = obj
+            .get("op")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_chars(s, 128))
+            .unwrap_or_else(|| "span".to_owned());
+
+        let span_desc = obj
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .map(|s| truncate_chars(s, MAX_SPAN_DESC_LEN))
+            .unwrap_or_default();
+
+        let span_status = obj
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_chars(&s, 64))
+            .unwrap_or_else(|| "ok".to_owned());
+
+        let s_start_ms = obj
+            .get("start_timestamp")
+            .and_then(parse_sentry_timestamp)
+            .map(timestamp_to_ms)
+            .unwrap_or(root_start_ms);
+        let s_end_ms = obj
+            .get("timestamp")
+            .and_then(parse_sentry_timestamp)
+            .map(timestamp_to_ms)
+            .unwrap_or(root_end_ms.max(s_start_ms));
+        let (s_start_ms, s_end_ms) = if s_end_ms < s_start_ms {
+            (s_end_ms, s_start_ms)
+        } else {
+            (s_start_ms, s_end_ms)
+        };
+        let s_dur = (s_end_ms - s_start_ms).max(0.0);
+
+        let span_tags = normalize_tags(obj.get("tags"));
+        let span_data = obj.get("data").cloned().unwrap_or_else(|| json!({}));
+        let span_http_code = extract_http_status_code(&span_tags, span_data.as_object());
+        let span_is_err = is_error_status(&span_status, span_http_code);
+
+        if let Some((normalized_description, description_hash)) =
+            normalize_span_operation(&span_op, &span_desc)
+        {
+            span_ops.push(ProcessedSpanOp {
+                op: span_op.clone(),
+                description_hash,
+                normalized_description,
+                duration_ms: s_dur,
+                is_error: span_is_err,
+            });
+        }
+
+        if sample_reason.is_some() {
             let span_id = obj
                 .get("span_id")
                 .and_then(Value::as_str)
@@ -199,51 +264,6 @@ pub fn process_queued_transaction_with_rules(
                 .filter(|s| !s.is_empty() && s.len() <= 64)
                 .or_else(|| Some(root_span_id.clone()));
 
-            let span_op = obj
-                .get("op")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| truncate_chars(s, 128))
-                .unwrap_or_else(|| "span".to_owned());
-
-            let span_desc = obj
-                .get("description")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .map(|s| truncate_chars(s, MAX_SPAN_DESC_LEN))
-                .unwrap_or_default();
-
-            let span_status = obj
-                .get("status")
-                .and_then(Value::as_str)
-                .map(|s| s.trim().to_ascii_lowercase())
-                .filter(|s| !s.is_empty())
-                .map(|s| truncate_chars(&s, 64))
-                .unwrap_or_else(|| "ok".to_owned());
-
-            let s_start_ms = obj
-                .get("start_timestamp")
-                .and_then(parse_sentry_timestamp)
-                .map(timestamp_to_ms)
-                .unwrap_or(root_start_ms);
-            let s_end_ms = obj
-                .get("timestamp")
-                .and_then(parse_sentry_timestamp)
-                .map(timestamp_to_ms)
-                .unwrap_or(root_end_ms.max(s_start_ms));
-            let (s_start_ms, s_end_ms) = if s_end_ms < s_start_ms {
-                (s_end_ms, s_start_ms)
-            } else {
-                (s_start_ms, s_end_ms)
-            };
-            let s_dur = (s_end_ms - s_start_ms).max(0.0);
-
-            let span_tags = normalize_tags(obj.get("tags"));
-            let span_data = obj.get("data").cloned().unwrap_or_else(|| json!({}));
-            let span_http_code = extract_http_status_code(&span_tags, span_data.as_object());
-            let span_is_err = is_error_status(&span_status, span_http_code);
-
             parsed_spans.push(TraceSpanRecord {
                 span_id,
                 parent_span_id: span_parent,
@@ -258,7 +278,9 @@ pub fn process_queued_transaction_with_rules(
                 data: span_data,
             });
         }
+    }
 
+    let spans_zstd = if sample_reason.is_some() {
         let blob = TraceBlobPayload {
             spans: parsed_spans,
             request: payload.get("request").cloned(),
@@ -296,6 +318,7 @@ pub fn process_queued_transaction_with_rules(
         tags,
         sample_reason,
         spans_zstd,
+        span_ops,
     })
 }
 
@@ -343,7 +366,9 @@ pub async fn flush_processed_transactions_in_tx(
 
     // 2. Aggregate 1-minute duration histograms in memory before single multi-row upsert.
     type BucketKey = (i64, i64, String, String, String, String, DateTime<Utc>);
+    type SpanBucketKey = (i64, i64, String, String, String, String, DateTime<Utc>);
     let mut agg_buckets: BTreeMap<BucketKey, MinuteBucketAgg> = BTreeMap::new();
+    let mut span_agg_buckets: BTreeMap<SpanBucketKey, SpanMinuteBucketAgg> = BTreeMap::new();
     let mut release_agg: BTreeMap<(i64, i64, String), PerfReleaseAgg> = BTreeMap::new();
 
     for item in batch {
@@ -356,7 +381,7 @@ pub async fn flush_processed_transactions_in_tx(
                 item.transaction_name.clone(),
                 item.op.clone(),
                 item.environment.clone(),
-                rel_key,
+                rel_key.clone(),
                 minute_bucket,
             ))
             .or_insert_with(|| MinuteBucketAgg {
@@ -376,6 +401,46 @@ pub async fn flush_processed_transactions_in_tx(
         entry.duration_min_ms = entry.duration_min_ms.min(item.duration_ms);
         entry.duration_max_ms = entry.duration_max_ms.max(item.duration_ms);
         observe_duration(&mut entry.histogram, item.duration_ms);
+
+        // Aggregate normalized span operations (`F-PRF-7`) across ALL transactions.
+        let sampled_trace_ref = if item.sample_reason.is_some() && item.spans_zstd.is_some() {
+            Some(item.trace_id.as_str())
+        } else {
+            None
+        };
+        for span_op in &item.span_ops {
+            let sp_entry = span_agg_buckets
+                .entry((
+                    item.tenant_id,
+                    item.project_id,
+                    span_op.op.clone(),
+                    span_op.description_hash.clone(),
+                    item.environment.clone(),
+                    rel_key.clone(),
+                    minute_bucket,
+                ))
+                .or_insert_with(|| SpanMinuteBucketAgg {
+                    normalized_description: span_op.normalized_description.clone(),
+                    total_count: 0,
+                    error_count: 0,
+                    duration_sum_ms: 0.0,
+                    duration_min_ms: span_op.duration_ms,
+                    duration_max_ms: span_op.duration_ms,
+                    histogram: [0i64; NUM_HISTOGRAM_BUCKETS],
+                    sample_trace_id: sampled_trace_ref.map(str::to_owned),
+                });
+            sp_entry.total_count += 1;
+            if span_op.is_error {
+                sp_entry.error_count += 1;
+            }
+            sp_entry.duration_sum_ms += span_op.duration_ms;
+            sp_entry.duration_min_ms = sp_entry.duration_min_ms.min(span_op.duration_ms);
+            sp_entry.duration_max_ms = sp_entry.duration_max_ms.max(span_op.duration_ms);
+            observe_duration(&mut sp_entry.histogram, span_op.duration_ms);
+            if let Some(tid) = sampled_trace_ref {
+                sp_entry.sample_trace_id = Some(tid.to_owned());
+            }
+        }
 
         if let Some(version) = item.release.as_deref() {
             let rel = release_agg
@@ -467,6 +532,90 @@ pub async fn flush_processed_transactions_in_tx(
         qb.build().execute(&mut **tx).await.map_err(|err| {
             AppError::DatabaseQuery(format!("batch upsert transaction_minute_metrics: {err}"))
         })?;
+    }
+
+    // 2b. Batch upsert 1-minute aggregated span operations (`span_minute_metrics`, `F-PRF-7`).
+    let upserted_span_buckets = span_agg_buckets.len();
+    if !span_agg_buckets.is_empty() {
+        let rows: Vec<SpanMinuteUpsertRow> = span_agg_buckets
+            .into_iter()
+            .map(
+                |(
+                    (
+                        tenant_id,
+                        project_id,
+                        op,
+                        description_hash,
+                        environment,
+                        release,
+                        minute_bucket,
+                    ),
+                    agg,
+                )| SpanMinuteUpsertRow {
+                    tenant_id,
+                    project_id,
+                    op,
+                    description_hash,
+                    normalized_description: agg.normalized_description,
+                    environment,
+                    release,
+                    minute_bucket,
+                    total_count: agg.total_count,
+                    error_count: agg.error_count,
+                    duration_sum_ms: agg.duration_sum_ms,
+                    duration_min_ms: agg.duration_min_ms,
+                    duration_max_ms: agg.duration_max_ms,
+                    histogram_buckets: agg.histogram.to_vec(),
+                    sample_trace_id: agg.sample_trace_id,
+                },
+            )
+            .collect();
+
+        // Chunk upserts to stay comfortably below PostgreSQL's 65535 parameter limit (15 params/row).
+        for chunk in rows.chunks(2000) {
+            let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+                "INSERT INTO span_minute_metrics ( \
+                    tenant_id, project_id, op, description_hash, normalized_description, \
+                    environment, release, minute_bucket, total_count, error_count, \
+                    duration_sum_ms, duration_min_ms, duration_max_ms, histogram_buckets, \
+                    sample_trace_id \
+                 ) ",
+            );
+            qb.push_values(chunk, |mut b, row| {
+                b.push_bind(row.tenant_id)
+                    .push_bind(row.project_id)
+                    .push_bind(&row.op)
+                    .push_bind(&row.description_hash)
+                    .push_bind(&row.normalized_description)
+                    .push_bind(&row.environment)
+                    .push_bind(&row.release)
+                    .push_bind(row.minute_bucket)
+                    .push_bind(row.total_count)
+                    .push_bind(row.error_count)
+                    .push_bind(row.duration_sum_ms)
+                    .push_bind(row.duration_min_ms)
+                    .push_bind(row.duration_max_ms)
+                    .push_bind(&row.histogram_buckets)
+                    .push_bind(&row.sample_trace_id);
+            });
+            qb.push(
+                " ON CONFLICT (tenant_id, project_id, op, description_hash, environment, release, minute_bucket) \
+                  DO UPDATE SET \
+                    total_count = span_minute_metrics.total_count + EXCLUDED.total_count, \
+                    error_count = span_minute_metrics.error_count + EXCLUDED.error_count, \
+                    duration_sum_ms = span_minute_metrics.duration_sum_ms + EXCLUDED.duration_sum_ms, \
+                    duration_min_ms = LEAST(span_minute_metrics.duration_min_ms, EXCLUDED.duration_min_ms), \
+                    duration_max_ms = GREATEST(span_minute_metrics.duration_max_ms, EXCLUDED.duration_max_ms), \
+                    histogram_buckets = merge_histogram_buckets( \
+                        span_minute_metrics.histogram_buckets, \
+                        EXCLUDED.histogram_buckets \
+                    ), \
+                    sample_trace_id = COALESCE(EXCLUDED.sample_trace_id, span_minute_metrics.sample_trace_id)",
+            );
+            qb.build().execute(&mut **tx).await.map_err(|err| {
+                AppError::DatabaseQuery(format!("batch upsert span_minute_metrics: {err}"))
+            })?;
+        }
     }
 
     // 3. Batch insert sampled traces with zstd-compressed span blobs.
@@ -572,6 +721,7 @@ pub async fn flush_processed_transactions_in_tx(
     Ok(TransactionFlushStats {
         processed_transactions: batch.len(),
         upserted_minute_buckets,
+        upserted_span_buckets,
         inserted_sampled_traces,
     })
 }
@@ -583,6 +733,35 @@ struct MinuteBucketAgg {
     duration_min_ms: f64,
     duration_max_ms: f64,
     histogram: HistogramBuckets,
+}
+
+struct SpanMinuteBucketAgg {
+    normalized_description: String,
+    total_count: i64,
+    error_count: i64,
+    duration_sum_ms: f64,
+    duration_min_ms: f64,
+    duration_max_ms: f64,
+    histogram: HistogramBuckets,
+    sample_trace_id: Option<String>,
+}
+
+struct SpanMinuteUpsertRow {
+    tenant_id: i64,
+    project_id: i64,
+    op: String,
+    description_hash: String,
+    normalized_description: String,
+    environment: String,
+    release: String,
+    minute_bucket: DateTime<Utc>,
+    total_count: i64,
+    error_count: i64,
+    duration_sum_ms: f64,
+    duration_min_ms: f64,
+    duration_max_ms: f64,
+    histogram_buckets: Vec<i64>,
+    sample_trace_id: Option<String>,
 }
 
 struct MinuteUpsertRow {
@@ -738,7 +917,7 @@ fn is_error_status(status: &str, http_status_code: Option<u16>) -> bool {
     !matches!(status, "" | "ok" | "unknown" | "cancelled")
 }
 
-fn infer_commit_sha(version: &str) -> Option<String> {
+pub(crate) fn infer_commit_sha(version: &str) -> Option<String> {
     let candidate = version.rsplit('@').next().unwrap_or(version).trim();
     if (7..=40).contains(&candidate.len()) && candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
         Some(candidate.to_ascii_lowercase())

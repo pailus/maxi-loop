@@ -33,6 +33,45 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F016: P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0009_p2_span_operations.sql` adding `span_minute_metrics` (`PRIMARY KEY (tenant_id, project_id, op, description_hash, environment, release, minute_bucket)` with 76-bucket duration histograms and optional `sample_trace_id`) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Extended `crates/performance`:
+  - `normalize.rs`: zero-regex linear-time span description normalizer (SQL comments/strings/numbers/UUIDs/`$N` params/`IN (?, ...)` → `?`; HTTP client query/fragment stripping + numeric/UUID path `:id`; cache/Redis numeric/UUID key normalization) + SHA-256 `description_hash`
+  - `ingest_proc.rs`: extracts normalized span operations from ALL ingested transactions (sampled or unsampled) and batch-upserts 1-minute `span_minute_metrics` buckets (preserving `sample_trace_id` when sampled)
+  - `service.rs` (`list_slow_operations`) & `compare.rs` (`compare_releases`): RLS-enforced slow DB queries/operations aggregation (`p50`/`p95`/`p99`/`avg`/`total_ms`/`count`/`error_rate`, `db_only`/op/query/sort filters) and release comparison (`base_release` vs `target_release` across latency percentiles, throughput RPM, error rate, per-transaction deltas/statuses, linked/new/regressed issue counts, top newly introduced issues, and overall verdict)
+  - `http.rs`: mounted `/api/v1/performance/slow-operations`, `/api/v1/performance/compare-releases`, project convenience routes, and `/t/{tenant}/w/{workspace}/p/{project}/...` slug routes with API token scoping
+- Extended `crates/retention` (`model.rs`, `service.rs`) to clean expired `span_minute_metrics` rows during both shorter project-override and global retention cycles
+- Extended `crates/mcp` (preserving **zero direct `sqlx` dependency**, `D006`):
+  - `tools.rs` (`F-MCP-14`): added read-scoped `list_slow_queries` (defaults to `db_only: true`, includes `sample_trace_id` & UI deep link) and `compare_releases` (output PII-scrubbed, `<<<UNTRUSTED_EVENT_DATA>>>` wrapped, truncation markers)
+  - `prompts.rs`, `protocol.rs`, `http.rs` (`F-MCP-15`): advertised `capabilities.prompts` on `initialize`, implemented `prompts/list` & `prompts/get` (audit-logged & rate-limited) with 4 curated templates (`triage_issue`, `fix_issue`, `triage_release_regression`, `investigate_slow_queries`)
+- Updated MaxiBoard React UI (`web/src/lib/api.ts`, `web/src/modules/performance/SlowOperationsView.tsx`, `CompareReleasesView.tsx`, `PerformanceView.tsx`, `web/src/app/App.tsx`) with **Slow Queries & Ops** and **Compare Releases** sub-tabs + `?view=performance&tab=slow-queries|compare` deep links
+- Added PostgreSQL 16 integration test `crates/server/tests/p2_performance_mcp.rs` and updated `crates/server/tests/mcp_server.rs` `tools/list` assertions (9 read / 11 total); archived `F009` to `.harness/progress-archive.md` and updated `.harness/ARCHITECTURE.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo check --workspace` → PASS
+- `cargo test --workspace` → PASS (89/89 passed across 39 suites, incl. 13 `maxi-loop-performance`, 7 `maxi-loop-mcp`, and `p2_performance_mcp` Postgres 16 integration test)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
+- Live smoke check on restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth `401`, normalized SQL `SELECT * FROM smoke_items WHERE id = ? AND state = ?`, compare-releases verdict `regressed`, MCP `initialize`/`prompts/list`/`prompts/get`/`list_slow_queries`/`compare_releases` + token revocation `401`, embedded SPA `200`)
+
+**Security notes:**
+- Self-review passed: all query/compare/prompt arguments validated server-side (slugs, non-whitespace distinct release versions, allow-listed sort keys, escaped `ILIKE`, 90-day time-window cap, positive integer/no-control-char prompt args); zero-regex O(n) SQL/URL normalization eliminates ReDoS risk; all DB access runs inside parameterized `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + `span_minute_metrics` RLS); API token & MCP scope boundaries enforced on every endpoint/tool/prompt; MCP outputs scrub baseline + custom PII and wrap untrusted text in `<<<UNTRUSTED_EVENT_DATA>>>` with `UNTRUSTED_SECURITY_NOTICE`; negative tests verify unauth (`401`), identical-release compare (`400`), cross-project API token (`403`) & MCP tool/prompt denial, invalid prompt args, and cross-tenant isolation (`404`/empty)
+- Dependencies: 0 new external Rust or npm dependencies added. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Aggregated `span_minute_metrics` from ALL ingested transactions (not just sampled traces) keyed by `(op, SHA-256(normalized_description))` with 76-bucket log histograms so p50/p95/total_ms remain accurate under low trace sampling rates while keeping PKs compact and storage bounded via retention cleanup
+
+**Not finished / blockers:**
+- All roadmap features (`F001`–`F016`, Phases 1–5 + all PRD P2 features) are now 100% complete!
+
 ### 2026-11-22 — Antigravity — F015: P2 Issues: Manual issue merge/split (with fingerprint alias routing) and event breadcrumbs viewer
 
 **Status at end of session:** done
@@ -317,33 +356,3 @@
 
 **Not finished / blockers:**
 - Ready to begin Phase 2b — `F011` (Embedded MCP server `/mcp` Streamable HTTP for AI issue analysis and triage)
-
-### 2026-11-21 — Antigravity — F009: Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification
-
-**Status at end of session:** done
-
-**Done:**
-- Created `crates/loadgen` (`maxi-loop-loadgen` binary) in the Cargo workspace (`cli.rs`, `generator.rs`, `runner.rs`, `main.rs`):
-  - Parses HTTP Sentry DSNs (`--dsn` or `SENTRY_DSN`, redacting `public_key` in `Debug` & output), validates concurrency/total/duration/timeout bounds, generates synthetic Python Sentry Envelopes with `none`/`gzip`/`deflate`/`br` compression and optional unsupported `session` items, runs concurrent HTTP/1.1 keep-alive workers via `hyper` + `hyper-util`, and reports throughput, status breakdown, `429` header telemetry (`Retry-After`, `X-Sentry-Rate-Limits`), and `min`/`p50`/`p95`/`p99`/`max` latency percentiles (text or `--json`)
-  - Added 6 unit & live-HTTP tests covering DSN parsing/redaction, invalid-flag rejection, all compression codecs, latency percentiles, and `200`/`429` (`Retry-After` + `X-Sentry-Rate-Limits`) verification
-- Created official Python `sentry-sdk` E2E verification suite under `tests/e2e/python/` (`requirements.txt`, `verify_sentry_sdk.py`, `README.md`) testing both **FastAPI** (`FastApiIntegration`) and **Django** (`DjangoIntegration`) by changing **only the DSN**, plus a tampered-DSN negative test
-- Ran live release-mode idle RSS, throughput, `429` quota/backpressure, and Python E2E verification against `target/release/maxi-loop` + PostgreSQL 16 and documented baseline results in `docs/benchmarks-phase1.md`
-- Updated `.gitignore` for `.venv/` / `__pycache__/` and `.harness/ARCHITECTURE.md`; archived `F001` progress entry to `.harness/progress-archive.md`
-
-**Verification run:**
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (45/45 passed: 7 server unit + 5 server integration + 5 auth + 9 ingest + 1 issues + 6 loadgen + 1 org + 8 platform unit + 1 platform RLS + 2 retention)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop -p maxi-loop-loadgen` → PASS (binary sizes: `13 MB` server + embedded SPA, `3.0 MB` loadgen)
-- Live release-mode benchmarks (`maxi-loop serve` + `maxi-loop-loadgen` + Postgres 16) → PASS (Idle RSS `8.4 MiB`, burst gzip `27.6k req/s`, burst uncompressed `63.6k req/s`, gzip + early-drop `25.6k req/s`, per-project `120/min` quota exact `120` 2xx / `380` 429 with `1:error:project`, sustained 5s `143,555` req / `23,040` persisted events with `5:error:organization` backpressure and 0 lost accepted events)
-- Official Python `sentry-sdk==2.75.0` E2E (`fastapi==0.165.0` + `django==5.2.19`) → PASS (FastAPI `4` exceptions → `2` grouped issues, Django `3` exceptions → `2` grouped issues, `in_app` frames + `context_line` preserved, `Authorization`/`Cookie` headers scrubbed to `[Filtered]`, tampered DSN rejected with 0 events ingested)
-
-**Security notes:**
-- Self-review passed: `ParsedDsn` redacts `public_key` in `Debug` and target output, accepts `SENTRY_DSN` via env to avoid CLI secret exposure, validates all numeric/string arguments with explicit bounds, enforces per-request network timeouts, and never disables TLS checks; Python E2E generates ephemeral runtime tokens via `secrets.token_hex`, passes `SENTRY_DSN` via env (never argv), executes worker subprocesses with argument arrays (`shell=False`), and includes negative invalid-DSN verification; `.venv/` gitignored and `.env` untracked
-- Dependencies: promoted `hyper` (`client`, `http1`), `hyper-util` (`tokio`), and `http-body-util` already in `Cargo.lock` (adding only 2 tiny hyper-maintained transitive crates: `try-lock` v0.2.5 and `want` v0.3.2); Python E2E deps (`sentry-sdk`, `fastapi`, `httpx`, `django`) are isolated to `tests/e2e/python/requirements.txt` and not shipped in production; `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Placed the load generator in a separate workspace crate (`crates/loadgen`) so the production `maxi-loop` binary remains lean (13 MB, 8.4 MiB idle RSS) without bundling HTTP client/load-test code
-
-**Not finished / blockers:**
-- Phase 1 (MVP, `F001`–`F009`) is now 100% complete! Ready to start Phase 2 (`F010`: Configurable PII scrubbing, Release tracking, and Alerts — Webhook first, then Telegram and Email)

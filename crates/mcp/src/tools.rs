@@ -4,15 +4,18 @@ use maxi_loop_issues::model::{IssueListFilter, UpdateIssueStatusInput};
 use maxi_loop_issues::notes::{CreateIssueNoteInput, NoteActor};
 use maxi_loop_issues::service::{IssueScope, IssuesService};
 use maxi_loop_org::service::OrgService;
-use maxi_loop_performance::model::{PerformanceScope, TransactionListFilter};
+use maxi_loop_performance::model::{
+    CompareReleasesFilter, PerformanceScope, SlowOperationListFilter, TransactionListFilter,
+};
 use maxi_loop_performance::service::PerformanceService;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::sanitize::{
-    UNTRUSTED_SECURITY_NOTICE, format_stack_frames, issue_ui_url, performance_ui_url,
-    project_ui_url, scrub_and_bound_json, trace_ui_url, wrap_untrusted_text,
+    UNTRUSTED_SECURITY_NOTICE, compare_releases_ui_url, format_stack_frames, issue_ui_url,
+    performance_ui_url, project_ui_url, scrub_and_bound_json, slow_queries_ui_url, trace_ui_url,
+    wrap_untrusted_text,
 };
 
 pub struct ToolServices<'a> {
@@ -187,6 +190,57 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
                 "idempotentHint": true
             }
         }));
+
+        tools.push(json!({
+            "name": "list_slow_queries",
+            "description": "List aggregated slowest normalized DB queries or backend operations (p50/p95/p99/avg/total_ms/count/error_rate) with sample_trace_id for jumping directly to `get_trace`. Defaults to DB spans (`db_only: true`); set `db_only: false` or pass `op` for HTTP/cache/other spans.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_slug": { "type": "string", "description": "Optional project slug filter." },
+                    "environment": { "type": "string", "description": "Optional environment filter (e.g. production)." },
+                    "release": { "type": "string", "description": "Optional release version filter." },
+                    "op": { "type": "string", "description": "Optional span op filter (exact or prefix ending with '.' or '*'; e.g. db.sql.query, http.client, cache.)." },
+                    "db_only": { "type": "boolean", "default": true, "description": "When true (default) and `op` is omitted, restricts results to database spans (`db`, `db.*`)." },
+                    "query": { "type": "string", "description": "Substring search on normalized query/operation description." },
+                    "since": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC window start." },
+                    "until": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC window end." },
+                    "hours": { "type": "integer", "minimum": 1, "maximum": 2160, "default": 24 },
+                    "sort": { "type": "string", "enum": ["p95", "total_ms", "avg", "p50", "p99", "count", "error_rate"], "default": "p95" },
+                    "page": { "type": "integer", "minimum": 1, "default": 1 },
+                    "per_page": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
+
+        tools.push(json!({
+            "name": "compare_releases",
+            "description": "Compare two releases (`base_release` vs `target_release`) for a project across p50/p95/p99 latency, throughput (rpm), error rate, per-transaction regressions/improvements, and issue counts (including newly introduced issues).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["base_release", "target_release"],
+                "properties": {
+                    "project_slug": { "type": "string", "description": "Project slug (optional when token is scoped to a single project)." },
+                    "base_release": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Baseline release version." },
+                    "target_release": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Target/new release version to compare against baseline." },
+                    "environment": { "type": "string", "description": "Optional environment filter (e.g. production)." },
+                    "hours": { "type": "integer", "minimum": 1, "maximum": 2160, "default": 720 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+            }
+        }));
     }
 
     if can_triage {
@@ -245,6 +299,8 @@ pub fn is_known_tool(name: &str) -> bool {
             | "get_issue_stats"
             | "list_transactions"
             | "get_trace"
+            | "list_slow_queries"
+            | "compare_releases"
             | "update_issue_status"
             | "add_issue_note"
     )
@@ -290,6 +346,16 @@ pub async fn execute_tool(
             require_read(auth)?;
             let args: GetTraceArgs = parse_args(arguments)?;
             tool_get_trace(services, auth, args).await
+        }
+        "list_slow_queries" => {
+            require_read(auth)?;
+            let args: ListSlowQueriesArgs = parse_args(arguments)?;
+            tool_list_slow_queries(services, auth, args).await
+        }
+        "compare_releases" => {
+            require_read(auth)?;
+            let args: CompareReleasesArgs = parse_args(arguments)?;
+            tool_compare_releases(services, auth, args).await
         }
         "update_issue_status" => {
             require_triage(auth)?;
@@ -1153,5 +1219,261 @@ async fn tool_get_trace(
         },
         "slowest_spans": slowest_spans,
         "waterfall": compact_spans,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListSlowQueriesArgs {
+    project_slug: Option<String>,
+    environment: Option<String>,
+    release: Option<String>,
+    op: Option<String>,
+    db_only: Option<bool>,
+    query: Option<String>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    hours: Option<u32>,
+    sort: Option<String>,
+    page: Option<u32>,
+    per_page: Option<u32>,
+}
+
+async fn tool_list_slow_queries(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: ListSlowQueriesArgs,
+) -> Result<ToolOutput, AppError> {
+    let per_page = args.per_page.unwrap_or(20);
+    if !(1..=50).contains(&per_page) {
+        return Err(AppError::Validation(
+            "per_page must be between 1 and 50 for MCP responses".to_owned(),
+        ));
+    }
+
+    let req_proj_slug = args
+        .project_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let scope = build_performance_scope(auth, req_proj_slug)?;
+    let db_only = match args.db_only {
+        Some(v) => v,
+        None => args
+            .op
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none(),
+    };
+
+    let filter = SlowOperationListFilter {
+        workspace_slug: scope.workspace_slug.map(str::to_owned),
+        project_id: auth.access_scope.project_id(),
+        project_slug: scope.project_slug.map(str::to_owned),
+        environment: args.environment,
+        release: args.release,
+        op: args.op,
+        db_only: Some(db_only),
+        query: args.query,
+        since: args.since,
+        until: args.until,
+        hours: args.hours,
+        sort: args.sort,
+        page: args.page,
+        per_page: Some(per_page),
+    };
+
+    let page_resp = services
+        .performance
+        .list_slow_operations(auth.tenant_ctx, scope, filter)
+        .await?;
+
+    let rules = services
+        .org
+        .list_effective_pii_rules(
+            auth.tenant_ctx,
+            auth.access_scope.workspace_id(),
+            auth.access_scope.project_id(),
+        )
+        .await?;
+
+    let mut any_truncated = page_resp.page < page_resp.total_pages;
+    let mut items = Vec::with_capacity(page_resp.items.len());
+    for op_row in page_resp.items {
+        let (desc_wrapped, t_desc) =
+            wrap_untrusted_text(&op_row.normalized_description, &rules, 320);
+        any_truncated |= t_desc;
+        let sample_trace_ui = op_row
+            .sample_trace_id
+            .as_deref()
+            .map(|tid| trace_ui_url(services.public_base_url, tid));
+
+        items.push(json!({
+            "project_slug": op_row.project_slug,
+            "workspace_slug": op_row.workspace_slug,
+            "op": op_row.op,
+            "description_hash": op_row.description_hash,
+            "total_count": op_row.total_count,
+            "error_count": op_row.error_count,
+            "error_rate": op_row.error_rate,
+            "total_ms": op_row.total_ms,
+            "avg_ms": op_row.avg_ms,
+            "p50_ms": op_row.p50_ms,
+            "p95_ms": op_row.p95_ms,
+            "p99_ms": op_row.p99_ms,
+            "min_ms": op_row.min_ms,
+            "max_ms": op_row.max_ms,
+            "sample_trace_id": op_row.sample_trace_id,
+            "sample_trace_ui_url": sample_trace_ui,
+            "last_seen": op_row.last_seen,
+            "ui_url": slow_queries_ui_url(services.public_base_url, &op_row.project_slug),
+            "untrusted_event_data": {
+                "normalized_description": desc_wrapped,
+            }
+        }));
+    }
+
+    Ok(ToolOutput::from_json(json!({
+        "security_notice": UNTRUSTED_SECURITY_NOTICE,
+        "db_only": db_only,
+        "window_minutes": page_resp.window_minutes,
+        "since": page_resp.since,
+        "until": page_resp.until,
+        "page": page_resp.page,
+        "per_page": page_resp.per_page,
+        "total": page_resp.total,
+        "total_pages": page_resp.total_pages,
+        "has_more": page_resp.page < page_resp.total_pages,
+        "truncated": any_truncated,
+        "items": items,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompareReleasesArgs {
+    project_slug: Option<String>,
+    base_release: String,
+    target_release: String,
+    environment: Option<String>,
+    hours: Option<u32>,
+    limit: Option<u32>,
+}
+
+async fn tool_compare_releases(
+    services: &ToolServices<'_>,
+    auth: &McpAuthContext,
+    args: CompareReleasesArgs,
+) -> Result<ToolOutput, AppError> {
+    let limit = args.limit.unwrap_or(20);
+    if !(1..=50).contains(&limit) {
+        return Err(AppError::Validation(
+            "limit must be between 1 and 50 for MCP responses".to_owned(),
+        ));
+    }
+
+    let req_proj_slug = args
+        .project_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let scope = build_performance_scope(auth, req_proj_slug)?;
+    let effective_project_slug = scope
+        .project_slug
+        .ok_or_else(|| {
+            AppError::Validation(
+                "project_slug is required when using a tenant or workspace scoped token".to_owned(),
+            )
+        })?
+        .to_owned();
+
+    let cmp = services
+        .performance
+        .compare_releases(
+            auth.tenant_ctx,
+            scope,
+            CompareReleasesFilter {
+                project_slug: effective_project_slug.clone(),
+                base_release: args.base_release,
+                target_release: args.target_release,
+                environment: args.environment,
+                since: None,
+                until: None,
+                hours: args.hours,
+                limit: Some(limit),
+            },
+        )
+        .await?;
+
+    let rules = services
+        .org
+        .list_effective_pii_rules(
+            auth.tenant_ctx,
+            Some(cmp.workspace_id),
+            Some(cmp.project_id),
+        )
+        .await?;
+
+    let mut truncated = cmp.total_transactions_compared > cmp.transactions.len();
+    let mut tx_items = Vec::with_capacity(cmp.transactions.len());
+    for row in cmp.transactions {
+        let (tx_name_wrapped, t_name) = wrap_untrusted_text(&row.transaction_name, &rules, 240);
+        truncated |= t_name;
+        tx_items.push(json!({
+            "op": row.op,
+            "status": row.status,
+            "base": row.base,
+            "target": row.target,
+            "p50_delta_ms": row.p50_delta_ms,
+            "p50_delta_pct": row.p50_delta_pct,
+            "p95_delta_ms": row.p95_delta_ms,
+            "p95_delta_pct": row.p95_delta_pct,
+            "p99_delta_ms": row.p99_delta_ms,
+            "p99_delta_pct": row.p99_delta_pct,
+            "error_rate_delta": row.error_rate_delta,
+            "throughput_rpm_delta": row.throughput_rpm_delta,
+            "untrusted_event_data": {
+                "transaction_name": tx_name_wrapped,
+            }
+        }));
+    }
+
+    let mut new_issues = Vec::with_capacity(cmp.new_issues_in_target.len());
+    for issue in cmp.new_issues_in_target {
+        let (title_wrapped, t_title) = wrap_untrusted_text(&issue.title, &rules, 240);
+        truncated |= t_title;
+        new_issues.push(json!({
+            "id": issue.id,
+            "exception_type": issue.exception_type,
+            "level": issue.level,
+            "status": issue.status,
+            "is_regressed": issue.is_regressed,
+            "event_count": issue.event_count,
+            "first_seen": issue.first_seen,
+            "last_seen": issue.last_seen,
+            "ui_url": issue_ui_url(services.public_base_url, &cmp.project_slug, issue.id),
+            "untrusted_event_data": {
+                "title": title_wrapped,
+            }
+        }));
+    }
+
+    Ok(ToolOutput::from_json(json!({
+        "security_notice": UNTRUSTED_SECURITY_NOTICE,
+        "project_slug": cmp.project_slug,
+        "workspace_slug": cmp.workspace_slug,
+        "environment": cmp.environment,
+        "since": cmp.since,
+        "until": cmp.until,
+        "verdict": cmp.verdict,
+        "base": cmp.base,
+        "target": cmp.target,
+        "delta": cmp.delta,
+        "new_issues_in_target": new_issues,
+        "transactions": tx_items,
+        "total_transactions_compared": cmp.total_transactions_compared,
+        "truncated": truncated,
+        "ui_url": compare_releases_ui_url(services.public_base_url, &effective_project_slug),
     })))
 }

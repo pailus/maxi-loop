@@ -306,7 +306,7 @@
     {
       "id": "F016",
       "title": "P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates",
-      "status": "todo",
+      "status": "done",
       "priority": "low",
       "acceptance_criteria": [
         "Aggregates slow DB queries and operations per normalized op and description (p50/p95/avg/count/total_ms) from ingested transaction spans",

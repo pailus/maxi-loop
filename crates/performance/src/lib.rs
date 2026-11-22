@@ -1,7 +1,9 @@
 pub mod codec;
+pub mod compare;
 pub mod histogram;
 pub mod http;
 pub mod ingest_proc;
 pub mod model;
+pub mod normalize;
 pub mod service;
 pub mod waterfall;

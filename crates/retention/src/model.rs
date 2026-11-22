@@ -34,8 +34,10 @@ pub struct RetentionReport {
     pub override_deleted_issues: u64,
     pub override_deleted_traces: u64,
     pub override_deleted_tx_metrics: u64,
+    pub override_deleted_span_metrics: u64,
     pub global_deleted_hourly_counters: u64,
     pub global_deleted_issues: u64,
     pub global_deleted_tx_metrics: u64,
+    pub global_deleted_span_metrics: u64,
     pub deleted_expired_sessions: u64,
 }

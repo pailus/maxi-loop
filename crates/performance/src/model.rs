@@ -63,6 +63,16 @@ pub struct TraceBlobPayload {
     pub contexts: Option<Value>,
 }
 
+/// Normalized span operation extracted from an ingested transaction for `span_minute_metrics` (`F-PRF-7`).
+#[derive(Clone, Debug)]
+pub struct ProcessedSpanOp {
+    pub op: String,
+    pub description_hash: String,
+    pub normalized_description: String,
+    pub duration_ms: f64,
+    pub is_error: bool,
+}
+
 /// Normalized, PII-scrubbed transaction ready for batched metric aggregation & optional zstd trace storage.
 #[derive(Clone, Debug)]
 pub struct ProcessedTransaction {
@@ -88,12 +98,14 @@ pub struct ProcessedTransaction {
     pub tags: Value,
     pub sample_reason: Option<SampleReason>,
     pub spans_zstd: Option<Vec<u8>>,
+    pub span_ops: Vec<ProcessedSpanOp>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransactionFlushStats {
     pub processed_transactions: usize,
     pub upserted_minute_buckets: usize,
+    pub upserted_span_buckets: usize,
     pub inserted_sampled_traces: usize,
 }
 
@@ -270,4 +282,174 @@ pub struct TraceWaterfallView {
     pub span_count: usize,
     pub slowest_spans: Vec<SlowSpanHighlight>,
     pub spans: Vec<WaterfallSpanNode>,
+}
+
+// --- P2: Slow DB Queries & Operations Aggregation (`F-PRF-7`, `F-MCP-14`) ---
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SlowOperationListFilter {
+    pub workspace_slug: Option<String>,
+    pub project_id: Option<i64>,
+    pub project_slug: Option<String>,
+    pub environment: Option<String>,
+    pub release: Option<String>,
+    pub op: Option<String>,
+    pub db_only: Option<bool>,
+    pub query: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub hours: Option<u32>,
+    pub sort: Option<String>,
+    pub page: Option<u32>,
+    pub per_page: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SlowOperationSummaryView {
+    pub project_id: i64,
+    pub project_slug: String,
+    pub workspace_id: i64,
+    pub workspace_slug: String,
+    pub op: String,
+    pub description_hash: String,
+    pub normalized_description: String,
+    pub total_count: i64,
+    pub error_count: i64,
+    pub error_rate: f64,
+    pub total_ms: f64,
+    pub avg_ms: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub min_ms: f64,
+    pub max_ms: f64,
+    pub sample_trace_id: Option<String>,
+    pub last_seen: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PaginatedSlowOperationsResponse {
+    pub items: Vec<SlowOperationSummaryView>,
+    pub total: i64,
+    pub page: u32,
+    pub per_page: u32,
+    pub total_pages: u32,
+    pub window_minutes: i64,
+    pub since: DateTime<Utc>,
+    pub until: DateTime<Utc>,
+}
+
+// --- P2: Compare Releases (`F-PRF-6`, `F-MCP-14`) ---
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CompareReleasesFilter {
+    pub project_slug: String,
+    pub base_release: String,
+    pub target_release: String,
+    pub environment: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub hours: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleasePerfMetrics {
+    pub total_count: i64,
+    pub error_count: i64,
+    pub error_rate: f64,
+    pub active_minutes: i64,
+    pub throughput_rpm: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub avg_ms: f64,
+    pub min_ms: f64,
+    pub max_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseIssueMetrics {
+    pub linked_issues_count: i64,
+    pub new_issues_count: i64,
+    pub regressed_issues_count: i64,
+    pub unresolved_issues_count: i64,
+    pub issue_events_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseComparisonSide {
+    pub version: String,
+    pub commit_sha: Option<String>,
+    pub first_seen: Option<DateTime<Utc>>,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub deployed_at: Option<DateTime<Utc>>,
+    pub performance: ReleasePerfMetrics,
+    pub issues: ReleaseIssueMetrics,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseComparisonDelta {
+    pub p50_delta_ms: f64,
+    pub p50_delta_pct: Option<f64>,
+    pub p95_delta_ms: f64,
+    pub p95_delta_pct: Option<f64>,
+    pub p99_delta_ms: f64,
+    pub p99_delta_pct: Option<f64>,
+    pub avg_delta_ms: f64,
+    pub avg_delta_pct: Option<f64>,
+    pub error_rate_delta: f64,
+    pub throughput_rpm_delta: f64,
+    pub throughput_rpm_delta_pct: Option<f64>,
+    pub linked_issues_delta: i64,
+    pub new_issues_delta: i64,
+    pub regressed_issues_delta: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseNewIssueItem {
+    pub id: i64,
+    pub title: String,
+    pub exception_type: String,
+    pub level: String,
+    pub status: String,
+    pub is_regressed: bool,
+    pub event_count: i64,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionComparisonRow {
+    pub transaction_name: String,
+    pub op: String,
+    pub status: String,
+    pub base: Option<ReleasePerfMetrics>,
+    pub target: Option<ReleasePerfMetrics>,
+    pub p50_delta_ms: Option<f64>,
+    pub p50_delta_pct: Option<f64>,
+    pub p95_delta_ms: Option<f64>,
+    pub p95_delta_pct: Option<f64>,
+    pub p99_delta_ms: Option<f64>,
+    pub p99_delta_pct: Option<f64>,
+    pub error_rate_delta: Option<f64>,
+    pub throughput_rpm_delta: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseComparisonView {
+    pub project_id: i64,
+    pub project_slug: String,
+    pub workspace_id: i64,
+    pub workspace_slug: String,
+    pub environment: Option<String>,
+    pub since: DateTime<Utc>,
+    pub until: DateTime<Utc>,
+    pub verdict: String,
+    pub base: ReleaseComparisonSide,
+    pub target: ReleaseComparisonSide,
+    pub delta: ReleaseComparisonDelta,
+    pub new_issues_in_target: Vec<ReleaseNewIssueItem>,
+    pub transactions: Vec<TransactionComparisonRow>,
+    pub total_transactions_compared: usize,
 }

@@ -20,7 +20,11 @@ import {
   fetchTransactionDetail,
   fetchTransactions,
 } from "../../lib/api";
+import { CompareReleasesView } from "./CompareReleasesView";
+import { SlowOperationsView } from "./SlowOperationsView";
 import { TraceWaterfallView } from "./TraceWaterfallView";
+
+export type PerfTab = "transactions" | "traces" | "slow-queries" | "compare";
 
 interface PerformanceViewProps {
   workspaceName: string;
@@ -29,11 +33,10 @@ interface PerformanceViewProps {
   selectedProjectSlug: string;
   onSelectProjectSlug: (slug: string) => void;
   initialTraceId?: string;
+  initialTab?: PerfTab;
   onClearInitialTraceId?: () => void;
   onShowToast: (message: string) => void;
 }
-
-type PerfTab = "transactions" | "traces";
 
 function formatMs(ms: number): string {
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
@@ -60,10 +63,14 @@ export function PerformanceView({
   selectedProjectSlug,
   onSelectProjectSlug,
   initialTraceId,
+  initialTab,
   onClearInitialTraceId,
   onShowToast,
 }: PerformanceViewProps) {
-  const [activeTab, setActiveTab] = useState<PerfTab>("transactions");
+  const [activeTab, setActiveTab] = useState<PerfTab>(
+    initialTab ?? "transactions",
+  );
+  const [refreshSignal, setRefreshSignal] = useState(0);
   const [environment, setEnvironment] = useState("");
   const [release, setRelease] = useState("");
   const [query, setQuery] = useState("");
@@ -210,7 +217,10 @@ export function PerformanceView({
 
           <button
             type="button"
-            onClick={() => void loadData()}
+            onClick={() => {
+              void loadData();
+              setRefreshSignal((s) => s + 1);
+            }}
             className="h-8 px-3 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
           >
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
@@ -242,9 +252,40 @@ export function PerformanceView({
           >
             Sampled Traces ({traces.length})
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("slow-queries")}
+            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+              activeTab === "slow-queries"
+                ? "pm-tab-active text-[var(--color-primary)]"
+                : "text-[var(--color-text-muted)]"
+            }`}
+          >
+            Slow Queries &amp; Ops
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("compare")}
+            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+              activeTab === "compare"
+                ? "pm-tab-active text-[var(--color-primary)]"
+                : "text-[var(--color-text-muted)]"
+            }`}
+          >
+            Compare Releases
+          </button>
         </div>
       </div>
 
+      {activeTab === "compare" ? (
+        <CompareReleasesView
+          projects={projects}
+          selectedProjectSlug={selectedProjectSlug}
+          onSelectProjectSlug={onSelectProjectSlug}
+          environment={environment}
+        />
+      ) : (
+        <>
       {/* Filter Toolbar */}
       <div className="px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] flex flex-wrap items-center gap-2 shrink-0">
         <select
@@ -336,7 +377,7 @@ export function PerformanceView({
               <option value="name">Sort: Name</option>
             </select>
           </>
-        ) : (
+        ) : activeTab === "traces" ? (
           <select
             value={sampleReasonFilter}
             onChange={(e) => setSampleReasonFilter(e.target.value)}
@@ -348,9 +389,21 @@ export function PerformanceView({
             <option value="error">Error traces</option>
             <option value="random">Random sample (1-5%)</option>
           </select>
-        )}
+        ) : null}
       </div>
 
+      {activeTab === "slow-queries" ? (
+        <SlowOperationsView
+          workspaceSlug={workspaceSlug}
+          selectedProjectSlug={selectedProjectSlug}
+          environment={environment}
+          release={release}
+          hours={hours}
+          refreshSignal={refreshSignal}
+          onOpenTrace={(tid) => setActiveTraceId(tid)}
+        />
+      ) : (
+        <>
       {/* Compact Metrics Strip */}
       <div className="px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] grid grid-cols-2 md:grid-cols-4 gap-3 text-xs shrink-0">
         <div className="px-3 py-2 rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)]">
@@ -778,6 +831,10 @@ export function PerformanceView({
           </aside>
         )}
       </div>
+        </>
+      )}
+        </>
+      )}
     </div>
   );
 }

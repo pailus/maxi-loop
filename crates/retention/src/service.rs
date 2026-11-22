@@ -73,9 +73,11 @@ pub fn spawn_retention_scheduler(pool: PgPool, cfg: RetentionConfig) -> JoinHand
                         override_deleted_issues = report.override_deleted_issues,
                         override_deleted_traces = report.override_deleted_traces,
                         override_deleted_tx_metrics = report.override_deleted_tx_metrics,
+                        override_deleted_span_metrics = report.override_deleted_span_metrics,
                         global_deleted_hourly_counters = report.global_deleted_hourly_counters,
                         global_deleted_issues = report.global_deleted_issues,
                         global_deleted_tx_metrics = report.global_deleted_tx_metrics,
+                        global_deleted_span_metrics = report.global_deleted_span_metrics,
                         deleted_expired_sessions = report.deleted_expired_sessions,
                         "completed scheduled retention maintenance cycle"
                     );
@@ -282,6 +284,16 @@ pub async fn run_retention_cycle(
             max_batches,
         )
         .await?;
+
+        report.override_deleted_span_metrics += bounded_delete_project_span_metrics(
+            pool,
+            row.tenant_id,
+            row.project_id,
+            project_cutoff_ts,
+            batch_limit,
+            max_batches,
+        )
+        .await?;
     }
 
     // 3. Global cutoff cleanup for counters, metrics, stale `issues`, and expired `sessions`.
@@ -293,6 +305,9 @@ pub async fn run_retention_cycle(
         bounded_delete_global_issues(pool, global_cutoff_ts, batch_limit, max_batches).await?;
     report.global_deleted_tx_metrics =
         bounded_delete_global_tx_metrics(pool, global_cutoff_ts, batch_limit, max_batches).await?;
+    report.global_deleted_span_metrics =
+        bounded_delete_global_span_metrics(pool, global_cutoff_ts, batch_limit, max_batches)
+            .await?;
     report.deleted_expired_sessions =
         bounded_delete_expired_sessions(pool, reference_now, batch_limit, max_batches).await?;
 
@@ -707,6 +722,102 @@ async fn bounded_delete_global_tx_metrics(
         })?;
         tx.commit().await.map_err(|err| {
             AppError::DatabaseQuery(format!("commit global tx metrics delete: {err}"))
+        })?;
+        let deleted = res.rows_affected();
+        total_deleted += deleted;
+        if deleted < u64::try_from(batch_limit).unwrap_or(1) {
+            break;
+        }
+    }
+    Ok(total_deleted)
+}
+
+async fn bounded_delete_project_span_metrics(
+    pool: &PgPool,
+    tenant_id: i64,
+    project_id: i64,
+    cutoff_ts: DateTime<Utc>,
+    batch_limit: i64,
+    max_batches: usize,
+) -> Result<u64, AppError> {
+    let mut total_deleted = 0u64;
+    for _ in 0..max_batches {
+        let mut tx = begin_worker_tx(pool).await?;
+        let res = sqlx::query(
+            "WITH doomed AS (
+                 SELECT op, description_hash, environment, release, minute_bucket
+                 FROM span_minute_metrics
+                 WHERE tenant_id = $1
+                   AND project_id = $2
+                   AND minute_bucket < $3
+                 LIMIT $4
+             )
+             DELETE FROM span_minute_metrics m
+             USING doomed d
+             WHERE m.tenant_id = $1
+               AND m.project_id = $2
+               AND m.op = d.op
+               AND m.description_hash = d.description_hash
+               AND m.environment = d.environment
+               AND m.release = d.release
+               AND m.minute_bucket = d.minute_bucket",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(cutoff_ts)
+        .bind(batch_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            AppError::DatabaseQuery(format!("batch delete override span metrics: {err}"))
+        })?;
+        tx.commit().await.map_err(|err| {
+            AppError::DatabaseQuery(format!("commit override span metrics delete: {err}"))
+        })?;
+        let deleted = res.rows_affected();
+        total_deleted += deleted;
+        if deleted < u64::try_from(batch_limit).unwrap_or(1) {
+            break;
+        }
+    }
+    Ok(total_deleted)
+}
+
+async fn bounded_delete_global_span_metrics(
+    pool: &PgPool,
+    cutoff_ts: DateTime<Utc>,
+    batch_limit: i64,
+    max_batches: usize,
+) -> Result<u64, AppError> {
+    let mut total_deleted = 0u64;
+    for _ in 0..max_batches {
+        let mut tx = begin_worker_tx(pool).await?;
+        let res = sqlx::query(
+            "WITH doomed AS (
+                 SELECT tenant_id, project_id, op, description_hash, environment, release, minute_bucket
+                 FROM span_minute_metrics
+                 WHERE minute_bucket < $1
+                 LIMIT $2
+             )
+             DELETE FROM span_minute_metrics m
+             USING doomed d
+             WHERE m.tenant_id = d.tenant_id
+               AND m.project_id = d.project_id
+               AND m.op = d.op
+               AND m.description_hash = d.description_hash
+               AND m.environment = d.environment
+               AND m.release = d.release
+               AND m.minute_bucket = d.minute_bucket",
+        )
+        .bind(cutoff_ts)
+        .bind(batch_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            AppError::DatabaseQuery(format!("batch delete global span metrics: {err}"))
+        })?;
+        tx.commit().await.map_err(|err| {
+            AppError::DatabaseQuery(format!("commit global span metrics delete: {err}"))
         })?;
         let deleted = res.rows_affected();
         total_deleted += deleted;

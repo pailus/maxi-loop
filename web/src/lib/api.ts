@@ -1042,6 +1042,206 @@ export async function fetchTraceWaterfall(traceId: string): Promise<TraceWaterfa
   );
 }
 
+// --- P2 Performance: Slow Queries/Operations & Compare Releases ---
+
+export type SlowOperationSort =
+  | "p95"
+  | "total_ms"
+  | "avg"
+  | "p50"
+  | "p99"
+  | "count"
+  | "error_rate";
+
+export interface SlowOperationListFilter {
+  workspace_slug?: string;
+  project_slug?: string;
+  environment?: string;
+  release?: string;
+  op?: string;
+  db_only?: boolean;
+  query?: string;
+  hours?: number;
+  sort?: SlowOperationSort;
+  page?: number;
+  per_page?: number;
+}
+
+export interface SlowOperationSummaryView {
+  project_id: number;
+  project_slug: string;
+  workspace_id: number;
+  workspace_slug: string;
+  op: string;
+  description_hash: string;
+  normalized_description: string;
+  total_count: number;
+  error_count: number;
+  error_rate: number;
+  total_ms: number;
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  min_ms: number;
+  max_ms: number;
+  sample_trace_id: string | null;
+  last_seen: string;
+}
+
+export interface PaginatedSlowOperationsResponse {
+  items: SlowOperationSummaryView[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+  window_minutes: number;
+  since: string;
+  until: string;
+}
+
+export async function fetchSlowOperations(
+  filter: SlowOperationListFilter = {},
+): Promise<PaginatedSlowOperationsResponse> {
+  const params = new URLSearchParams();
+  if (filter.workspace_slug) params.set("workspace_slug", filter.workspace_slug);
+  if (filter.project_slug) params.set("project_slug", filter.project_slug);
+  if (filter.environment) params.set("environment", filter.environment);
+  if (filter.release) params.set("release", filter.release);
+  if (filter.op) params.set("op", filter.op);
+  if (filter.db_only !== undefined) params.set("db_only", String(filter.db_only));
+  if (filter.query && filter.query.trim()) params.set("query", filter.query.trim());
+  if (filter.hours !== undefined) params.set("hours", String(filter.hours));
+  if (filter.sort) params.set("sort", filter.sort);
+  if (filter.page !== undefined) params.set("page", String(filter.page));
+  if (filter.per_page !== undefined) params.set("per_page", String(filter.per_page));
+  const qs = params.toString();
+  return requestJson<PaginatedSlowOperationsResponse>(
+    `/api/v1/performance/slow-operations${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export interface ReleasePerfMetrics {
+  total_count: number;
+  error_count: number;
+  error_rate: number;
+  active_minutes: number;
+  throughput_rpm: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  avg_ms: number;
+  min_ms: number;
+  max_ms: number;
+}
+
+export interface ReleaseIssueMetrics {
+  linked_issues_count: number;
+  new_issues_count: number;
+  regressed_issues_count: number;
+  unresolved_issues_count: number;
+  issue_events_count: number;
+}
+
+export interface ReleaseComparisonSide {
+  version: string;
+  commit_sha: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  deployed_at: string | null;
+  performance: ReleasePerfMetrics;
+  issues: ReleaseIssueMetrics;
+}
+
+export interface ReleaseComparisonDelta {
+  p50_delta_ms: number;
+  p50_delta_pct: number | null;
+  p95_delta_ms: number;
+  p95_delta_pct: number | null;
+  p99_delta_ms: number;
+  p99_delta_pct: number | null;
+  avg_delta_ms: number;
+  avg_delta_pct: number | null;
+  error_rate_delta: number;
+  throughput_rpm_delta: number;
+  throughput_rpm_delta_pct: number | null;
+  linked_issues_delta: number;
+  new_issues_delta: number;
+  regressed_issues_delta: number;
+}
+
+export interface ReleaseNewIssueItem {
+  id: number;
+  title: string;
+  exception_type: string;
+  level: string;
+  status: string;
+  is_regressed: boolean;
+  event_count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface TransactionComparisonRow {
+  transaction_name: string;
+  op: string;
+  status: "regressed" | "improved" | "new" | "removed" | "stable" | string;
+  base: ReleasePerfMetrics | null;
+  target: ReleasePerfMetrics | null;
+  p50_delta_ms: number | null;
+  p50_delta_pct: number | null;
+  p95_delta_ms: number | null;
+  p95_delta_pct: number | null;
+  p99_delta_ms: number | null;
+  p99_delta_pct: number | null;
+  error_rate_delta: number | null;
+  throughput_rpm_delta: number | null;
+}
+
+export interface ReleaseComparisonView {
+  project_id: number;
+  project_slug: string;
+  workspace_id: number;
+  workspace_slug: string;
+  environment: string | null;
+  since: string;
+  until: string;
+  verdict: "regressed" | "improved" | "stable" | "insufficient_data" | string;
+  base: ReleaseComparisonSide;
+  target: ReleaseComparisonSide;
+  delta: ReleaseComparisonDelta;
+  new_issues_in_target: ReleaseNewIssueItem[];
+  transactions: TransactionComparisonRow[];
+  total_transactions_compared: number;
+}
+
+export interface CompareReleasesParams {
+  project_slug: string;
+  base_release: string;
+  target_release: string;
+  environment?: string;
+  hours?: number;
+  limit?: number;
+}
+
+export async function fetchCompareReleases(
+  params: CompareReleasesParams,
+): Promise<ReleaseComparisonView> {
+  const qs = new URLSearchParams({
+    project_slug: params.project_slug,
+    base_release: params.base_release,
+    target_release: params.target_release,
+  });
+  if (params.environment && params.environment.trim()) {
+    qs.set("environment", params.environment.trim());
+  }
+  if (params.hours !== undefined) qs.set("hours", String(params.hours));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  return requestJson<ReleaseComparisonView>(
+    `/api/v1/performance/compare-releases?${qs.toString()}`,
+  );
+}
+
 // --- Phase 4: React / JS Source Maps ---
 
 export interface SourceMapView {

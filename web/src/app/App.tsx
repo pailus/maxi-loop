@@ -32,7 +32,10 @@ import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
 import { IssuesView, type IssuesTabMode } from "../modules/issues/IssuesView";
 import { McpView } from "../modules/mcp/McpView";
-import { PerformanceView } from "../modules/performance/PerformanceView";
+import {
+  type PerfTab,
+  PerformanceView,
+} from "../modules/performance/PerformanceView";
 import { ProjectIcon } from "../modules/projects/ProjectIcon";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
@@ -78,6 +81,19 @@ export function App() {
   const [deepLinkTraceId, setDeepLinkTraceId] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get("trace") ?? "";
+  });
+  const [deepLinkPerfTab] = useState<PerfTab | undefined>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (
+      tab === "transactions" ||
+      tab === "traces" ||
+      tab === "slow-queries" ||
+      tab === "compare"
+    ) {
+      return tab;
+    }
+    return undefined;
   });
 
   const [activeNav, setActiveNav] = useState<ActiveNav>(() => {
@@ -562,6 +578,7 @@ export function App() {
             selectedProjectSlug={selectedProjectSlug}
             onSelectProjectSlug={setSelectedProjectSlug}
             initialTraceId={deepLinkTraceId || undefined}
+            initialTab={deepLinkPerfTab}
             onClearInitialTraceId={() => setDeepLinkTraceId("")}
             onShowToast={(msg) => showToast(msg)}
           />
