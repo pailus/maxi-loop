@@ -5,6 +5,13 @@ use maxi_loop_platform::config::Config;
 pub enum Command {
     Serve,
     Bootstrap(BootstrapOverrides),
+    Mcp(McpBridgeArgs),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpBridgeArgs {
+    pub url: Option<String>,
+    pub token_env: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -122,8 +129,28 @@ where
             }
             Ok(Command::Bootstrap(overrides))
         }
+        "mcp" => {
+            let mut bridge_args = McpBridgeArgs::default();
+            while let Some(flag) = iter.next() {
+                let take_val = |iter: &mut dyn Iterator<Item = String>, flag_name: &str| {
+                    iter.next()
+                        .filter(|v| !v.is_empty())
+                        .ok_or_else(|| format!("missing value for {flag_name}"))
+                };
+                match flag.as_str() {
+                    "--url" => {
+                        bridge_args.url = Some(take_val(&mut iter, "--url")?);
+                    }
+                    "--token-env" => {
+                        bridge_args.token_env = Some(take_val(&mut iter, "--token-env")?);
+                    }
+                    _ => return Err(format!("unknown mcp flag: {flag}")),
+                }
+            }
+            Ok(Command::Mcp(bridge_args))
+        }
         other => Err(format!(
-            "unknown subcommand '{other}' (expected 'serve' or 'bootstrap')"
+            "unknown subcommand '{other}' (expected 'serve', 'bootstrap', or 'mcp')"
         )),
     }
 }
@@ -172,5 +199,30 @@ mod tests {
     fn rejects_unknown_subcommand_or_missing_flag_value() {
         assert!(parse_args(["maxi-loop", "unknown"]).is_err());
         assert!(parse_args(["maxi-loop", "bootstrap", "--admin-email"]).is_err());
+        assert!(parse_args(["maxi-loop", "mcp", "--url"]).is_err());
+        assert!(parse_args(["maxi-loop", "mcp", "--token"]).is_err());
+    }
+
+    #[test]
+    fn parses_mcp_stdio_bridge_flags() {
+        assert_eq!(
+            parse_args(["maxi-loop", "mcp"]).unwrap(),
+            Command::Mcp(McpBridgeArgs::default())
+        );
+        assert_eq!(
+            parse_args([
+                "maxi-loop",
+                "mcp",
+                "--url",
+                "http://127.0.0.1:8080",
+                "--token-env",
+                "MY_CUSTOM_MCP_TOKEN",
+            ])
+            .unwrap(),
+            Command::Mcp(McpBridgeArgs {
+                url: Some("http://127.0.0.1:8080".to_owned()),
+                token_env: Some("MY_CUSTOM_MCP_TOKEN".to_owned()),
+            })
+        );
     }
 }

@@ -19,8 +19,9 @@ use tracing::{error, warn};
 
 use crate::prompts::{is_known_prompt, list_prompt_definitions, render_prompt};
 use crate::protocol::{
-    ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JsonRpcRequest,
-    JsonRpcResponse, build_initialize_result, build_tool_error_result, build_tool_success_result,
+    DEFAULT_PROTOCOL_VERSION, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND,
+    ERR_PARSE, JsonRpcRequest, JsonRpcResponse, SUPPORTED_PROTOCOL_VERSIONS,
+    build_initialize_result, build_tool_error_result, build_tool_success_result,
     negotiate_protocol_version,
 };
 use crate::rate_limit::McpRateLimiter;
@@ -28,6 +29,7 @@ use crate::tools::{ToolServices, execute_tool, is_known_tool, list_tool_definiti
 
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const MCP_SESSION_HEADER: &str = "mcp-session-id";
+const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
 
 #[derive(Clone)]
 pub struct McpState {
@@ -193,43 +195,82 @@ async fn mcp_post_handler(
         return StatusCode::ACCEPTED.into_response();
     };
 
-    match req.method.as_str() {
+    let session_id = format!("mlmcp-{}-{}", auth.tenant_ctx.tenant_id(), auth.token_id);
+    let (protocol_version, mut resp) = match req.method.as_str() {
         "initialize" => {
             let negotiated = negotiate_protocol_version(req.params.as_ref());
-            let session_id = format!("mlmcp-{}-{}", auth.tenant_ctx.tenant_id(), auth.token_id);
-            let mut resp = Json(JsonRpcResponse::ok(
+            let resp = Json(JsonRpcResponse::ok(
                 req_id,
                 build_initialize_result(negotiated),
             ))
             .into_response();
-            if let Ok(hdr_val) = HeaderValue::from_str(&session_id) {
-                resp.headers_mut().insert(MCP_SESSION_HEADER, hdr_val);
-            }
-            resp
+            (negotiated, resp)
         }
-        "ping" => Json(JsonRpcResponse::ok(req_id, json!({}))).into_response(),
+        "ping" => (
+            resolve_header_protocol_version(&headers),
+            Json(JsonRpcResponse::ok(req_id, json!({}))).into_response(),
+        ),
         "tools/list" => {
             let tools = list_tool_definitions(auth.can_read, auth.can_triage);
-            Json(JsonRpcResponse::ok(req_id, json!({ "tools": tools }))).into_response()
+            (
+                resolve_header_protocol_version(&headers),
+                Json(JsonRpcResponse::ok(req_id, json!({ "tools": tools }))).into_response(),
+            )
         }
-        "tools/call" => handle_tool_call(&state, &auth, req_id, req.params).await,
+        "tools/call" => (
+            resolve_header_protocol_version(&headers),
+            handle_tool_call(&state, &auth, req_id, req.params).await,
+        ),
         "prompts/list" => {
             let prompts = if auth.can_read {
                 list_prompt_definitions()
             } else {
                 Vec::new()
             };
-            Json(JsonRpcResponse::ok(req_id, json!({ "prompts": prompts }))).into_response()
+            (
+                resolve_header_protocol_version(&headers),
+                Json(JsonRpcResponse::ok(req_id, json!({ "prompts": prompts }))).into_response(),
+            )
         }
-        "prompts/get" => handle_prompt_get(&state, &auth, req_id, req.params).await,
-        other => Json(JsonRpcResponse::err(
-            req_id,
-            ERR_METHOD_NOT_FOUND,
-            format!("method not found: {other}"),
-            None,
-        ))
-        .into_response(),
+        "prompts/get" => (
+            resolve_header_protocol_version(&headers),
+            handle_prompt_get(&state, &auth, req_id, req.params).await,
+        ),
+        other => (
+            resolve_header_protocol_version(&headers),
+            Json(JsonRpcResponse::err(
+                req_id,
+                ERR_METHOD_NOT_FOUND,
+                format!("method not found: {other}"),
+                None,
+            ))
+            .into_response(),
+        ),
+    };
+
+    if let Ok(hdr_val) = HeaderValue::from_str(&session_id) {
+        resp.headers_mut().insert(MCP_SESSION_HEADER, hdr_val);
     }
+    resp.headers_mut().insert(
+        MCP_PROTOCOL_VERSION_HEADER,
+        HeaderValue::from_static(protocol_version),
+    );
+    resp
+}
+
+fn resolve_header_protocol_version(headers: &HeaderMap) -> &'static str {
+    if let Some(requested) = headers
+        .get(MCP_PROTOCOL_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        && let Some(matched) = SUPPORTED_PROTOCOL_VERSIONS
+            .iter()
+            .copied()
+            .find(|v| *v == requested)
+    {
+        return matched;
+    }
+    DEFAULT_PROTOCOL_VERSION
 }
 
 #[derive(Deserialize)]

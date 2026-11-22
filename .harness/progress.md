@@ -33,6 +33,40 @@
 
 ---
 
+### 2026-11-22 — Antigravity — MCP Stdio Bridge (`maxi-loop mcp`), Streamable HTTP Protocol Header Hardening & Live Claude Code CLI E2E
+
+**Status at end of session:** done
+
+**Done:**
+- Reviewed `maxi-code`'s stable stdio MCP proxy pattern (`src/mcp_board.rs`, `src/mcp_supervisor.rs`, ACP/OpenCode wiring) and brought parity to `maxi-loop` alongside Streamable HTTP `/mcp`:
+  - Created `crates/mcp/src/stdio.rs` implementing `StdioBridge` & `run_stdio_bridge` (0 new external crates — reuses workspace `hyper` + `tokio-rustls` + `webpki-roots` with strict TLS verification, 30s timeout, 256 KiB bounded stdin line read, 4 MiB bounded HTTP response read, `Mcp-Session-Id` & `MCP-Protocol-Version` tracking, best-effort `DELETE /mcp` on EOF, token redaction in `Debug`/errors, and graceful unconfigured/401/429 handling)
+  - Hardened `crates/mcp/src/http.rs` to echo both `Mcp-Session-Id` and `MCP-Protocol-Version` on every JSON-RPC response from `POST /mcp` (asserted in `crates/server/tests/mcp_server.rs`)
+  - Wired `maxi-loop mcp [--url <URL>] [--token-env <ENV>]` in `crates/server/src/cli.rs` & `crates/server/src/main.rs` before `Config::from_env()` / DB connect, sending all tracing strictly to `stderr` so `stdout` stays pure line-delimited JSON-RPC 2.0 and zero `DATABASE_URL` is required
+  - Updated `web/src/modules/mcp/McpView.tsx` with a **Streamable HTTP** / **Stdio Bridge (`maxi-loop mcp`)** config snippet switcher and updated the exposed tools & prompts summary (all 11 tools + 4 prompts)
+  - Created `tests/e2e/verify_mcp.py` covering live Streamable HTTP `/mcp`, spawned `maxi-loop mcp` stdio subprocess (with `DATABASE_URL` stripped), negative checks (missing env, read-only denial, revoked token `401` on HTTP & stdio), and `--test-claude` live verification through real Claude Code CLI (`claude -p --strict-mcp-config`)
+  - Updated `.harness/ARCHITECTURE.md` and archived `F011` to `.harness/progress-archive.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo check --workspace` → PASS
+- `cargo test --workspace` → PASS (94/94 passed, incl. 11/11 `maxi-loop-mcp` unit tests, 8/8 `maxi-loop` lib tests, `mcp_server`, and `p2_performance_mcp`)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency, `D006` preserved)
+- Live E2E against restarted `maxi-loop-dev.service` (`python3 tests/e2e/verify_mcp.py --test-claude`) → PASS (Streamable HTTP `/mcp` + Stdio Bridge `maxi-loop mcp` + Real Claude Code CLI connecting and executing `list_projects` & `list_issues` over **both** Streamable HTTP and Stdio Bridge + negative auth/revocation/unconfigured checks)
+
+**Security notes:**
+- Self-review passed: `maxi-loop mcp` rejects raw tokens on CLI argv (reads from `MAXI_LOOP_MCP_TOKEN` or `--token-env` env var only), redacts tokens in `Debug` & error strings, enforces `http`/`https` schemes without embedded userinfo, uses strict `rustls` + `webpki-roots` TLS verification, bounds stdin lines (256 KiB), HTTP responses (4 MiB), and timeouts (30s); `crates/mcp` remains strictly `sqlx`-free (`D006`); negative tests verify unconfigured env, invalid/revoked token `401` on both HTTP & stdio, read-only triage denial, PII scrubbing, and zero token leak in stdout/stderr
+- Dependencies: 0 new external Rust or npm dependencies added (reused workspace `hyper`, `hyper-util`, `http-body-util`, `rustls`, `tokio`, `tokio-rustls`, `url`, `webpki-roots`). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Used a dedicated blocking `stdin` reader thread feeding a bounded `mpsc` channel into the Tokio runtime rather than holding a blocking lock across `.await`, and routed all `maxi-loop mcp` tracing strictly to `stderr` so `stdout` never carries non-JSON-RPC bytes
+
+**Not finished / blockers:**
+- None
+
 ### 2026-11-22 — Antigravity — MaxiBoard-style Top-Left Workspace Switcher & Create Workspace Dialog
 
 **Status at end of session:** done
@@ -316,39 +350,3 @@
 
 **Not finished / blockers:**
 - Ready to begin Phase 4 — `F013` (React Source Maps upload per release and bounded LRU ingest-time stack frame resolution)
-
-### 2026-11-22 — Antigravity — F011: Phase 2b: Embedded MCP server (/mcp Streamable HTTP) for AI issue analysis and triage
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0004_phase2b_mcp.sql` adding `mcp_tokens` (SHA-256 hash only, tenant/workspace/project access scope, `can_read` default + `can_triage` opt-in, `rate_limit_per_minute`, expiry & revocation), `mcp_audit_logs`, and `issue_notes` (shared by UI and MCP), all with leading `tenant_id` keys/indexes and `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
-- Moved pure PII scrubbing (`scrub_event_payload`, `scrub_event_payload_with_rules`, `scrub_text_with_rules`) to `crates/platform/src/scrub.rs` (re-exported in `crates/ingest/src/scrub.rs`) so MCP output scrubbing shares exact ingest-parity logic without depending on `crates/ingest` or `sqlx`
-- Extended `crates/auth/src/mcp.rs` with revocable scoped MCP Bearer tokens (`mlmcp_<64-hex>`), `McpAuthService` facade, audit logging, and `/api/v1/mcp/tokens` (`GET`/`POST`/`DELETE`) + `/api/v1/mcp/audit-logs` routes
-- Extended `crates/org/src/service.rs` with `OrgService` facade (`list_projects`, `list_effective_pii_rules`) and `crates/issues` with `notes.rs` (`issue_notes` CRUD + `/api/v1/issues/{id}/notes`), `since`/`until` & `sort=regressed` filters, `resolve_release_commit_sha`, `update_issue_status_with_actor`, and `IssuesService` facade
-- Created `crates/mcp` (`maxi-loop-mcp`) with **zero `sqlx` dependency** (`D006` compiler-enforced single service layer):
-  - `http.rs` & `protocol.rs`: Streamable HTTP `/mcp` JSON-RPC 2.0 endpoint (`initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`; `GET /mcp` → `405`, `DELETE /mcp` → `204`) with Bearer auth, 256 KiB payload cap, `Mcp-Session-Id`, and full audit logging (`ok`/`error`/`denied`/`rate_limited`)
-  - `rate_limit.rs`: per-token `governor` GCRA rate limiter returning HTTP `429` + `Retry-After`
-  - `sanitize.rs`: output PII scrubbing (baseline + tenant/workspace/project custom rules), untrusted-data envelope (`<<<UNTRUSTED_EVENT_DATA>>>` + `security_notice`), token-efficient truncation with explicit markers, in-app stack frame formatting with code context (`pre_context`/`context_line`/`post_context`), and UI deep links
-  - `tools.rs`: implements all 7 tools (`list_projects`, `list_issues`, `get_issue` with release-to-`commit_sha` mapping, `get_event`, `get_issue_stats`, `update_issue_status`, `add_issue_note`) with least-privilege `tools/list` filtering and strict project/workspace/tenant scope enforcement
-- Added MaxiBoard UI `web/src/modules/mcp/McpView.tsx` (MCP Bearer token management with one-time copyable token banner + Streamable HTTP client config snippet + Audit Log tab) and **Notes & AI Triage** tab in `IssueDetailFullView.tsx`
-- Added PostgreSQL 16 integration test `crates/server/tests/mcp_server.rs` covering auth/revocation, viewer privilege-escalation denial, read vs triage scopes, project-scope isolation, post-ingest output PII scrubbing, untrusted-data wrapping, truncation, release-to-SHA mapping, per-token rate limiting (`429`), audit logs, and Tenant A vs Tenant B cross-tenant isolation
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (55/55 passed, including `mcp_server` integration test & 5 `maxi-loop-mcp` unit tests)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified `POST /mcp` unauth `401`, `GET /mcp` `405`, created read-only token → `initialize` → `tools/list` (5 read tools) → `tools/call` `list_projects` → verified audit log → revoked token → confirmed `401`) → PASS
-
-**Security notes:**
-- Self-review passed: `crates/mcp` cannot import `sqlx` (`D006`), enforcing all queries through RLS-protected tenant services; raw MCP tokens are 256-bit CSPRNG, shown once at creation, and stored strictly as SHA-256 hashes; viewers cannot mint `triage` tokens (`403`); read-only tokens cannot invoke `update_issue_status` or `add_issue_note` (denied + audit-logged); `list_projects` never exposes DSN keys; every MCP event/issue output applies baseline + inherited custom PII scrubbing and wraps untrusted event text in `<<<UNTRUSTED_EVENT_DATA>>>` markers with a `security_notice`; per-token rate limits enforce `429` + `Retry-After` and audit logging; audit log arguments are PII-scrubbed and size-capped; negative tests cover auth/revocation, privilege escalation, sibling-project scope isolation, rate limiting, and cross-tenant isolation
-- Dependencies: 0 new external Rust or npm dependencies added. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Implemented MCP Streamable HTTP JSON-RPC 2.0 directly over `axum` + `serde_json` (0 new crates) and moved pure PII scrubbing to `crates/platform/src/scrub.rs` so `crates/mcp` stays strictly free of `sqlx` while guaranteeing ingest-parity PII output scrubbing
-
-**Not finished / blockers:**
-- Ready to begin Phase 3 — `F012` (Performance monitoring: transactions, spans, 1-minute duration histograms, sampled zstd traces, distributed waterfall, and MCP `list_transactions` / `get_trace` tools)

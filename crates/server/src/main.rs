@@ -28,6 +28,34 @@ async fn main() {
         }
     };
 
+    // `maxi-loop mcp` runs a lightweight stdio-to-HTTP MCP bridge without needing
+    // DATABASE_URL or server config; all diagnostics go strictly to stderr so
+    // stdout remains pure line-delimited JSON-RPC 2.0.
+    if let Command::Mcp(bridge_args) = command {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter)
+            .init();
+
+        let bridge_cfg = match maxi_loop_mcp::stdio::StdioBridgeConfig::from_env(
+            bridge_args.url,
+            bridge_args.token_env.as_deref(),
+        ) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                eprintln!("mcp bridge configuration error: {err}");
+                std::process::exit(2);
+            }
+        };
+
+        if let Err(err) = maxi_loop_mcp::stdio::run_stdio_bridge(bridge_cfg).await {
+            eprintln!("mcp stdio bridge error: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let config = match Config::from_env() {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -90,6 +118,7 @@ async fn main() {
                 }
             }
         }
+        Command::Mcp(_) => unreachable!("handled before server startup"),
         Command::Serve => {
             let spec = BootstrapSpec::from_config(&config);
             match bootstrap_defaults(&db, &spec).await {

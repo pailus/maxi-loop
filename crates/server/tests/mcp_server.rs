@@ -534,6 +534,11 @@ async fn mcp_streamable_http_tools_scopes_scrubbing_rate_limit_audit_and_tenant_
     .await;
     assert_eq!(st, StatusCode::OK);
     assert!(hdrs.contains_key("mcp-session-id"));
+    assert_eq!(
+        hdrs.get("mcp-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+        Some("2025-03-26")
+    );
     assert_eq!(init_resp["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(init_resp["result"]["serverInfo"]["name"], "maxi-loop");
 

@@ -54,6 +54,9 @@ export function McpView({
 
   const [createdToken, setCreatedToken] =
     useState<CreatedMcpTokenResponse | null>(null);
+  const [configTransport, setConfigTransport] = useState<"http" | "stdio">(
+    "http",
+  );
   const [copiedKey, setCopiedKey] = useState<"token" | "config" | null>(null);
 
   const loadData = useCallback(async () => {
@@ -134,14 +137,15 @@ export function McpView({
   }
 
   const mcpEndpointUrl = `${window.location.origin}/mcp`;
-  const clientConfigSnippet = JSON.stringify(
+  const rawTokenPlaceholder = createdToken?.raw_token ?? "<YOUR_MLMCP_TOKEN>";
+  const httpConfigSnippet = JSON.stringify(
     {
       mcpServers: {
         "maxi-loop": {
           type: "http",
           url: mcpEndpointUrl,
           headers: {
-            Authorization: `Bearer ${createdToken?.raw_token ?? "<YOUR_MLMCP_TOKEN>"}`,
+            Authorization: `Bearer ${rawTokenPlaceholder}`,
           },
         },
       },
@@ -149,6 +153,24 @@ export function McpView({
     null,
     2,
   );
+  const stdioConfigSnippet = JSON.stringify(
+    {
+      mcpServers: {
+        "maxi-loop": {
+          command: "maxi-loop",
+          args: ["mcp"],
+          env: {
+            MAXI_LOOP_URL: window.location.origin,
+            MAXI_LOOP_MCP_TOKEN: rawTokenPlaceholder,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  const activeConfigSnippet =
+    configTransport === "http" ? httpConfigSnippet : stdioConfigSnippet;
 
   return (
     <div className="flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col overflow-hidden">
@@ -340,13 +362,39 @@ export function McpView({
               </section>
 
               <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-xs font-bold text-[var(--color-text)]">
-                    MCP Client Configuration (Streamable HTTP)
-                  </h2>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xs font-bold text-[var(--color-text)]">
+                      MCP Client Configuration
+                    </h2>
+                    <div className="inline-flex rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)] p-0.5 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setConfigTransport("http")}
+                        className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                          configTransport === "http"
+                            ? "bg-[var(--color-bg)] text-[var(--color-primary)] shadow-xs"
+                            : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        Streamable HTTP
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfigTransport("stdio")}
+                        className={`px-2 py-0.5 rounded cursor-pointer font-medium ${
+                          configTransport === "stdio"
+                            ? "bg-[var(--color-bg)] text-[var(--color-primary)] shadow-xs"
+                            : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        Stdio Bridge (maxi-loop mcp)
+                      </button>
+                    </div>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => void copyText(clientConfigSnippet, "config")}
+                    onClick={() => void copyText(activeConfigSnippet, "config")}
                     className="h-7 px-2.5 rounded border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] text-xs text-[var(--color-text-muted)] inline-flex items-center gap-1 cursor-pointer"
                   >
                     {copiedKey === "config" ? (
@@ -360,16 +408,20 @@ export function McpView({
                   </button>
                 </div>
                 <pre className="p-3 rounded bg-[var(--pm-col)] border border-[var(--color-border)] pm-mono text-xs text-[var(--color-text)] overflow-x-auto">
-                  {clientConfigSnippet}
+                  {activeConfigSnippet}
                 </pre>
                 <div className="flex items-start gap-2 text-[11px] text-[var(--color-text-dim)]">
                   <ShieldAlert size={14} className="shrink-0 mt-0.5 text-[#a54800]" />
                   <span>
                     Tools exposed: <code>list_projects</code>,{" "}
                     <code>list_issues</code>, <code>get_issue</code>,{" "}
-                    <code>get_event</code>, <code>get_issue_stats</code>{" "}
-                    (read), plus <code>update_issue_status</code> &amp;{" "}
-                    <code>add_issue_note</code> (triage opt-in). Destructive
+                    <code>get_event</code>, <code>get_issue_stats</code>,{" "}
+                    <code>list_transactions</code>, <code>get_trace</code>,{" "}
+                    <code>list_slow_queries</code>,{" "}
+                    <code>compare_releases</code> (read), plus{" "}
+                    <code>update_issue_status</code> &amp;{" "}
+                    <code>add_issue_note</code> (triage opt-in), and 4 curated
+                    prompt templates (<code>prompts/list</code>). Destructive
                     delete/config tools are never exposed.
                   </span>
                 </div>

@@ -1240,14 +1240,22 @@ dependencies = [
  "chrono",
  "governor",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "maxi-loop-auth",
  "maxi-loop-issues",
  "maxi-loop-org",
  "maxi-loop-performance",
  "maxi-loop-platform",
+ "rustls",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-rustls",
  "tracing",
+ "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
