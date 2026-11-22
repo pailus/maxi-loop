@@ -624,12 +624,12 @@ pub async fn list_traces(
         .filter(|s| !s.is_empty())
     {
         None => None,
-        Some("slow" | "error" | "random") => {
+        Some("slow" | "error" | "random" | "issue") => {
             filter.sample_reason.as_deref().map(|s| s.trim().to_owned())
         }
         Some(_) => {
             return Err(AppError::Validation(
-                "sample_reason must be one of: slow, error, random".to_owned(),
+                "sample_reason must be one of: slow, error, random, issue".to_owned(),
             ));
         }
     };

@@ -23,6 +23,8 @@ pub enum SampleReason {
     Slow,
     Error,
     Random,
+    /// Kept because the transaction triggered a performance issue detector (`F017`).
+    Issue,
 }
 
 impl SampleReason {
@@ -31,8 +33,70 @@ impl SampleReason {
             Self::Slow => "slow",
             Self::Error => "error",
             Self::Random => "random",
+            Self::Issue => "issue",
         }
     }
+}
+
+/// Span pattern detected in a single transaction that becomes a performance issue (`F017`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceProblemType {
+    NPlusOneDb,
+    NPlusOneApi,
+    SlowDbQuery,
+    ConsecutiveDb,
+    ConsecutiveHttp,
+}
+
+impl PerformanceProblemType {
+    /// Value stored in `issues.issue_type` (allow-listed by a CHECK constraint, migration 0011).
+    pub fn issue_type(self) -> &'static str {
+        match self {
+            Self::NPlusOneDb => "performance_n_plus_one_db",
+            Self::NPlusOneApi => "performance_n_plus_one_api",
+            Self::SlowDbQuery => "performance_slow_db_query",
+            Self::ConsecutiveDb => "performance_consecutive_db",
+            Self::ConsecutiveHttp => "performance_consecutive_http",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::NPlusOneDb => "N+1 Query",
+            Self::NPlusOneApi => "N+1 API Call",
+            Self::SlowDbQuery => "Slow DB Query",
+            Self::ConsecutiveDb => "Consecutive DB Queries",
+            Self::ConsecutiveHttp => "Consecutive HTTP Calls",
+        }
+    }
+}
+
+/// One span that contributes to a detected performance problem. Only the normalized
+/// (parameter-stripped) description is kept so literals never leak into issue payloads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OffendingSpan {
+    pub span_id: String,
+    pub op: String,
+    pub description: String,
+    pub start_offset_ms: f64,
+    pub duration_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceProblem {
+    pub problem_type: PerformanceProblemType,
+    /// Stable grouping key for the offending pattern (hash of normalized span description(s)).
+    pub group_hash: String,
+    /// Human-readable summary of the offending span description(s).
+    pub description: String,
+    pub offending_span_count: usize,
+    pub offending_spans_total_ms: f64,
+    /// Time that could be saved by batching / parallelizing (consecutive detectors only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub potential_savings_ms: Option<f64>,
+    /// Bounded sample of offending spans (see `detectors::MAX_OFFENDING_SPANS`).
+    pub offending_spans: Vec<OffendingSpan>,
 }
 
 /// Individual child span stored inside a zstd-compressed `TraceBlobPayload`.
@@ -99,6 +163,7 @@ pub struct ProcessedTransaction {
     pub sample_reason: Option<SampleReason>,
     pub spans_zstd: Option<Vec<u8>>,
     pub span_ops: Vec<ProcessedSpanOp>,
+    pub performance_problems: Vec<PerformanceProblem>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

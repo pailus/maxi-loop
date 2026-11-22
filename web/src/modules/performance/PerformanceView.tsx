@@ -388,6 +388,7 @@ export function PerformanceView({
             <option value="slow">Slow traces</option>
             <option value="error">Error traces</option>
             <option value="random">Random sample (1-5%)</option>
+            <option value="issue">Performance issue</option>
           </select>
         ) : null}
       </div>

@@ -693,6 +693,10 @@ export function App() {
               setActiveNav("projects");
               if (canManageProjects) setCreateProjectOpen(true);
             }}
+            onOpenTrace={(traceId) => {
+              setDeepLinkTraceId(traceId);
+              goTo("performance");
+            }}
           />
         )}
 

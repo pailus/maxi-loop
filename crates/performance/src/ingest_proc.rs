@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Postgres, QueryBuilder, Transaction};
 
 use crate::codec::compress_trace_blob;
+use crate::detectors::{DetectorSpan, detect_performance_problems};
 use crate::histogram::{HistogramBuckets, NUM_HISTOGRAM_BUCKETS, observe_duration};
 use crate::model::{
     ProcessedSpanOp, ProcessedTransaction, QueuedTransaction, SampleReason, TraceBlobPayload,
@@ -175,15 +176,13 @@ pub fn process_queued_transaction_with_rules(
         .unwrap_or(&[]);
     let span_count = i32::try_from(raw_spans.len().min(MAX_SPANS_PER_TRANSACTION)).unwrap_or(0);
 
-    let sample_reason = decide_sample_reason(&trace_id, duration_ms, is_error, policy);
     let root_start_ms = timestamp_to_ms(start_timestamp);
     let root_end_ms = timestamp_to_ms(end_timestamp);
     let bounded_span_len = raw_spans.len().min(MAX_SPANS_PER_TRANSACTION);
-    let mut parsed_spans = if sample_reason.is_some() {
-        Vec::with_capacity(bounded_span_len)
-    } else {
-        Vec::new()
-    };
+    // Spans are always parsed (bounded) because performance issue detection must see every
+    // transaction, not only sampled ones; they are dropped below when not sampled.
+    let mut parsed_spans = Vec::with_capacity(bounded_span_len);
+    let mut span_norms: Vec<Option<(String, String)>> = Vec::with_capacity(bounded_span_len);
     let mut span_ops = Vec::with_capacity(bounded_span_len);
 
     for (idx, span_val) in raw_spans.iter().take(MAX_SPANS_PER_TRANSACTION).enumerate() {
@@ -236,49 +235,70 @@ pub fn process_queued_transaction_with_rules(
         let span_http_code = extract_http_status_code(&span_tags, span_data.as_object());
         let span_is_err = is_error_status(&span_status, span_http_code);
 
-        if let Some((normalized_description, description_hash)) =
-            normalize_span_operation(&span_op, &span_desc)
-        {
+        let normalized = normalize_span_operation(&span_op, &span_desc);
+        if let Some((normalized_description, description_hash)) = &normalized {
             span_ops.push(ProcessedSpanOp {
                 op: span_op.clone(),
-                description_hash,
-                normalized_description,
+                description_hash: description_hash.clone(),
+                normalized_description: normalized_description.clone(),
                 duration_ms: s_dur,
                 is_error: span_is_err,
             });
         }
+        span_norms.push(normalized);
 
-        if sample_reason.is_some() {
-            let span_id = obj
-                .get("span_id")
-                .and_then(Value::as_str)
-                .map(normalize_hex_id)
-                .filter(|s| !s.is_empty() && s.len() <= 64)
-                .unwrap_or_else(|| {
-                    derive_deterministic_hex(&format!("{}:span:{idx}", raw.event_id), 16)
-                });
-            let span_parent = obj
-                .get("parent_span_id")
-                .and_then(Value::as_str)
-                .map(normalize_hex_id)
-                .filter(|s| !s.is_empty() && s.len() <= 64)
-                .or_else(|| Some(root_span_id.clone()));
-
-            parsed_spans.push(TraceSpanRecord {
-                span_id,
-                parent_span_id: span_parent,
-                op: span_op,
-                description: span_desc,
-                status: span_status,
-                is_error: span_is_err,
-                start_timestamp_ms: s_start_ms,
-                end_timestamp_ms: s_end_ms,
-                duration_ms: s_dur,
-                tags: span_tags,
-                data: span_data,
+        let span_id = obj
+            .get("span_id")
+            .and_then(Value::as_str)
+            .map(normalize_hex_id)
+            .filter(|s| !s.is_empty() && s.len() <= 64)
+            .unwrap_or_else(|| {
+                derive_deterministic_hex(&format!("{}:span:{idx}", raw.event_id), 16)
             });
-        }
+        let span_parent = obj
+            .get("parent_span_id")
+            .and_then(Value::as_str)
+            .map(normalize_hex_id)
+            .filter(|s| !s.is_empty() && s.len() <= 64)
+            .or_else(|| Some(root_span_id.clone()));
+
+        parsed_spans.push(TraceSpanRecord {
+            span_id,
+            parent_span_id: span_parent,
+            op: span_op,
+            description: span_desc,
+            status: span_status,
+            is_error: span_is_err,
+            start_timestamp_ms: s_start_ms,
+            end_timestamp_ms: s_end_ms,
+            duration_ms: s_dur,
+            tags: span_tags,
+            data: span_data,
+        });
     }
+
+    let detector_spans: Vec<DetectorSpan<'_>> = parsed_spans
+        .iter()
+        .zip(&span_norms)
+        .map(|(span, norm)| DetectorSpan {
+            span_id: &span.span_id,
+            parent_span_id: span.parent_span_id.as_deref(),
+            op: &span.op,
+            normalized: norm.as_ref().map(|(d, h)| (d.as_str(), h.as_str())),
+            start_ms: span.start_timestamp_ms,
+            end_ms: span.end_timestamp_ms,
+            duration_ms: span.duration_ms,
+        })
+        .collect();
+    let performance_problems = detect_performance_problems(&detector_spans, root_start_ms);
+
+    let sample_reason = decide_sample_reason(&trace_id, duration_ms, is_error, policy).or(
+        if performance_problems.is_empty() {
+            None
+        } else {
+            Some(SampleReason::Issue)
+        },
+    );
 
     let spans_zstd = if sample_reason.is_some() {
         let blob = TraceBlobPayload {
@@ -319,6 +339,7 @@ pub fn process_queued_transaction_with_rules(
         sample_reason,
         spans_zstd,
         span_ops,
+        performance_problems,
     })
 }
 

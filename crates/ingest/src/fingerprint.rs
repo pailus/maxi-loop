@@ -55,7 +55,12 @@ pub struct ProcessedEvent {
     pub stack_frames: Value,
     pub tags: Value,
     pub payload: Value,
+    /// `issues.issue_type`: `"error"` for SDK error events, `performance_*` for detected
+    /// performance problems (`F017`). Only used when the issue row is first created.
+    pub issue_type: String,
 }
+
+pub const ERROR_ISSUE_TYPE: &str = "error";
 
 #[derive(Clone, Debug)]
 struct RawFrame {
@@ -211,6 +216,7 @@ fn finalize_processed_event(
         stack_frames,
         tags,
         payload,
+        issue_type: ERROR_ISSUE_TYPE.to_owned(),
     })
 }
 

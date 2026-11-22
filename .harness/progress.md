@@ -33,6 +33,39 @@
 
 ---
 
+### 2026-11-22 — Claude Code + Antigravity — F017: Performance Issues (N+1 DB, N+1 API, Slow DB Query, Consecutive DB/HTTP)
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0011_performance_issues.sql`: added `issues.issue_type` (`TEXT NOT NULL DEFAULT 'error'` with `CHECK` constraint across `error` and 5 `performance_*` types + composite index `(tenant_id, project_id, issue_type, last_seen DESC)`) and expanded `traces.sample_reason` `CHECK` constraint to allow `'issue'`
+- Added `crates/performance/src/detectors.rs` (`detect_performance_problems`) running on every ingested transaction before sampling with Sentry-like thresholds: N+1 DB (`>=5` identical normalized queries, `>=50ms`), N+1 API (`>=5` identical `http.client` calls, `>=100ms`), Slow DB Query (`>=1s`), Consecutive DB (`>=2` sequential sibling queries `>=30ms` each, savings `>=100ms`), Consecutive HTTP (`>=3` sequential calls `>=500ms` each, savings `>=1s`); triggering transactions are always retained as sampled traces (`sample_reason = 'issue'`)
+- Added `crates/ingest/src/perf_issue.rs` converting detected `PerformanceProblem`s into `ProcessedEvent`s grouped by `(issue_type, transaction_name, group_hash)` with normalized (literal-free) span descriptions, wired into `crates/ingest/src/worker.rs` to reuse regression, releases, hourly counters, and alerts
+- Extended `crates/issues` (`model.rs`, `service.rs`, `releases.rs`, `merge_split.rs`) and `crates/mcp/src/tools.rs` with allow-listed `issue_type` filtering (`error`, `performance`, or exact `performance_*`), `issue_type` in issue/MCP views, `performance_problem` in compact MCP event extraction, and cross-type merge rejection
+- Extended `crates/performance/src/service.rs` & `web/src/modules/performance/PerformanceView.tsx` to support `sample_reason = 'issue'`
+- Built UI in `web/src/modules/issues/PerformanceProblemView.tsx`, `IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `web/src/app/App.tsx`, and `web/src/lib/api.ts`: `Type` filter + `PERFORMANCE` lozenge, Performance Problem summary card with offending normalized spans table, and `View trace` deep link straight into the trace waterfall
+- Added permanent E2E test `tests/e2e/python/verify_performance_issues.py` using official Python `sentry-sdk` + Django covering all 5 detectors, negative cases, grouping, and PII literal stripping
+- Recorded follow-up roadmap items `F018` (users affected + impact sorting) and `F019` (p95/error-rate performance alerts) in `.harness/feature-list.json`; archived `F015` and React SDK CORS E2E entries to `.harness/progress-archive.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace` → PASS (107 passed, 0 failed)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency, `D006` preserved)
+- Live E2E (`tests/e2e/python/verify_performance_issues.py` + regression Sentry SDK & MCP E2E) on restarted `maxi-loop-dev.service` → PASS
+- Headless Chrome UI screenshots (desktop Issues + N+1 drawer, `View trace` waterfall with `SAMPLE: ISSUE` & 12 N+1 spans, mobile overlay) → PASS
+
+**Security notes:**
+- Self-review passed: `issue_type` and `sample_reason` validated server-side against strict static allow-lists matching DB `CHECK` constraints; cross-type merge rejected with `400`; all queries parameterized inside `begin_tenant_tx`/`begin_worker_tx` (existing Postgres RLS inherited); performance issue payloads store only normalized (literal-free) span descriptions and PII-scrubbed transaction metadata (verified in E2E & MCP output); 0 new Rust or npm dependencies added; `cargo-audit` and `gitleaks` not installed on this host
+
+**Key decisions & why:**
+- Reused the existing `issues` table with `issue_type` rather than a separate table so performance problems automatically inherit grouping, regression detection, release links, hourly counters, alerts, RLS, and MCP/UI triage workflows
+
+**Not finished / blockers:**
+- Ready for `F018` (users affected per issue) or `F019` (performance p95/error-rate alerts)
+
 ### 2026-11-22 — Claude Code — Colours & fonts identical to MaxiBoard (D009)
 
 **Status at end of session:** done (fba02cc, merged to main)
@@ -232,70 +265,3 @@
 
 **Not finished / blockers:**
 - All roadmap features (`F001`–`F016`, Phases 1–5 + all PRD P2 features) are now 100% complete!
-
-### 2026-11-22 — Antigravity — F015: P2 Issues: Manual issue merge/split (with fingerprint alias routing) and event breadcrumbs viewer
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0008_p2_issue_merge_split.sql` adding backward-compatible nullable `events.fingerprint TEXT` (across daily partitions) and `issue_fingerprints` (`PRIMARY KEY (tenant_id, project_id, fingerprint)`) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
-- Updated `crates/ingest/src/worker.rs` to persist each event's original computed `fingerprint` on `events` and resolve merged fingerprint aliases via `issue_fingerprints` so future incoming envelopes for merged fingerprints automatically route to the target issue (preserving the target issue's title/exception metadata)
-- Added `crates/issues/src/breadcrumbs.rs` (`F-ISS-10`) extracting & normalizing Sentry event breadcrumbs (`breadcrumbs.values` or flat array, normalizing numeric epoch & ISO-8601 timestamps, level, type, category, message, data; bounded to 200 most recent) and exposed `breadcrumbs` on `IssueEventView` & `IssueDetailView`
-- Added `crates/issues/src/merge_split.rs` and HTTP routes (`POST /api/v1/issues/merge`, `POST /api/v1/issues/{issue_id}/split`, plus `/t/{tenant}/w/{workspace}/p/{project}/...` slug routes) (`F-ISS-9`):
-  - Transactional `merge_issues` (deterministic `ORDER BY id ASC FOR UPDATE` locking, same-project enforcement, re-parenting `events`, `issue_notes`, `alert_deliveries`, merging `issue_hourly_counters` & `issue_releases`, recording `issue_fingerprints` aliases, audit note, deleting merged sources)
-  - Transactional `split_issue` supporting both merged-fingerprint detachment (`fingerprints`) and arbitrary event splitting (`event_ids`), re-allocating events/counters/releases, refreshing `sample_event_id`, removing detached aliases so future events route to the new standalone issue, and recording audit notes
-- Updated MaxiBoard React UI (`web/src/lib/api.ts`, `web/src/modules/issues/BreadcrumbsView.tsx`, `IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`):
-  - Structured chronological **Breadcrumbs** timeline (level/text filter, type/category icons, expandable scrubbed `data` JSON) in full view, expandable stored-events inspector, and compact preview in the right drawer
-  - Multi-select checkboxes + **Merge issues** toolbar in `IssuesView.tsx` (enforcing same-project selection and primary target selector)
-  - **Merged fingerprints** panel & **Split into new issue** action in `IssueDetailFullView.tsx` plus checkbox multi-select **Split selected events** inside the **Stored events** tab
-- Added PostgreSQL 16 integration test `crates/server/tests/p2_merge_split_breadcrumbs.rs` covering breadcrumbs + PII scrubbing, multi-issue merge, post-merge alias ingest routing, split by fingerprint + post-split routing, split by `event_ids`, RBAC (`viewer` `403`), API token scoping, cross-project denial (`400`), and Tenant A vs Tenant B isolation (`404`)
-- Archived `F008` to `.harness/progress-archive.md` and updated `.harness/ARCHITECTURE.md`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (82/82 passed, incl. 5 `maxi-loop-issues` unit tests & `p2_merge_split_breadcrumbs` Postgres 16 integration test)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
-- Live manual smoke check on restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth merge `401`, breadcrumbs normalized with `Authorization`/`password` `[Filtered]`, merge → post-merge alias ingest routing `3 events` → split `1+2`, embedded SPA `200`)
-
-**Security notes:**
-- Self-review passed: all merge/split inputs validated server-side (`target_issue_id > 0`, `source_issue_ids` 1..=50 non-self deduped, mutually exclusive `fingerprints` 1..=20 or `event_ids` 1..=50, cannot split all events out); all queries parameterized inside `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + `issue_fingerprints` RLS); every endpoint enforces `AuthSession` + CSRF + `enforce_api_token_write()` + `enforce_project_write()` + `can_triage_issues()` + same-project check; breadcrumbs are derived strictly from PII-scrubbed event payloads (`[Filtered]`); negative tests verify unauth (`401`), viewer (`403`), read-only API token (`403`), cross-project merge (`400`), cross-project API token split denial, cross-tenant merge/split (`404`), self-merge (`400`), and splitting all events (`400`)
-- Dependencies: 0 new external Rust or npm dependencies added (promoted workspace `sha2` & `hex` in `crates/issues`). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Stored secondary merged fingerprints in a dedicated RLS-protected `issue_fingerprints` table (plus `events.fingerprint`) rather than mutating `issues.fingerprint` so ingest lookup stays fast (direct PK hit on unmerged issues, single PK alias lookup for merged fingerprints) and split can accurately restore original fingerprints and events
-
-**Not finished / blockers:**
-- Ready to continue P2 with `F016` (Compare releases `F-PRF-6`, Slow DB queries/operations `F-PRF-7`, and MCP `list_slow_queries`/`compare_releases` `F-MCP-14` + prompt templates `F-MCP-15`)
-
-### 2026-11-22 — Antigravity — Browser Ingest CORS & Official React SDK (`@sentry/react`) Headless Chrome E2E
-
-**Status at end of session:** done
-
-**Done:**
-- Fixed browser cross-origin ingest in `crates/ingest/src/http.rs`: added `OPTIONS` preflight handler (`204 No Content`) and non-credentialed CORS middleware strictly scoped to `/api/{project_id}/envelope/` (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, Content-Encoding, X-Sentry-Auth`, `Access-Control-Expose-Headers: X-Sentry-Rate-Limits, Retry-After`, `Access-Control-Max-Age: 86400`, explicitly omitting `Access-Control-Allow-Credentials`), keeping cookie-authenticated `/api/v1/*` routes strictly same-origin
-- Extended `crates/server/tests/envelope_ingest.rs` with CORS preflight (`204`), `POST` CORS/expose-header assertions, no-credentials assertion, and negative verification that `/api/v1/health` never emits `Access-Control-Allow-Origin`
-- Created isolated production-built Vite + React + TypeScript E2E app under `tests/e2e/react/` (`package.json` with `@sentry/react` ^9, `vite.config.ts` emitting minified JS + `.js.map`, `src/checkout.ts`, `src/App.tsx`, `src/main.tsx`, `README.md`) and real Headless Chrome orchestrator `tests/e2e/verify_react_sdk.py`
-- Updated `.gitignore` for `/tests/e2e/react/node_modules/` & `/tests/e2e/react/dist/`, archived `F007` to `.harness/progress-archive.md`
-
-**Verification run:**
-- `npm --prefix tests/e2e/react run build` → PASS (`tsc --noEmit && vite build`, minified bundle + `1.87 MB` `.js.map`)
-- `npm --prefix tests/e2e/react audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (77/77 passed, incl. `envelope_ingest` CORS & `/api/v1/*` non-CORS assertions)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- Live Headless Chrome E2E (`tests/e2e/verify_react_sdk.py` against restarted `maxi-loop-dev.service` on port `8080`) → PASS (204 CORS preflight on `/api/{id}/envelope/` & absent on `/api/v1/health`; Vite `.js.map` uploaded via `mlapi_...` write token; 4 minified errors → 2 grouped issues `TypeError` ×3 + `RangeError` ×1 resolved back to `src/checkout.ts` with `context_line`/`pre_context`/`post_context` + `node_modules/` marked `in_app=False` + `[Filtered]` PII; Browser React → Backend Django distributed waterfall `6 spans` across 2 services `p50=605.0ms`; tampered DSN in Chrome: 0 issues & 0 transactions)
-
-**Security notes:**
-- Self-review passed: wildcard CORS (`Access-Control-Allow-Origin: *`) is attached exclusively to the non-credentialed public DSN ingest route `/api/{project_id}/envelope/` and NEVER sets `Access-Control-Allow-Credentials`; cookie-authenticated `/api/v1/*` and `/mcp` routes remain untouched (verified by negative test on `/api/v1/health`); React E2E injects ephemeral DSN/secrets dynamically via local `/e2e-config.js` (never baked into committed code), static file handler validates `Path.resolve().is_relative_to(dist_dir)`, Chrome/backend spawned with argument arrays (`shell=False`), and negative check verifies tampered DSN ingests 0 issues & 0 transactions
-- Dependencies: 0 new production Rust or `web/` npm dependencies added; isolated test-only `@sentry/react` in `tests/e2e/react/` (`npm audit` = 0 vulnerabilities). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Implemented ingest CORS via a lightweight 20-line `axum::middleware::from_fn` directly on `crates/ingest/src/http.rs` (0 new crates) rather than a global CORS layer so cookie-authenticated `/api/v1/*` endpoints can never accidentally inherit permissive CORS
-
-**Not finished / blockers:**
-- All 5 target PRD SDK stacks (**Python FastAPI, Python Django, Go, Rust, React/Browser**) are now 100% live-verified E2E for both Error Tracking and Performance Monitoring / Distributed Tracing! Ready for user's next choice (production `Dockerfile`/`README.md` or PRD P2 features)

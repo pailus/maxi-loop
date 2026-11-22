@@ -100,6 +100,8 @@ pub struct IssueListFilter {
     pub release: Option<String>,
     pub status: Option<String>,
     pub is_regressed: Option<bool>,
+    /// `error`, `performance` (any performance type) or an exact `performance_*` type.
+    pub issue_type: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     pub query: Option<String>,
@@ -122,6 +124,7 @@ pub struct IssueSummaryView {
     pub exception_value: String,
     pub culprit: String,
     pub level: String,
+    pub issue_type: String,
     pub status: String,
     pub is_regressed: bool,
     pub event_count: i64,

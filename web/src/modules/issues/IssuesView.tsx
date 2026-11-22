@@ -10,6 +10,7 @@ import {
   Inbox,
   RefreshCw,
   Search,
+  Zap,
 } from "lucide-react";
 import {
   type IssueDetailView,
@@ -19,6 +20,7 @@ import {
   type ProjectView,
   fetchIssueDetail,
   fetchIssues,
+  isPerformanceIssueType,
   mergeIssues,
   updateIssueStatus,
 } from "../../lib/api";
@@ -45,6 +47,7 @@ interface IssuesViewProps {
   canTriage: boolean;
   onShowToast: (message: string, undoAction?: () => void) => void;
   onNavigateToProjects: () => void;
+  onOpenTrace?: (traceId: string) => void;
 }
 
 function deterministicSparkBars(issue: IssueSummaryView): number[] {
@@ -70,10 +73,12 @@ export function IssuesView({
   canTriage,
   onShowToast,
   onNavigateToProjects,
+  onOpenTrace,
 }: IssuesViewProps) {
   const [tabMode, setTabMode] = useState<IssuesTabMode>(initialTabMode);
   const [localSearch, setLocalSearch] = useState("");
   const [environment, setEnvironment] = useState("");
+  const [issueTypeFilter, setIssueTypeFilter] = useState<"" | "error" | "performance">("");
   const [release, setRelease] = useState(initialReleaseFilter);
 
   useEffect(() => {
@@ -126,6 +131,7 @@ export function IssuesView({
         release: release.trim() || undefined,
         status: statusParam,
         is_regressed: isRegressedParam,
+        issue_type: issueTypeFilter || undefined,
         query: effectiveQuery,
         sort,
         page,
@@ -157,6 +163,7 @@ export function IssuesView({
     workspaceSlug,
     selectedProjectSlug,
     environment,
+    issueTypeFilter,
     release,
     tabMode,
     effectiveQuery,
@@ -300,6 +307,7 @@ export function IssuesView({
         onSelectIssue={(nextId) => setSelectedIssueId(nextId)}
         onShowToast={(msg) => onShowToast(msg)}
         onBack={() => setFullViewOpen(false)}
+        onOpenTrace={onOpenTrace}
       />
     );
   }
@@ -311,8 +319,11 @@ export function IssuesView({
 
   const checkedItems = items.filter((i) => checkedIssueIds.includes(i.id));
   const distinctCheckedProjects = new Set(checkedItems.map((i) => i.project_id));
+  const distinctCheckedTypes = new Set(checkedItems.map((i) => i.issue_type));
   const canMergeChecked =
-    checkedItems.length >= 2 && distinctCheckedProjects.size === 1;
+    checkedItems.length >= 2 &&
+    distinctCheckedProjects.size === 1 &&
+    distinctCheckedTypes.size === 1;
   const effectiveMergeTargetId =
     mergeTargetId !== null && checkedItems.some((i) => i.id === mergeTargetId)
       ? mergeTargetId
@@ -458,6 +469,20 @@ export function IssuesView({
             ))}
           </select>
 
+          <select
+            value={issueTypeFilter}
+            onChange={(e) => {
+              setIssueTypeFilter(e.target.value as "" | "error" | "performance");
+              setPage(1);
+            }}
+            aria-label="Filter by issue type"
+            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+          >
+            <option value="">Type: All</option>
+            <option value="error">Type: Errors</option>
+            <option value="performance">Type: Performance</option>
+          </select>
+
           <input
             type="text"
             value={release}
@@ -467,7 +492,7 @@ export function IssuesView({
             }}
             placeholder="Release SHA..."
             aria-label="Filter by release"
-            className="min-w-0 sm:w-32 h-10 sm:h-8 px-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-sm pm-mono text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+            className="col-span-2 min-w-0 sm:w-32 h-10 sm:h-8 px-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-sm pm-mono text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
           />
 
           <select
@@ -503,6 +528,10 @@ export function IssuesView({
             {distinctCheckedProjects.size > 1 ? (
               <span className="text-[var(--color-danger-text)] font-medium">
                 Select issues from the same project to merge.
+              </span>
+            ) : distinctCheckedTypes.size > 1 ? (
+              <span className="text-[var(--color-danger-text)] font-medium">
+                Select issues of the same type to merge.
               </span>
             ) : (
               <label className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
@@ -647,6 +676,13 @@ export function IssuesView({
                         >
                           {item.level}
                         </span>
+
+                        {isPerformanceIssueType(item.issue_type) && (
+                          <span className="pm-lozenge pm-lozenge-purple">
+                            <Zap size={10} />
+                            <span>PERFORMANCE</span>
+                          </span>
+                        )}
 
                         {item.is_regressed && (
                           <span className="pm-lozenge pm-lozenge-warning">
@@ -806,6 +842,7 @@ export function IssuesView({
           triageBusy={triageBusy}
           onUpdateStatus={handleTriageStatus}
           onOpenFullView={() => setFullViewOpen(true)}
+          onOpenTrace={onOpenTrace}
           onClose={() => setSelectedIssueId(null)}
         />
       )}

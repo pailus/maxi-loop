@@ -163,6 +163,7 @@ struct IssueSummaryDbRow {
     exception_value: String,
     culprit: String,
     level: String,
+    issue_type: String,
     status: String,
     is_regressed: bool,
     event_count: i64,
@@ -192,6 +193,7 @@ impl From<IssueSummaryDbRow> for IssueSummaryView {
             exception_value: row.exception_value,
             culprit: row.culprit,
             level: row.level,
+            issue_type: row.issue_type,
             status: row.status,
             is_regressed: row.is_regressed,
             event_count: row.event_count,
@@ -309,7 +311,7 @@ pub async fn list_issues(
     let mut list_qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT i.id, i.tenant_id, p.workspace_id, w.slug AS workspace_slug, \
                 i.project_id, p.slug AS project_slug, i.fingerprint, i.title, \
-                i.exception_type, i.exception_value, i.culprit, i.level, \
+                i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type, \
                 i.status, i.is_regressed, i.event_count, i.stored_full_events, \
                 i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
                 i.sample_event_id, i.created_at, i.updated_at \
@@ -685,6 +687,7 @@ struct ValidatedIssueFilter {
     release: Option<String>,
     status: Option<IssueStatus>,
     is_regressed: Option<bool>,
+    issue_type: Option<IssueTypeFilter>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     query: Option<String>,
@@ -828,6 +831,7 @@ impl ValidatedIssueFilter {
             release,
             status,
             is_regressed: raw.is_regressed,
+            issue_type: IssueTypeFilter::parse(raw.issue_type.as_deref())?,
             since: raw.since,
             until: raw.until,
             query,
@@ -868,6 +872,15 @@ impl ValidatedIssueFilter {
         if let Some(reg) = self.is_regressed {
             qb.push(" AND i.is_regressed = ").push_bind(reg);
         }
+        match self.issue_type {
+            None => {}
+            Some(IssueTypeFilter::AnyPerformance) => {
+                qb.push(" AND i.issue_type <> 'error'");
+            }
+            Some(IssueTypeFilter::Exact(t)) => {
+                qb.push(" AND i.issue_type = ").push_bind(t);
+            }
+        }
         if let Some(since) = self.since {
             qb.push(" AND i.last_seen >= ").push_bind(since);
         }
@@ -886,6 +899,43 @@ impl ValidatedIssueFilter {
                 .push_bind(pattern)
                 .push(")");
         }
+    }
+}
+
+/// Allow-listed values of `issues.issue_type` (mirrors the CHECK constraint in migration 0011).
+pub const ISSUE_TYPES: [&str; 6] = [
+    "error",
+    "performance_n_plus_one_db",
+    "performance_n_plus_one_api",
+    "performance_slow_db_query",
+    "performance_consecutive_db",
+    "performance_consecutive_http",
+];
+
+#[derive(Clone, Copy, Debug)]
+enum IssueTypeFilter {
+    AnyPerformance,
+    Exact(&'static str),
+}
+
+impl IssueTypeFilter {
+    fn parse(raw: Option<&str>) -> Result<Option<Self>, AppError> {
+        let Some(value) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        if value == "performance" {
+            return Ok(Some(Self::AnyPerformance));
+        }
+        ISSUE_TYPES
+            .iter()
+            .find(|t| **t == value)
+            .map(|t| Some(Self::Exact(t)))
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "issue_type must be 'error', 'performance' or a performance_* issue type"
+                        .to_owned(),
+                )
+            })
     }
 }
 
@@ -996,7 +1046,7 @@ pub(crate) async fn load_scoped_issue_in_tx(
     let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT i.id, i.tenant_id, p.workspace_id, w.slug AS workspace_slug, \
                 i.project_id, p.slug AS project_slug, i.fingerprint, i.title, \
-                i.exception_type, i.exception_value, i.culprit, i.level, \
+                i.exception_type, i.exception_value, i.culprit, i.level, i.issue_type, \
                 i.status, i.is_regressed, i.event_count, i.stored_full_events, \
                 i.first_seen, i.last_seen, i.last_environment, i.first_release, i.last_release, \
                 i.sample_event_id, i.created_at, i.updated_at \

@@ -21,6 +21,7 @@ use crate::fingerprint::{
     ProcessedEvent, process_queued_event_with_rules, process_queued_event_with_rules_and_sourcemaps,
 };
 use crate::model::{QueuedEnvelope, QueuedEvent};
+use crate::perf_issue::performance_problem_events;
 use crate::scrub_cache::ScrubRulesCache;
 
 #[derive(Clone, Copy, Debug)]
@@ -231,7 +232,10 @@ async fn append_envelope_items(
 
     for raw_tx in envelope.transactions {
         match process_queued_transaction_with_rules(raw_tx, &custom_rules, trace_sampling) {
-            Ok(processed) => out_txs.push(processed),
+            Ok(processed) => {
+                out_events.extend(performance_problem_events(&processed));
+                out_txs.push(processed);
+            }
             Err(err) => {
                 warn!(
                     tenant_id = envelope.tenant_id,
@@ -491,11 +495,13 @@ pub async fn flush_processed_batch_with_signals(
                     "INSERT INTO issues ( \
                         tenant_id, project_id, fingerprint, title, exception_type, exception_value, \
                         culprit, level, status, is_regressed, event_count, stored_full_events, \
-                        first_seen, last_seen, last_environment, first_release, last_release, sample_event_id \
+                        first_seen, last_seen, last_environment, first_release, last_release, sample_event_id, \
+                        issue_type \
                      ) VALUES ( \
                         $1, $2, $3, $4, $5, $6, \
                         $7, $8, 'unresolved', FALSE, $9, $10, \
-                        $11, $12, $13, $14, $15, $16 \
+                        $11, $12, $13, $14, $15, $16, \
+                        $17 \
                      ) RETURNING id",
                 )
                 .bind(*tenant_id)
@@ -514,6 +520,7 @@ pub async fn flush_processed_batch_with_signals(
                 .bind(&first_release_in_batch)
                 .bind(&latest_ev.release)
                 .bind(&sample_event_id)
+                .bind(&latest_ev.issue_type)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|err| AppError::DatabaseQuery(format!("insert issue: {err}")))?;

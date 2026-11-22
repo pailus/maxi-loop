@@ -59,7 +59,7 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
 
         tools.push(json!({
             "name": "list_issues",
-            "description": "List grouped error issues with filters (project, environment, release, status, regression, time range, search query, sort order) and pagination. Returns token-efficient summaries with UI links.",
+            "description": "List grouped issues (errors and detected performance problems such as N+1 queries) with filters (project, environment, release, status, regression, issue type, time range, search query, sort order) and pagination. Returns token-efficient summaries with UI links.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -68,6 +68,7 @@ pub fn list_tool_definitions(can_read: bool, can_triage: bool) -> Vec<Value> {
                     "release": { "type": "string", "description": "Optional release version filter." },
                     "status": { "type": "string", "enum": ["unresolved", "resolved", "ignored"] },
                     "is_regressed": { "type": "boolean", "description": "Filter by regression status." },
+                    "issue_type": { "type": "string", "enum": ["error", "performance", "performance_n_plus_one_db", "performance_n_plus_one_api", "performance_slow_db_query", "performance_consecutive_db", "performance_consecutive_http"], "description": "Filter by issue type; 'performance' matches every performance problem type." },
                     "since": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC lower bound on last_seen." },
                     "until": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC upper bound on last_seen." },
                     "query": { "type": "string", "description": "Substring search on issue title or culprit." },
@@ -476,6 +477,7 @@ struct ListIssuesArgs {
     release: Option<String>,
     status: Option<String>,
     is_regressed: Option<bool>,
+    issue_type: Option<String>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     query: Option<String>,
@@ -511,6 +513,7 @@ async fn tool_list_issues(
         release: args.release,
         status: args.status,
         is_regressed: args.is_regressed,
+        issue_type: args.issue_type,
         since: args.since,
         until: args.until,
         query: args.query,
@@ -556,6 +559,7 @@ async fn tool_list_issues(
             "status": issue.status,
             "is_regressed": issue.is_regressed,
             "level": issue.level,
+            "issue_type": issue.issue_type,
             "event_count": issue.event_count,
             "first_seen": issue.first_seen,
             "last_seen": issue.last_seen,
@@ -683,6 +687,7 @@ async fn tool_get_issue(
             "status": detail.issue.status,
             "is_regressed": detail.issue.is_regressed,
             "level": detail.issue.level,
+            "issue_type": detail.issue.issue_type,
             "event_count": detail.issue.event_count,
             "first_seen": detail.issue.first_seen,
             "last_seen": detail.issue.last_seen,
@@ -949,7 +954,14 @@ fn extract_compact_event_fields(
     rules: &[maxi_loop_platform::scrub_notify::PiiScrubRuleEntry],
 ) -> (Value, bool) {
     let mut picked = serde_json::Map::new();
-    for key in ["request", "user", "breadcrumbs", "extra", "contexts"] {
+    for key in [
+        "request",
+        "user",
+        "breadcrumbs",
+        "extra",
+        "contexts",
+        "performance_problem",
+    ] {
         if let Some(val) = payload.get(key) {
             picked.insert(key.to_owned(), val.clone());
         }

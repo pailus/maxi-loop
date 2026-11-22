@@ -21,6 +21,7 @@ import {
   createIssueNote,
   fetchIssueEvents,
   fetchIssueNotes,
+  isPerformanceIssueType,
   splitIssue,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
@@ -31,6 +32,7 @@ import {
   normalizeTagsList,
 } from "./IssueDetailDrawer";
 import { OccurrenceChart } from "./OccurrenceChart";
+import { PerformanceProblemView } from "./PerformanceProblemView";
 import { StackTraceView } from "./StackTraceView";
 
 interface IssueDetailFullViewProps {
@@ -42,6 +44,7 @@ interface IssueDetailFullViewProps {
   onSelectIssue?: (issueId: number) => void;
   onShowToast?: (message: string) => void;
   onBack: () => void;
+  onOpenTrace?: (traceId: string) => void;
 }
 
 export function IssueDetailFullView({
@@ -53,6 +56,7 @@ export function IssueDetailFullView({
   onSelectIssue,
   onShowToast,
   onBack,
+  onOpenTrace,
 }: IssueDetailFullViewProps) {
   const [activeTab, setActiveTab] = useState<"overview" | "events" | "counters" | "notes">("overview");
   const [interval, setInterval] = useState<"1h" | "1d">("1h");
@@ -383,7 +387,11 @@ export function IssueDetailFullView({
           <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4">
             {/* Left: Stack Trace & Tags */}
             <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 space-y-4">
-              <StackTraceView rawFrames={detail.stack_frames} />
+              {isPerformanceIssueType(issue.issue_type) ? (
+                <PerformanceProblemView sampleEvent={sample_event} onOpenTrace={onOpenTrace} />
+              ) : (
+                <StackTraceView rawFrames={detail.stack_frames} />
+              )}
 
               <div className="pt-2 border-t border-[var(--color-border-light)] flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-semibold text-[var(--color-text-dim)]">

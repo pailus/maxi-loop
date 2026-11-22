@@ -10,10 +10,15 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import type { IssueDetailView, IssueStatus } from "../../lib/api";
+import {
+  type IssueDetailView,
+  type IssueStatus,
+  isPerformanceIssueType,
+} from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
 import { BreadcrumbsView } from "./BreadcrumbsView";
 import { OccurrenceChart } from "./OccurrenceChart";
+import { PerformanceProblemView } from "./PerformanceProblemView";
 import { StackTraceView } from "./StackTraceView";
 
 interface IssueDetailDrawerProps {
@@ -24,6 +29,7 @@ interface IssueDetailDrawerProps {
   onUpdateStatus: (issueId: number, status: IssueStatus) => void;
   onOpenFullView: () => void;
   onClose: () => void;
+  onOpenTrace?: (traceId: string) => void;
 }
 
 export function normalizeTagsList(tags: unknown): Array<[string, string]> {
@@ -78,6 +84,7 @@ export function IssueDetailDrawer({
   onUpdateStatus,
   onOpenFullView,
   onClose,
+  onOpenTrace,
 }: IssueDetailDrawerProps) {
   const [interval, setInterval] = useState<"1h" | "1d">("1h");
   const [copiedId, setCopiedId] = useState(false);
@@ -295,7 +302,24 @@ export function IssueDetailDrawer({
           isRegressed={issue.is_regressed}
         />
 
-        {/* Top In-App Stack Frame Preview */}
+        {isPerformanceIssueType(issue.issue_type) ? (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-bold text-[var(--color-text-muted)]">
+                Performance problem
+              </span>
+              <button
+                type="button"
+                onClick={onOpenFullView}
+                className="text-xs font-medium text-[var(--color-link)] hover:underline cursor-pointer"
+              >
+                View all spans
+              </button>
+            </div>
+            <PerformanceProblemView sampleEvent={sample_event} compact onOpenTrace={onOpenTrace} />
+          </div>
+        ) : (
+        /* Top In-App Stack Frame Preview */
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-bold text-[var(--color-text-muted)]">
@@ -311,6 +335,7 @@ export function IssueDetailDrawer({
           </div>
           <StackTraceView rawFrames={detail.stack_frames} compact />
         </div>
+        )}
 
         {/* Recent Breadcrumbs Preview */}
         {breadcrumbs.length > 0 && (

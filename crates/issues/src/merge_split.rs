@@ -80,6 +80,7 @@ struct LockedIssueRow {
     first_release: Option<String>,
     last_release: Option<String>,
     sample_event_id: Option<String>,
+    issue_type: String,
 }
 
 #[derive(FromRow)]
@@ -278,7 +279,7 @@ pub async fn merge_issues(
     let locked_rows: Vec<LockedIssueRow> = sqlx::query_as(
         "SELECT id, fingerprint, title, exception_type, exception_value, culprit, \
                 level, is_regressed, event_count, first_seen, last_seen, last_environment, \
-                first_release, last_release, sample_event_id \
+                first_release, last_release, sample_event_id, issue_type \
          FROM issues \
          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3) \
          ORDER BY id ASC \
@@ -301,6 +302,17 @@ pub async fn merge_issues(
         .ok_or(AppError::NotFound)?;
     let source_rows: Vec<&LockedIssueRow> =
         locked_rows.iter().filter(|r| r.id != target_id).collect();
+
+    // An error and a performance problem (or two different performance problem kinds) are
+    // never the same root cause, and the target keeps only one `issue_type`.
+    if source_rows
+        .iter()
+        .any(|r| r.issue_type != target_row.issue_type)
+    {
+        return Err(AppError::Validation(
+            "cannot merge issues of different issue types".to_owned(),
+        ));
+    }
 
     // Preserve original fingerprints on any pre-0008 stored events before moving them.
     for row in &locked_rows {
@@ -589,7 +601,7 @@ pub async fn split_issue(
     let source_row: LockedIssueRow = sqlx::query_as(
         "SELECT id, fingerprint, title, exception_type, exception_value, culprit, \
                 level, is_regressed, event_count, first_seen, last_seen, last_environment, \
-                first_release, last_release, sample_event_id \
+                first_release, last_release, sample_event_id, issue_type \
          FROM issues \
          WHERE tenant_id = $1 AND project_id = $2 AND id = $3 \
          FOR UPDATE",
@@ -945,11 +957,13 @@ async fn create_split_issue_and_move_events(
         "INSERT INTO issues ( \
             tenant_id, project_id, fingerprint, title, exception_type, exception_value, \
             culprit, level, status, is_regressed, event_count, stored_full_events, \
-            first_seen, last_seen, last_environment, first_release, last_release, sample_event_id \
+            first_seen, last_seen, last_environment, first_release, last_release, sample_event_id, \
+            issue_type \
          ) VALUES ( \
             $1, $2, $3, $4, $5, $6, \
             $7, $8, 'unresolved', FALSE, $9, $10, \
-            $11, $12, $13, $14, $15, $16 \
+            $11, $12, $13, $14, $15, $16, \
+            $17 \
          ) RETURNING id",
     )
     .bind(tenant_id)
@@ -968,6 +982,7 @@ async fn create_split_issue_and_move_events(
     .bind(&first_release)
     .bind(&last_release)
     .bind(&sample_event_id)
+    .bind(&source_row.issue_type)
     .fetch_one(&mut **tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("insert split issue: {err}")))?;

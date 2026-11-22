@@ -43,7 +43,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F001"],
+      "depends_on": [
+        "F001"
+      ],
       "notes": "PRD F-ADM-6, F-ADM-7, F-ADM-10; Design §5.6 & §5.11"
     },
     {
@@ -63,7 +65,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F002"],
+      "depends_on": [
+        "F002"
+      ],
       "notes": "PRD F-ADM-1, F-ADM-2, F-ADM-6, F-ADM-7, F-ADM-10"
     },
     {
@@ -83,7 +87,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F003"],
+      "depends_on": [
+        "F003"
+      ],
       "notes": "PRD F-ING-1..5; Design §5.1"
     },
     {
@@ -103,7 +109,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F004"],
+      "depends_on": [
+        "F004"
+      ],
       "notes": "PRD F-ISS-1, F-ISS-4, F-ISS-5, D002 baseline PII scrubbing; Design §5.2-5.4"
     },
     {
@@ -123,7 +131,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F005"],
+      "depends_on": [
+        "F005"
+      ],
       "notes": "PRD F-ISS-2..5, F-ADM-7"
     },
     {
@@ -142,7 +152,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F005"],
+      "depends_on": [
+        "F005"
+      ],
       "notes": "PRD F-ADM-3; Design §5.6"
     },
     {
@@ -164,7 +176,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F006"],
+      "depends_on": [
+        "F006"
+      ],
       "notes": "PRD F-ADM-1, F-ADM-2, F-ADM-10, F-ISS-2..5"
     },
     {
@@ -183,7 +197,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F008"],
+      "depends_on": [
+        "F008"
+      ],
       "notes": "Completes Phase 1 (MVP); Design §9 & §11"
     },
     {
@@ -203,7 +219,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F009"],
+      "depends_on": [
+        "F009"
+      ],
       "notes": "PRD F-ING-6, F-ISS-6, F-ISS-7"
     },
     {
@@ -222,7 +240,9 @@
         "cargo test",
         "cargo build"
       ],
-      "depends_on": ["F010"],
+      "depends_on": [
+        "F010"
+      ],
       "notes": "PRD F-MCP-1..11; Design §5.10"
     },
     {
@@ -242,7 +262,9 @@
         "cargo test",
         "cargo build"
       ],
-      "depends_on": ["F011"],
+      "depends_on": [
+        "F011"
+      ],
       "notes": "PRD F-PRF-1..5, F-MCP-12..13"
     },
     {
@@ -260,7 +282,9 @@
         "cargo test",
         "cargo build"
       ],
-      "depends_on": ["F012"],
+      "depends_on": [
+        "F012"
+      ],
       "notes": "PRD F-ISS-8; Design §5.7"
     },
     {
@@ -279,7 +303,9 @@
         "cargo test",
         "cargo build"
       ],
-      "depends_on": ["F013"],
+      "depends_on": [
+        "F013"
+      ],
       "notes": "PRD F-ADM-4, F-ADM-5, F-ADM-8, F-ADM-9"
     },
     {
@@ -300,7 +326,9 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F014"],
+      "depends_on": [
+        "F014"
+      ],
       "notes": "PRD F-ISS-9, F-ISS-10"
     },
     {
@@ -321,8 +349,80 @@
         "cargo test --workspace",
         "cargo build --workspace"
       ],
-      "depends_on": ["F015"],
+      "depends_on": [
+        "F015"
+      ],
       "notes": "PRD F-PRF-6, F-PRF-7, F-MCP-14, F-MCP-15"
+    },
+    {
+      "id": "F017",
+      "title": "Performance Issues: detect N+1 DB, N+1 API, Slow DB Query, Consecutive DB/HTTP from transaction spans and surface them as issues",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Every ingested transaction (sampled or not) runs span detectors with Sentry-like thresholds: N+1 DB (>=5 identical normalized queries, >=50ms total), N+1 API (>=5 identical normalized http.client calls, >=100ms), Slow DB Query (single query >=1s), Consecutive DB (>=2 sequential sibling queries >=30ms each, savings >=100ms), Consecutive HTTP (>=3 sequential calls >=500ms each, savings >=1s)",
+        "Each detected problem becomes an issue in the existing `issues` table with `issue_type` (migration 0011), grouped by type + transaction + normalized pattern, reusing regression, releases, hourly counters and alerts",
+        "Transactions that trigger a detector are always kept as sampled traces (`sample_reason = 'issue'`) and linked from the issue",
+        "Performance issue payloads only contain normalized (literal-free) span descriptions",
+        "Issues API + MCP `list_issues` support `issue_type` filter (`error`, `performance`, exact type); merge across different issue types is rejected",
+        "UI: Type filter + PERFORMANCE lozenge in Issues list; drawer and full view show the offending spans and open the trace waterfall",
+        "Verified E2E with official Python sentry-sdk + Django (`tests/e2e/python/verify_performance_issues.py`)"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace",
+        "tests/e2e/python/.venv/bin/python tests/e2e/python/verify_performance_issues.py"
+      ],
+      "depends_on": [
+        "F016"
+      ],
+      "notes": "Sentry detects performance issues server-side; SDKs only send spans. Probe on 2026-11-22 showed Maxi Loop captured all errors but no performance issues."
+    },
+    {
+      "id": "F018",
+      "title": "Users affected per issue and impact-based sorting",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Ingest derives a hashed user identity from event `user` (id / email / ip) without storing raw PII for the count",
+        "Issues list/detail show distinct users affected; issues can be sorted by users",
+        "Spike alerts can use user counts in addition to event counts"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
+      ],
+      "depends_on": [
+        "F017"
+      ],
+      "notes": "Agreed with user 2026-11-22 as high-value follow-up."
+    },
+    {
+      "id": "F019",
+      "title": "Performance alerts: p95 latency and error-rate thresholds per transaction/project",
+      "status": "todo",
+      "priority": "high",
+      "acceptance_criteria": [
+        "New alert rule types for p95 > X ms and error_rate > Y% on a transaction or project, evaluated every minute from `transaction_minute_metrics`",
+        "Delivered via existing webhook / Telegram / email channels with cooldown deduplication and audit log"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
+      ],
+      "depends_on": [
+        "F017"
+      ],
+      "notes": "Agreed with user 2026-11-22 as high-value follow-up."
     }
   ]
 }

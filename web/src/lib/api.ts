@@ -110,6 +110,44 @@ export interface CreateProjectInput {
 
 export type IssueStatus = "unresolved" | "resolved" | "ignored";
 
+/** `issues.issue_type`: SDK errors or performance problems detected from transaction spans. */
+export type IssueType =
+  | "error"
+  | "performance_n_plus_one_db"
+  | "performance_n_plus_one_api"
+  | "performance_slow_db_query"
+  | "performance_consecutive_db"
+  | "performance_consecutive_http";
+
+export const isPerformanceIssueType = (t: string | undefined): boolean =>
+  !!t && t !== "error";
+
+export interface OffendingSpan {
+  span_id: string;
+  op: string;
+  description: string;
+  start_offset_ms: number;
+  duration_ms: number;
+}
+
+/** `payload.performance_problem` on events of performance issues. */
+export interface PerformanceProblemPayload {
+  issue_type: IssueType;
+  title: string;
+  transaction_event_id: string;
+  transaction_duration_ms: number;
+  trace_id: string;
+  problem: {
+    problem_type: string;
+    group_hash: string;
+    description: string;
+    offending_span_count: number;
+    offending_spans_total_ms: number;
+    potential_savings_ms?: number;
+    offending_spans: OffendingSpan[];
+  };
+}
+
 export interface IssueListFilter {
   workspace_slug?: string;
   project_id?: number;
@@ -118,6 +156,8 @@ export interface IssueListFilter {
   release?: string;
   status?: string;
   is_regressed?: boolean;
+  /** `error`, `performance`, or an exact performance issue type. */
+  issue_type?: string;
   query?: string;
   sort?: "last_seen" | "first_seen" | "events";
   page?: number;
@@ -137,6 +177,7 @@ export interface IssueSummaryView {
   exception_value: string;
   culprit: string;
   level: string;
+  issue_type: IssueType;
   status: IssueStatus;
   is_regressed: boolean;
   event_count: number;
@@ -392,6 +433,7 @@ export async function fetchIssues(filter: IssueListFilter = {}): Promise<Paginat
   if (filter.release) params.set("release", filter.release);
   if (filter.status) params.set("status", filter.status);
   if (filter.is_regressed !== undefined) params.set("is_regressed", String(filter.is_regressed));
+  if (filter.issue_type) params.set("issue_type", filter.issue_type);
   if (filter.query && filter.query.trim()) params.set("query", filter.query.trim());
   if (filter.sort) params.set("sort", filter.sort);
   if (filter.page !== undefined) params.set("page", String(filter.page));
@@ -899,7 +941,7 @@ export interface TraceSummaryView {
   op: string;
   status: string;
   is_error: boolean;
-  sample_reason: "slow" | "error" | "random" | string;
+  sample_reason: "slow" | "error" | "random" | "issue" | string;
   environment: string;
   release: string | null;
   platform: string;

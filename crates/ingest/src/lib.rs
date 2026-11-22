@@ -4,6 +4,7 @@ pub mod envelope;
 pub mod fingerprint;
 pub mod http;
 pub mod model;
+pub mod perf_issue;
 pub mod scrub;
 pub mod scrub_cache;
 pub mod worker;
