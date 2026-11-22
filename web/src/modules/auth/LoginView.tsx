@@ -56,20 +56,20 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
   return (
     <div className="min-h-screen flex flex-col bg-[var(--color-bg-muted)] text-[var(--color-text)]">
       {/* 56px MaxiBoard white topbar */}
-      <header className="h-14 px-6 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="w-7 h-7 rounded-[6px] bg-[var(--color-primary)] text-white font-bold text-sm inline-flex items-center justify-center">
+      <header className="h-14 px-4 sm:px-6 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex items-center justify-between gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="w-7 h-7 rounded-[6px] bg-[var(--color-primary)] text-white font-bold text-sm inline-flex items-center justify-center shrink-0">
             M
           </span>
-          <span className="font-bold text-base tracking-tight text-[var(--color-text)]">
+          <span className="font-bold text-base tracking-tight text-[var(--color-text)] truncate">
             MaxiLoop
           </span>
-          <span className="hidden sm:inline text-xs text-[var(--color-text-dim)]">
+          <span className="hidden sm:inline text-xs text-[var(--color-text-dim)] truncate">
             Error tracking &amp; performance monitoring
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <span
             className={`pm-lozenge ${
               dbHealthy ? "pm-lozenge-success" : "pm-lozenge-warning"
@@ -82,8 +82,8 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
       </header>
 
       {/* Centered MaxiBoard Sign-In Card */}
-      <main className="flex-1 flex items-center justify-center p-6">
-        <section className="w-full max-w-[440px] bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg p-8 shadow-[var(--pm-shadow-card)]">
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
+        <section className="w-full max-w-[440px] bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg p-6 sm:p-8 shadow-[var(--pm-shadow-card)]">
           <div className="w-9 h-9 rounded-[6px] bg-[var(--color-primary)] text-white font-bold text-base inline-flex items-center justify-center mb-4">
             M
           </div>
@@ -141,7 +141,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@example.com"
-                  className="pm-input pl-9 h-10 text-sm"
+                  className="pm-input pl-10 h-10 text-sm"
                 />
               </div>
             </div>
@@ -166,7 +166,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="pm-input pl-9 h-10 text-sm"
+                  className="pm-input pl-10 h-10 text-sm"
                 />
               </div>
             </div>
@@ -193,7 +193,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                     value={tenantSlug}
                     onChange={(e) => setTenantSlug(e.target.value)}
                     placeholder="default"
-                    className="pm-input pm-mono pl-9 h-9 text-xs"
+                    className="pm-input pm-mono pl-10 h-9 text-xs"
                   />
                 </div>
               )}
