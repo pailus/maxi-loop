@@ -33,6 +33,26 @@
 
 ---
 
+### 2026-11-22 — Claude Code — Sentry-style Create Project onboarding wizard
+
+**Status at end of session:** done
+
+**Done:**
+- Rebuilt `web/src/modules/projects/CreateProjectDialog.tsx` as a 3-step wizard: (1) choose platform (searchable/filterable card grid), (2) name project (name, slug, icon, tags, collapsible advanced retention/rate limit), (3) set up SDK — DSN + platform-specific Install/Configure/Verify snippets with copy buttons, and a live "Waiting to receive first event…" indicator that polls issues + transactions for the new project every 3s until the first event arrives ("Take me to my event" → Issues filtered to the project)
+- Added `web/src/modules/projects/onboardingPlatforms.ts` (platform catalogue + snippet builder: Python, FastAPI, Django, Flask, Go, Rust, Node.js, Express, React, Browser JS, Other)
+- `web/src/app/App.tsx`: dialog stays open after create; new `onViewIssues` handler
+
+**Verification run:**
+- `npm --prefix web run build` → PASS; `npm --prefix web audit` → 0 vulnerabilities
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (95/95), `cargo build --workspace` → PASS
+- Live headless Chrome smoke on `maxi-loop-dev.service`: wizard FastAPI → create → waiting state → sent a real `ZeroDivisionError` via official `sentry-sdk` → dialog showed "First error received" → navigated to Issues filtered to the project. Smoke project deleted from DB afterwards.
+
+**Security notes:**
+- No backend/API changes; uses existing CSRF-protected `POST /api/v1/projects` and authenticated read endpoints. Platform id still validated server-side by `parse_platform`.
+
+**Not finished / blockers:**
+- None
+
 ### 2026-11-22 — Antigravity — Fix Sidebar Projects '+' Button & Add MaxiBoard CreateProjectDialog Modal
 
 **Status at end of session:** done
@@ -338,42 +358,3 @@
 
 **Not finished / blockers:**
 - Ready to begin Phase 5 — `F014` (Go & Rust SDK verification, multi-user RBAC, inherited settings, per-project API tokens, and aggregate tenant rate limits)
-
-### 2026-11-22 — Antigravity — F012: Phase 3: Performance monitoring (transactions, spans, histograms, sampled zstd traces, waterfall, MCP tools)
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0005_phase3_performance.sql` adding `merge_histogram_buckets(BIGINT[], BIGINT[])`, `sum_histogram_buckets(BIGINT[])` SQL aggregate, `transaction_minute_metrics` (1-minute aggregated counts, error counts, min/max/sum, and 76-bucket duration histograms), daily-partitioned `traces` (`spans_zstd BYTEA`, cross-project `(tenant_id, trace_id, start_timestamp)` index), `ensure_traces_partition(DATE)`, `drop_expired_traces_partitions(DATE)`, and `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
-- Extended `crates/platform` with validated `TRACE_SLOW_THRESHOLD_MS` (default `500`) and `TRACE_RANDOM_SAMPLE_RATE` (default `0.05`) config fields (plus `.env.example`) and `ensure_upcoming_traces_partitions`
-- Created vertical-slice crate `crates/performance` (`maxi-loop-performance`):
-  - `histogram.rs`: 76-bucket log-scale duration histogram (0.5ms to ~361s, factor 1.2) with `observe_duration`, `merge_histograms`, and linear-interpolated `estimate_percentile` (p50/p95/p99)
-  - `codec.rs`: zstd trace span blob compression & streaming decompression bounded at `MAX_DECOMPRESSED_TRACE_BLOB_BYTES = 4 MiB` (decompression-bomb guard)
-  - `ingest_proc.rs`: Sentry `transaction` parser, mandatory baseline + inherited custom PII scrubbing before storage, head-consistent deterministic sampling (`error`, `slow >= threshold`, and SHA-256(`trace_id`) 1–5% random so distributed services make identical sampling decisions), and batched worker flush (`transaction_minute_metrics`, `traces`, `releases`)
-  - `waterfall.rs`: distributed cross-service trace waterfall assembler linking segments across projects via `trace_id` + `parent_span_id`, DFS ordering with `depth`, `offset_ms`, `self_duration_ms`, `pct_of_trace`, and `is_slow` / `slowest_spans` bottleneck detection
-  - `service.rs` & `http.rs`: RLS-enforced `PerformanceService` facade and `/api/v1/performance/{transactions,transactions/detail,traces,traces/{trace_id}}` (+ slug-scoped) routes
-- Extended `crates/ingest` to accept `"transaction"` Sentry envelope items alongside `"event"` items (still dropping unsupported items early) and flush transactions in 100ms worker batches
-- Extended `crates/retention` to pre-create & `DROP TABLE` expired `traces_YYYY_MM_DD` partitions and run bounded batch deletes for shorter overrides & global cutoffs on `traces` and `transaction_minute_metrics`
-- Extended `crates/mcp` (preserving **zero direct `sqlx` dependency**, `D006`) with `list_transactions` (`F-MCP-12`) and `get_trace` (`F-MCP-13`) enforcing token scope (`tenant`/`workspace`/`project`), output PII scrubbing, `<<<UNTRUSTED_EVENT_DATA>>>` wrapping, truncation markers, slow-span flagging, and UI deep links
-- Added MaxiBoard UI `web/src/modules/performance/PerformanceView.tsx` and `TraceWaterfallView.tsx` (**Performance** sidebar tab, p50/p95/p99/RPM/error-rate table, latency trend & sampled traces inspector, interactive cross-service Gantt waterfall + span inspector, and `?view=performance&trace=...` deep links)
-- Added PostgreSQL 16 integration test `crates/server/tests/phase3_performance.rs` covering transaction/span ingest, 1-minute histogram p50/p95/p99/throughput/error_rate, zstd frame storage + PII scrubbing, 2-service distributed waterfall (`web-frontend` → `orders-api`), MCP `list_transactions`/`get_trace` (scope isolation + post-ingest custom PII scrubbing), retention partition drop, and Tenant A vs Tenant B isolation; updated `crates/server/tests/mcp_server.rs` `tools/list` assertions from 5/7 to 7/9 tools to reflect the 2 new Phase 3 read tools
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (65/65 passed, incl. 8 `maxi-loop-performance` unit tests & `phase3_performance` Postgres 16 integration test)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
-- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified unauth `401`, ingested live transaction envelope with child SQL span, queried UI `/api/v1/performance/transactions` + `/api/v1/performance/traces/{trace_id}` and MCP `list_transactions` + `get_trace`, revoked smoke token) → PASS
-
-**Security notes:**
-- Self-review passed: all performance query params (`project_slug`, `workspace_slug`, `environment`, `release`, `op`, `query` with escaped `ILIKE`, `sort` allow-list, `hours`/`since`/`until` capped at 90 days, `trace_id` hex validation, `sample_reason` allow-list) validated server-side; all queries run via `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + explicit `tenant_id` scoping); baseline + inherited custom PII scrubbing runs before zstd trace storage AND again on MCP output; zstd decompression strictly bounded at 4 MiB (`MAX_DECOMPRESSED_TRACE_BLOB_BYTES`) against decompression bombs; MCP `list_transactions` & `get_trace` enforce project/workspace/tenant token scope and wrap untrusted span/transaction strings in `<<<UNTRUSTED_EVENT_DATA>>>` with `security_notice`; negative tests cover cross-tenant UI & MCP access (`404`/denied), cross-project MCP scope enforcement, invalid `trace_id` (`400`), invalid `sort` (`400`), and oversized zstd payload rejection
-- New dependency: `zstd` v0.13.5 (`zstd-safe` v7.4.1, `zstd-sys` v2.1.3+zstd.1.5.7; official Rust bindings to libzstd, explicitly required by PRD §11, Design §5.5/§5.9, and F012 acceptance criteria). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Used a 76-bucket log-scale histogram (`0.5 * 1.2^i` ms) merged via Postgres immutable function `merge_histogram_buckets` + aggregate `sum_histogram_buckets` so 1-minute metrics support exact SQL rollups and accurate p50/p95/p99 across arbitrary windows without storing raw durations; used deterministic SHA-256(`trace_id`) for 1–5% random trace sampling so all services in a distributed trace make consistent head-sampling decisions
-
-**Not finished / blockers:**
-- Ready to begin Phase 4 — `F013` (React Source Maps upload per release and bounded LRU ingest-time stack frame resolution)

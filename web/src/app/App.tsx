@@ -782,12 +782,17 @@ export function App() {
           existingProjects={projects}
           onClose={() => setCreateProjectOpen(false)}
           onCreated={async (created) => {
-            setCreateProjectOpen(false);
+            // Keep the dialog open: it moves on to the SDK setup / first-event step.
             await loadWorkspaceResources(
               activeWorkspaceSlug || session.default_workspace.slug,
             );
             setActiveNav("projects");
             showToast(`Project ${created.slug} created and DSN cached`);
+          }}
+          onViewIssues={(created) => {
+            setCreateProjectOpen(false);
+            setSelectedProjectSlug(created.slug);
+            setActiveNav("issues");
           }}
         />
       )}
