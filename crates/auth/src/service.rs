@@ -3,15 +3,16 @@ use std::time::Instant;
 
 use axum::http::HeaderMap;
 use chrono::{Duration, Utc};
-use maxi_loop_platform::bootstrap::verify_password_argon2id;
+use maxi_loop_platform::bootstrap::{hash_password_argon2id, verify_password_argon2id};
 use maxi_loop_platform::config::{Config, is_valid_email, is_valid_slug};
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx, begin_worker_tx};
 use sqlx::PgPool;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::model::{
-    AuthSession, AuthenticatedUser, LoginRequest, Role, TenantSummary, WorkspaceSummary,
+    AuthSession, AuthenticatedUser, ChangePasswordRequest, LoginRequest, Role, TenantSummary,
+    WorkspaceSummary,
 };
 use crate::rate_limit::LoginRateLimiter;
 use crate::token::{
@@ -117,13 +118,34 @@ pub async fn login(
         return Err(AppError::Unauthorized("invalid credentials"));
     };
 
+    open_session(
+        pool,
+        config,
+        tenant_id,
+        AuthenticatedUser {
+            id: user_id,
+            email: user_email,
+            name: user_name,
+        },
+    )
+    .await
+}
+
+/// Create a new session for an already-authenticated `user` in `tenant_id`.
+/// Returns the session and the raw cookie token (only its hash is stored).
+pub(crate) async fn open_session(
+    pool: &PgPool,
+    config: &Config,
+    tenant_id: i64,
+    user: AuthenticatedUser,
+) -> Result<(AuthSession, String), AppError> {
     // Execute tenant-scoped session creation inside an RLS-enforced tenant transaction.
     let tenant_ctx = TenantContext::new(tenant_id)?;
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
 
     let tenant = load_tenant_summary(&mut tx, tenant_id).await?;
     let (role, tenant_role, workspace_roles) =
-        load_user_memberships(&mut tx, tenant_id, user_id).await?;
+        load_user_memberships(&mut tx, tenant_id, user.id).await?;
     let default_workspace =
         load_default_workspace_for_user(&mut tx, tenant_id, tenant_role, &workspace_roles).await?;
 
@@ -136,7 +158,7 @@ pub async fn login(
         "DELETE FROM sessions WHERE tenant_id = $1 AND user_id = $2 AND expires_at <= NOW()",
     )
     .bind(tenant_id)
-    .bind(user_id)
+    .bind(user.id)
     .execute(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("prune expired sessions: {err}")))?;
@@ -147,7 +169,7 @@ pub async fn login(
          RETURNING id",
     )
     .bind(tenant_id)
-    .bind(user_id)
+    .bind(user.id)
     .bind(&token_hash)
     .bind(&csrf_token)
     .bind(expires_at)
@@ -164,11 +186,7 @@ pub async fn login(
         tenant_ctx,
         tenant,
         default_workspace,
-        user: AuthenticatedUser {
-            id: user_id,
-            email: user_email,
-            name: user_name,
-        },
+        user,
         role,
         tenant_role,
         workspace_roles,
@@ -272,6 +290,78 @@ pub async fn logout(pool: &PgPool, session: &AuthSession) -> Result<(), AppError
     tx.commit()
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit logout tx: {err}")))?;
+    Ok(())
+}
+
+/// Change the signed-in user's password after verifying the current one. Every other
+/// session of the user (in any tenant) is revoked; the current session stays signed in.
+pub async fn change_password(
+    pool: &PgPool,
+    limiter: &LoginRateLimiter,
+    session: &AuthSession,
+    req: ChangePasswordRequest,
+) -> Result<(), AppError> {
+    session.require_user_session()?;
+    if req.current_password.is_empty() || req.current_password.len() > 256 {
+        return Err(AppError::Validation("invalid password length".to_owned()));
+    }
+    if let Err(retry_after_secs) = limiter.check_and_record(
+        &format!("password-change:{}", session.user.id),
+        Instant::now(),
+    ) {
+        warn!(
+            user_id = session.user.id,
+            "password change rate limit exceeded"
+        );
+        return Err(AppError::RateLimited { retry_after_secs });
+    }
+    // Validates the 12..=256 length rule before any database work.
+    let new_hash = hash_password_argon2id(&req.new_password)?;
+
+    // `users` and cross-tenant `sessions` are global, so this runs as the worker role.
+    let mut tx = begin_worker_tx(pool).await?;
+    let current_hash: Option<String> = sqlx::query_scalar(
+        "SELECT password_hash FROM users WHERE id = $1 AND is_active = TRUE FOR UPDATE",
+    )
+    .bind(session.user.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("load password hash: {err}")))?;
+    let Some(current_hash) = current_hash else {
+        return Err(AppError::Unauthorized("invalid or expired session"));
+    };
+    if !verify_password_argon2id(&req.current_password, &current_hash)? {
+        warn!(
+            user_id = session.user.id,
+            "password change failed: wrong current password"
+        );
+        return Err(AppError::Forbidden("current password is incorrect"));
+    }
+
+    sqlx::query("UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1")
+        .bind(session.user.id)
+        .bind(&new_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("update password hash: {err}")))?;
+    let revoked =
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND NOT (tenant_id = $2 AND id = $3)")
+            .bind(session.user.id)
+            .bind(session.tenant_ctx.tenant_id())
+            .bind(session.session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| AppError::DatabaseQuery(format!("revoke other sessions: {err}")))?
+            .rows_affected();
+    tx.commit()
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("commit password change: {err}")))?;
+
+    info!(
+        user_id = session.user.id,
+        revoked_sessions = revoked,
+        "password changed"
+    );
     Ok(())
 }
 

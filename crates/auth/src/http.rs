@@ -14,9 +14,9 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::api_tokens::{API_TOKEN_PREFIX, authenticate_api_token};
-use crate::model::{AuthSession, AuthSessionView, LoginRequest};
+use crate::model::{AuthSession, AuthSessionView, ChangePasswordRequest, LoginRequest};
 use crate::rate_limit::LoginRateLimiter;
-use crate::service::{authenticate_cookie, login, logout};
+use crate::service::{authenticate_cookie, change_password, login, logout};
 use crate::token::{build_clear_session_cookie, build_session_set_cookie};
 
 #[derive(Clone)]
@@ -143,7 +143,9 @@ where
         .route("/auth/login", post(login_handler))
         .route("/auth/logout", post(logout_handler))
         .route("/auth/me", get(me_handler))
+        .route("/auth/password", post(change_password_handler))
         .merge(crate::members::router::<S>())
+        .merge(crate::invitations::router::<S>())
         .merge(crate::api_tokens::router::<S>())
         .merge(crate::mcp::router::<S>())
 }
@@ -193,4 +195,20 @@ async fn me_handler(
     session: AuthSession,
 ) -> Result<Json<AuthSessionView>, AppError> {
     Ok(Json(session.to_view(state.config.single_tenant_mode)))
+}
+
+#[derive(Serialize)]
+struct ChangePasswordResponse {
+    status: &'static str,
+}
+
+async fn change_password_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<Json<ChangePasswordResponse>, AppError> {
+    change_password(&state.db, &state.login_limiter, &session, req).await?;
+    Ok(Json(ChangePasswordResponse {
+        status: "password_changed",
+    }))
 }

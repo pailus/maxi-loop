@@ -235,71 +235,16 @@ pub async fn create_member(
         return Err(AppError::Validation("invalid email format".to_owned()));
     }
 
-    let target_role = Role::parse(input.role.trim())?;
     let ws_slug = input
         .workspace_slug
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-
     let tenant_id = session.tenant_ctx.tenant_id();
 
     // 1. Validate scope, workspace existence, and caller privilege hierarchy BEFORE touching `users`.
-    let target_workspace: Option<(i64, String, String)> = match ws_slug {
-        None => {
-            if !target_role.is_valid_tenant_role() {
-                return Err(AppError::Validation(
-                    "tenant-level role must be tenant_owner, tenant_admin, member, or viewer"
-                        .to_owned(),
-                ));
-            }
-            if !session.can_manage_tenant() {
-                return Err(AppError::Forbidden(
-                    "only tenant owners or tenant admins can assign tenant-level roles",
-                ));
-            }
-            if target_role == Role::TenantOwner && session.tenant_role != Some(Role::TenantOwner) {
-                return Err(AppError::Forbidden(
-                    "only a tenant_owner can grant the tenant_owner role",
-                ));
-            }
-            None
-        }
-        Some(slug) => {
-            if !is_valid_slug(slug) {
-                return Err(AppError::Validation("invalid workspace_slug".to_owned()));
-            }
-            if !target_role.is_valid_workspace_role() {
-                return Err(AppError::Validation(
-                    "workspace-level role must be workspace_admin, member, or viewer".to_owned(),
-                ));
-            }
-            let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
-            let ws_row: Option<(i64, String, String)> = sqlx::query_as(
-                "SELECT id, slug, name FROM workspaces WHERE tenant_id = $1 AND slug = $2",
-            )
-            .bind(tenant_id)
-            .bind(slug)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|err| {
-                AppError::DatabaseQuery(format!("lookup workspace for member: {err}"))
-            })?;
-            tx.commit().await.map_err(|err| {
-                AppError::DatabaseQuery(format!("commit member ws lookup: {err}"))
-            })?;
-
-            let Some((ws_id, ws_slug_val, ws_name)) = ws_row else {
-                return Err(AppError::NotFound);
-            };
-            if !session.can_manage_workspace(ws_id) {
-                return Err(AppError::Forbidden(
-                    "insufficient permissions for target workspace",
-                ));
-            }
-            Some((ws_id, ws_slug_val, ws_name))
-        }
-    };
+    let (target_role, target_workspace) =
+        resolve_grant_target(pool, session, input.role.trim(), ws_slug).await?;
 
     // 2. Look up or create the user record via worker tx (users table is global across tenants).
     // Never overwrite an existing user's password so cross-tenant credential takeover is impossible.
@@ -410,6 +355,78 @@ pub async fn create_member(
         role: target_role,
         created_at,
     })
+}
+
+/// Workspace a role is granted in: `(id, slug, name)`.
+pub(crate) type GrantWorkspace = (i64, String, String);
+
+/// Validate that `session` may grant `raw_role` in the given scope (tenant-wide when
+/// `ws_slug` is `None`). Shared by direct member creation and invitations so both
+/// enforce the same privilege hierarchy.
+pub(crate) async fn resolve_grant_target(
+    pool: &PgPool,
+    session: &AuthSession,
+    raw_role: &str,
+    ws_slug: Option<&str>,
+) -> Result<(Role, Option<GrantWorkspace>), AppError> {
+    let target_role = Role::parse(raw_role)?;
+    let tenant_id = session.tenant_ctx.tenant_id();
+    let target_workspace: Option<(i64, String, String)> = match ws_slug {
+        None => {
+            if !target_role.is_valid_tenant_role() {
+                return Err(AppError::Validation(
+                    "tenant-level role must be tenant_owner, tenant_admin, member, or viewer"
+                        .to_owned(),
+                ));
+            }
+            if !session.can_manage_tenant() {
+                return Err(AppError::Forbidden(
+                    "only tenant owners or tenant admins can assign tenant-level roles",
+                ));
+            }
+            if target_role == Role::TenantOwner && session.tenant_role != Some(Role::TenantOwner) {
+                return Err(AppError::Forbidden(
+                    "only a tenant_owner can grant the tenant_owner role",
+                ));
+            }
+            None
+        }
+        Some(slug) => {
+            if !is_valid_slug(slug) {
+                return Err(AppError::Validation("invalid workspace_slug".to_owned()));
+            }
+            if !target_role.is_valid_workspace_role() {
+                return Err(AppError::Validation(
+                    "workspace-level role must be workspace_admin, member, or viewer".to_owned(),
+                ));
+            }
+            let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
+            let ws_row: Option<(i64, String, String)> = sqlx::query_as(
+                "SELECT id, slug, name FROM workspaces WHERE tenant_id = $1 AND slug = $2",
+            )
+            .bind(tenant_id)
+            .bind(slug)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|err| {
+                AppError::DatabaseQuery(format!("lookup workspace for member: {err}"))
+            })?;
+            tx.commit().await.map_err(|err| {
+                AppError::DatabaseQuery(format!("commit member ws lookup: {err}"))
+            })?;
+
+            let Some((ws_id, ws_slug_val, ws_name)) = ws_row else {
+                return Err(AppError::NotFound);
+            };
+            if !session.can_manage_workspace(ws_id) {
+                return Err(AppError::Forbidden(
+                    "insufficient permissions for target workspace",
+                ));
+            }
+            Some((ws_id, ws_slug_val, ws_name))
+        }
+    };
+    Ok((target_role, target_workspace))
 }
 
 pub async fn update_member_role(

@@ -1438,6 +1438,100 @@ export async function deleteMember(membershipId: number): Promise<void> {
   }
 }
 
+// --- F022: invite-by-link onboarding & F023: password change ---
+
+export interface InvitationView {
+  id: number;
+  email: string;
+  role: Role;
+  scope: "tenant" | "workspace";
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  workspace_name: string | null;
+  invited_by_email: string | null;
+  expires_at: string;
+  created_at: string;
+  is_expired: boolean;
+}
+
+export interface CreatedInvitation {
+  invitation: InvitationView;
+  /** Contains the raw one-time token; shown once and never retrievable again. */
+  invite_url: string;
+}
+
+export interface CreateInvitationInput {
+  email: string;
+  role: Role;
+  workspace_slug?: string | null;
+}
+
+export interface InvitationPreview {
+  tenant_name: string;
+  email: string;
+  role: Role;
+  scope: "tenant" | "workspace";
+  workspace_name: string | null;
+  account_exists: boolean;
+  expires_at: string;
+}
+
+export async function fetchInvitations(): Promise<InvitationView[]> {
+  return requestJson<InvitationView[]>("/api/v1/invitations");
+}
+
+export async function createInvitation(
+  input: CreateInvitationInput,
+): Promise<CreatedInvitation> {
+  return requestJson<CreatedInvitation>("/api/v1/invitations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeInvitation(invitationId: number): Promise<void> {
+  const headers = new Headers();
+  if (activeCsrfToken) headers.set("X-CSRF-Token", activeCsrfToken);
+  const res = await fetch(`/api/v1/invitations/${invitationId}`, {
+    method: "DELETE",
+    headers,
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Failed to revoke invitation (${res.status})`);
+  }
+}
+
+export async function previewInvitation(token: string): Promise<InvitationPreview> {
+  return requestJson<InvitationPreview>("/api/v1/auth/invitations/preview", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function acceptInvitation(input: {
+  token: string;
+  name?: string;
+  password: string;
+}): Promise<AuthSessionView> {
+  const session = await requestJson<AuthSessionView>("/api/v1/auth/invitations/accept", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  setCsrfToken(session.csrf_token);
+  return session;
+}
+
+export async function changePassword(input: {
+  current_password: string;
+  new_password: string;
+}): Promise<void> {
+  await requestJson<{ status: string }>("/api/v1/auth/password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export interface TenantOverview {
   tenant: TenantSummary;
   default_workspace: WorkspaceSummary;

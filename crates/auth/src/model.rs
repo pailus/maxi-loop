@@ -330,3 +330,9 @@ pub struct LoginRequest {
     pub password: String,
     pub tenant_slug: Option<String>,
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}

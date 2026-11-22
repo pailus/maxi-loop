@@ -1,5 +1,6 @@
 pub mod api_tokens;
 pub mod http;
+pub mod invitations;
 pub mod mcp;
 pub mod members;
 pub mod model;

@@ -8,6 +8,7 @@ import {
   Gauge,
   Grid,
   Inbox,
+  KeyRound,
   LogOut,
   type LucideIcon,
   Menu,
@@ -38,6 +39,8 @@ import {
   TeamAndSettingsView,
 } from "../modules/admin/TeamAndSettingsView";
 import { AlertsView } from "../modules/alerts/AlertsView";
+import { AcceptInviteView, readInviteTokenFromHash } from "../modules/auth/AcceptInviteView";
+import { ChangePasswordDialog } from "../modules/auth/ChangePasswordDialog";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
 import { getUrlParam, setUrlParams } from "../lib/urlState";
@@ -183,6 +186,10 @@ export function App() {
   const [health, setHealth] = useState<HealthPayload | null>(null);
   const [session, setSession] = useState<AuthSessionView | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
+  const [inviteToken, setInviteToken] = useState<string | null>(() =>
+    readInviteTokenFromHash(window.location.hash),
+  );
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
   const [activeWorkspaceSlug, setActiveWorkspaceSlug] = useState<string>("");
@@ -386,6 +393,28 @@ export function App() {
     setSelectedProjectSlug("");
     setCreateWsInitialName(null);
     setCreateProjectOpen(false);
+  }
+
+  // Drop the one-time invite token from the address bar as soon as it is captured.
+  useEffect(() => {
+    if (inviteToken && window.location.hash) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    }
+  }, [inviteToken]);
+
+  if (inviteToken) {
+    return (
+      <AcceptInviteView
+        token={inviteToken}
+        // Full reload so every view starts from the new session instead of stale state.
+        onAuthenticated={() => window.location.replace("/")}
+        onCancel={() => setInviteToken(null)}
+      />
+    );
   }
 
   if (bootstrapping) {
@@ -705,6 +734,14 @@ export function App() {
             </div>
             <button
               type="button"
+              onClick={() => setChangePasswordOpen(true)}
+              className="flex items-center gap-1.5 min-h-9 text-sm font-medium text-[var(--color-link)] hover:underline cursor-pointer"
+            >
+              <KeyRound size={14} />
+              <span>Change password</span>
+            </button>
+            <button
+              type="button"
               onClick={() => void handleLogout()}
               className="inline-flex items-center gap-1.5 min-h-9 text-sm font-medium text-[var(--color-link)] hover:underline cursor-pointer"
             >
@@ -905,6 +942,17 @@ export function App() {
       )}
 
       {/* Create Project Modal (MaxiBoard style, triggered from sidebar '+' or topbar) */}
+      {changePasswordOpen && (
+        <ChangePasswordDialog
+          email={session.user.email}
+          onClose={() => setChangePasswordOpen(false)}
+          onChanged={() => {
+            setChangePasswordOpen(false);
+            showToast("Password changed. Other sessions were signed out.");
+          }}
+        />
+      )}
+
       {createProjectOpen && (
         <CreateProjectDialog
           workspaceName={currentWorkspaceName}

@@ -5,6 +5,7 @@ import {
   Check,
   Copy,
   KeyRound,
+  Link2,
   Plus,
   Settings2,
   ShieldCheck,
@@ -14,17 +15,21 @@ import {
 import {
   type ApiTokenView,
   type AuthSessionView,
+  type InvitationView,
   type ProjectView,
   type Role,
   type TenantMemberView,
   type WorkspaceView,
   createApiToken,
+  createInvitation,
   createMember,
   deleteMember,
   fetchApiTokens,
+  fetchInvitations,
   fetchMembers,
   fetchWorkspaces,
   revokeApiToken,
+  revokeInvitation,
   updateMemberRole,
   updateTenantSettings,
   updateWorkspaceSettings,
@@ -84,6 +89,13 @@ export function TeamAndSettingsView({
   const [newScopeWs, setNewScopeWs] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
   const [creatingMember, setCreatingMember] = useState(false);
+  // Invite link (default) vs. creating the account directly with an admin-chosen password.
+  const [addMode, setAddMode] = useState<"invite" | "direct">("invite");
+  const [invitations, setInvitations] = useState<InvitationView[]>([]);
+  const [createdInvite, setCreatedInvite] = useState<{ email: string; url: string } | null>(
+    null,
+  );
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   // Tenant settings state
   const [tenantName, setTenantName] = useState(session.tenant.name);
@@ -197,6 +209,22 @@ export function TeamAndSettingsView({
     void loadMembersAndWorkspaces();
   }, [loadMembersAndWorkspaces, activeWorkspaceSlug]);
 
+  const loadInvitations = useCallback(async () => {
+    try {
+      setInvitations(await fetchInvitations());
+    } catch (err) {
+      setMemberError(
+        err instanceof Error ? err.message : "Failed to load invitations",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "members" && canManageAnyWorkspace) {
+      void loadInvitations();
+    }
+  }, [tab, canManageAnyWorkspace, loadInvitations]);
+
   useEffect(() => {
     if (tab === "api_tokens") {
       void loadApiTokens();
@@ -207,6 +235,27 @@ export function TeamAndSettingsView({
     e.preventDefault();
     setCreatingMember(true);
     setMemberError(null);
+    if (addMode === "invite") {
+      try {
+        const created = await createInvitation({
+          email: newEmail.trim(),
+          role: newRole,
+          workspace_slug: newScopeWs || null,
+        });
+        setCreatedInvite({ email: created.invitation.email, url: created.invite_url });
+        setCopiedInvite(false);
+        setNewEmail("");
+        await loadInvitations();
+        onShowToast(`Invitation link created for ${created.invitation.email}`);
+      } catch (err) {
+        setMemberError(
+          err instanceof Error ? err.message : "Failed to create invitation",
+        );
+      } finally {
+        setCreatingMember(false);
+      }
+      return;
+    }
     try {
       await createMember({
         email: newEmail.trim(),
@@ -251,6 +300,19 @@ export function TeamAndSettingsView({
     } catch (err) {
       setMemberError(
         err instanceof Error ? err.message : "Failed to remove membership",
+      );
+    }
+  }
+
+  async function handleRevokeInvitation(inv: InvitationView) {
+    setMemberError(null);
+    try {
+      await revokeInvitation(inv.id);
+      await loadInvitations();
+      onShowToast(`Revoked invitation for ${inv.email}`);
+    } catch (err) {
+      setMemberError(
+        err instanceof Error ? err.message : "Failed to revoke invitation",
       );
     }
   }
@@ -547,6 +609,82 @@ export function TeamAndSettingsView({
                   </tbody>
                 </table>
               </div>
+
+              {canManageAnyWorkspace && (
+                <>
+                  <h3 className="mt-6 text-sm font-bold text-[var(--color-text)]">
+                    Pending invitations
+                  </h3>
+                  <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
+                    Links are single-use and expire after 7 days. Revoke a link you shared by mistake.
+                  </p>
+                  <div className="mt-3 rounded-lg border border-[var(--color-border)] overflow-x-auto">
+                    <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
+                      <thead>
+                        <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[var(--color-text-dim)] uppercase text-[11px]">
+                          <th className="py-2.5 px-3 font-semibold">Email</th>
+                          <th className="py-2.5 px-3 font-semibold">Scope</th>
+                          <th className="py-2.5 px-3 font-semibold">Role</th>
+                          <th className="py-2.5 px-3 font-semibold">Expires</th>
+                          <th className="py-2.5 px-3 font-semibold text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--color-border-light)]">
+                        {invitations.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-[var(--color-text-dim)]">
+                              No pending invitations.
+                            </td>
+                          </tr>
+                        ) : (
+                          invitations.map((inv) => (
+                            <tr key={inv.id} className="hover:bg-[var(--color-bg-muted)]">
+                              <td className="py-2.5 px-3">
+                                <div className="pm-mono text-[12px] text-[var(--color-text)]">
+                                  {inv.email}
+                                </div>
+                                {inv.invited_by_email && (
+                                  <div className="text-[11px] text-[var(--color-text-dim)]">
+                                    by {inv.invited_by_email}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {inv.scope === "tenant" ? (
+                                  <span className="pm-lozenge pm-lozenge-primary">TENANT</span>
+                                ) : (
+                                  <span className="pm-lozenge">WS: {inv.workspace_slug}</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className="pm-lozenge">{inv.role}</span>
+                              </td>
+                              <td className="py-2.5 px-3 text-xs">
+                                {inv.is_expired ? (
+                                  <span className="pm-lozenge pm-lozenge-warning">EXPIRED</span>
+                                ) : (
+                                  new Date(inv.expires_at).toLocaleString()
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRevokeInvitation(inv)}
+                                  className="h-7 px-2 rounded text-[var(--color-danger-text)] hover:bg-[var(--color-danger-light)] inline-flex items-center gap-1 cursor-pointer"
+                                  title="Revoke invitation"
+                                >
+                                  <Trash2 size={13} />
+                                  <span>Revoke</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Add Member Form */}
@@ -555,9 +693,60 @@ export function TeamAndSettingsView({
                 <ShieldCheck size={16} className="text-[var(--color-primary)]" />
                 <span>Add Member / Role</span>
               </div>
-              <p className="mt-1 text-xs text-[var(--color-text-dim)]">
-                Creates a new Argon2id user account or grants an additional workspace role to an existing user.
+
+              <div className="mt-3 grid grid-cols-2 gap-1 p-0.5 rounded-md bg-[var(--pm-col)]" role="tablist">
+                {(["invite", "direct"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={addMode === mode}
+                    onClick={() => setAddMode(mode)}
+                    className={`h-7 rounded text-xs font-semibold cursor-pointer ${
+                      addMode === mode
+                        ? "bg-[var(--color-bg-card)] text-[var(--color-text)] shadow-[var(--pm-shadow-card)]"
+                        : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                    }`}
+                  >
+                    {mode === "invite" ? "Invite link" : "Create directly"}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[var(--color-text-dim)]">
+                {addMode === "invite"
+                  ? "Generates a single-use link (valid 7 days). The person sets their own password when they open it."
+                  : "Creates a new Argon2id user account with a password you choose, or grants an additional role to an existing user."}
               </p>
+
+              {addMode === "invite" && createdInvite && (
+                <div className="mt-3 p-3 rounded-md bg-[var(--color-success-light)] border border-[var(--color-success)]">
+                  <div className="text-xs font-bold text-[var(--color-success-text)]">
+                    Send this link to {createdInvite.email}. It is shown only once.
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={createdInvite.url}
+                      onFocus={(e) => e.currentTarget.select()}
+                      aria-label="Invitation link"
+                      className="pm-input pm-mono text-[11px] flex-1 min-w-0 bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(createdInvite.url).catch(() => {});
+                        setCopiedInvite(true);
+                        setTimeout(() => setCopiedInvite(false), 1800);
+                      }}
+                      className="h-8 px-2.5 rounded bg-[var(--color-primary)] text-white text-xs font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedInvite ? <Check size={13} /> : <Copy size={13} />}
+                      <span>{copiedInvite ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <form onSubmit={handleAddMember} className="mt-3 space-y-3">
                 <div>
@@ -575,33 +764,37 @@ export function TeamAndSettingsView({
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
-                    Display name (new users)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!canManageAnyWorkspace}
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Alex Rivera"
-                    className="pm-input"
-                  />
-                </div>
+                {addMode === "direct" && (
+                  <>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
+                      Display name (new users)
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!canManageAnyWorkspace}
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      placeholder="Alex Rivera"
+                      className="pm-input"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
-                    Initial password (min 12 chars, new users)
-                  </label>
-                  <input
-                    type="password"
-                    disabled={!canManageAnyWorkspace}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Optional if user already exists"
-                    className="pm-input"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
+                      Initial password (min 12 chars, new users)
+                    </label>
+                    <input
+                      type="password"
+                      disabled={!canManageAnyWorkspace}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Optional if user already exists"
+                      className="pm-input"
+                    />
+                  </div>
+                  </>
+                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">
@@ -655,8 +848,16 @@ export function TeamAndSettingsView({
                   disabled={creatingMember || !canManageAnyWorkspace}
                   className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <Plus size={14} />
-                  <span>{creatingMember ? "Adding..." : "Grant membership"}</span>
+                  {addMode === "invite" ? <Link2 size={14} /> : <Plus size={14} />}
+                  <span>
+                    {creatingMember
+                      ? addMode === "invite"
+                        ? "Creating link..."
+                        : "Adding..."
+                      : addMode === "invite"
+                        ? "Create invitation link"
+                        : "Grant membership"}
+                  </span>
                 </button>
               </form>
             </aside>
