@@ -611,7 +611,12 @@ export async function upsertRelease(input: UpsertReleaseInput): Promise<ReleaseV
 // --- Phase 2: Alerts (Webhook, Telegram, Email) ---
 
 export type AlertChannelType = "webhook" | "telegram" | "email";
-export type AlertTriggerType = "new_issue" | "regression" | "spike";
+export type AlertTriggerType =
+  | "new_issue"
+  | "regression"
+  | "spike"
+  | "perf_p95"
+  | "perf_error_rate";
 
 export interface AlertChannelView {
   id: number;
@@ -654,6 +659,12 @@ export interface AlertRuleView {
   spike_threshold: number | null;
   spike_window_minutes: number | null;
   spike_metric: SpikeMetric;
+  /** Performance rules: exact transaction (null = whole project). */
+  transaction_name: string | null;
+  /** ms for `perf_p95`, percent for `perf_error_rate`. */
+  perf_threshold: number | null;
+  perf_window_minutes: number | null;
+  perf_min_count: number;
   cooldown_minutes: number;
   is_enabled: boolean;
   created_at: string;
@@ -672,6 +683,10 @@ export interface CreateAlertRuleInput {
   spike_threshold?: number;
   spike_window_minutes?: number;
   spike_metric?: SpikeMetric;
+  transaction_name?: string;
+  perf_threshold?: number;
+  perf_window_minutes?: number;
+  perf_min_count?: number;
   cooldown_minutes?: number;
 }
 
@@ -684,8 +699,12 @@ export interface AlertDeliveryView {
   rule_name: string;
   channel_id: number;
   channel_name: string;
-  issue_id: number;
+  /** null for performance alerts (not tied to an issue). */
+  issue_id: number | null;
+  /** Issue title, or the performance alert subject. */
   issue_title: string;
+  transaction_name: string | null;
+  metric_value: number | null;
   trigger_type: AlertTriggerType;
   channel_type: AlertChannelType;
   status: "sent" | "failed" | "skipped";

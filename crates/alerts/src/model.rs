@@ -38,6 +38,10 @@ pub enum AlertTriggerType {
     NewIssue,
     Regression,
     Spike,
+    /// `F019`: p95 transaction duration (ms) over the window exceeds `perf_threshold`.
+    PerfP95,
+    /// `F019`: transaction error rate (%) over the window exceeds `perf_threshold`.
+    PerfErrorRate,
 }
 
 /// What a `spike` rule counts in its window (`F018`): occurrences or distinct affected users.
@@ -73,8 +77,12 @@ impl AlertTriggerType {
             "new_issue" => Ok(Self::NewIssue),
             "regression" => Ok(Self::Regression),
             "spike" => Ok(Self::Spike),
+            "perf_p95" => Ok(Self::PerfP95),
+            "perf_error_rate" => Ok(Self::PerfErrorRate),
             _ => Err(AppError::Validation(
-                "trigger_type must be 'new_issue', 'regression', or 'spike'".to_owned(),
+                "trigger_type must be 'new_issue', 'regression', 'spike', 'perf_p95', or \
+                 'perf_error_rate'"
+                    .to_owned(),
             )),
         }
     }
@@ -84,6 +92,31 @@ impl AlertTriggerType {
             Self::NewIssue => "new_issue",
             Self::Regression => "regression",
             Self::Spike => "spike",
+            Self::PerfP95 => "perf_p95",
+            Self::PerfErrorRate => "perf_error_rate",
+        }
+    }
+
+    pub fn is_performance(self) -> bool {
+        matches!(self, Self::PerfP95 | Self::PerfErrorRate)
+    }
+
+    /// Validate a performance threshold for this trigger (`F019`): ms for p95, percent for error rate.
+    pub fn validate_perf_threshold(self, value: f64) -> Result<f64, AppError> {
+        let ok = value.is_finite()
+            && match self {
+                Self::PerfP95 => (1.0..=600_000.0).contains(&value),
+                Self::PerfErrorRate => (0.0..100.0).contains(&value),
+                _ => false,
+            };
+        if ok {
+            Ok(value)
+        } else {
+            Err(AppError::Validation(match self {
+                Self::PerfP95 => "perf_threshold (ms) must be between 1 and 600000".to_owned(),
+                Self::PerfErrorRate => "perf_threshold (%) must be >= 0 and < 100".to_owned(),
+                _ => "perf_threshold only applies to performance rules".to_owned(),
+            }))
         }
     }
 }
@@ -122,7 +155,7 @@ pub struct UpdateAlertChannelInput {
     pub is_enabled: Option<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertRuleView {
     pub id: i64,
     pub tenant_id: i64,
@@ -140,6 +173,11 @@ pub struct AlertRuleView {
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
     pub spike_metric: String,
+    /// `F019` performance rules: exact transaction (None = whole project).
+    pub transaction_name: Option<String>,
+    pub perf_threshold: Option<f64>,
+    pub perf_window_minutes: Option<i32>,
+    pub perf_min_count: i32,
     pub cooldown_minutes: i32,
     pub is_enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -157,6 +195,10 @@ pub struct CreateAlertRuleInput {
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
     pub spike_metric: Option<String>,
+    pub transaction_name: Option<String>,
+    pub perf_threshold: Option<f64>,
+    pub perf_window_minutes: Option<i32>,
+    pub perf_min_count: Option<i32>,
     pub cooldown_minutes: Option<i32>,
     pub is_enabled: Option<bool>,
 }
@@ -168,11 +210,15 @@ pub struct UpdateAlertRuleInput {
     pub spike_threshold: Option<i32>,
     pub spike_window_minutes: Option<i32>,
     pub spike_metric: Option<String>,
+    pub transaction_name: Option<String>,
+    pub perf_threshold: Option<f64>,
+    pub perf_window_minutes: Option<i32>,
+    pub perf_min_count: Option<i32>,
     pub cooldown_minutes: Option<i32>,
     pub is_enabled: Option<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertDeliveryView {
     pub id: i64,
     pub tenant_id: i64,
@@ -182,8 +228,12 @@ pub struct AlertDeliveryView {
     pub rule_name: String,
     pub channel_id: i64,
     pub channel_name: String,
-    pub issue_id: i64,
+    /// `None` for performance alerts (`F019`), which are not tied to an issue.
+    pub issue_id: Option<i64>,
+    /// Issue title, or the performance alert subject.
     pub issue_title: String,
+    pub transaction_name: Option<String>,
+    pub metric_value: Option<f64>,
     pub trigger_type: String,
     pub channel_type: String,
     pub status: String,

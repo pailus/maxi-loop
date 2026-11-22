@@ -68,6 +68,11 @@ export function AlertsView({
   const [spikeThreshold, setSpikeThreshold] = useState("10");
   const [spikeWindow, setSpikeWindow] = useState("60");
   const [spikeMetric, setSpikeMetric] = useState<SpikeMetric>("events");
+  const [perfThreshold, setPerfThreshold] = useState("500");
+  const [perfWindow, setPerfWindow] = useState("5");
+  const [perfMinCount, setPerfMinCount] = useState("10");
+  const [perfTransaction, setPerfTransaction] = useState("");
+  const isPerfTrigger = ruleTrigger === "perf_p95" || ruleTrigger === "perf_error_rate";
   const [cooldownMinutes, setCooldownMinutes] = useState("15");
 
   // Create PII Rule form state
@@ -167,6 +172,10 @@ export function AlertsView({
         spike_threshold: ruleTrigger === "spike" ? Number(spikeThreshold) : undefined,
         spike_window_minutes: ruleTrigger === "spike" ? Number(spikeWindow) : undefined,
         spike_metric: ruleTrigger === "spike" ? spikeMetric : undefined,
+        perf_threshold: isPerfTrigger ? Number(perfThreshold) : undefined,
+        perf_window_minutes: isPerfTrigger ? Number(perfWindow) || 5 : undefined,
+        perf_min_count: isPerfTrigger ? Number(perfMinCount) || 10 : undefined,
+        transaction_name: isPerfTrigger ? perfTransaction.trim() || undefined : undefined,
         cooldown_minutes: Number(cooldownMinutes) || 15,
       });
       setRuleName("");
@@ -277,7 +286,7 @@ export function AlertsView({
                 </div>
                 <p className="text-xs text-[var(--color-text-dim)]">
                   Create a Webhook, Telegram, or Email channel first, then attach rules for new
-                  issues, regressions, or event spikes.
+                  issues, regressions, event spikes, or slow / failing endpoints.
                 </p>
               </div>
             ) : (
@@ -303,6 +312,9 @@ export function AlertsView({
                         {r.environment_filter ? ` · Env: ${r.environment_filter}` : ""}
                         {r.trigger_type === "spike"
                           ? ` · Threshold: >= ${r.spike_threshold} ${r.spike_metric === "users" ? "users" : "events"} in ${r.spike_window_minutes}m`
+                          : ""}
+                        {r.trigger_type === "perf_p95" || r.trigger_type === "perf_error_rate"
+                          ? ` · ${r.trigger_type === "perf_p95" ? "p95" : "Error rate"} > ${r.perf_threshold}${r.trigger_type === "perf_p95" ? " ms" : "%"} over ${r.perf_window_minutes}m (min ${r.perf_min_count} tx) · ${r.transaction_name ?? "all transactions"}`
                           : ""}
                         {` · Cooldown: ${r.cooldown_minutes}m`}
                       </div>
@@ -434,7 +446,9 @@ export function AlertsView({
                             </td>
                             <td className="py-2 px-3 truncate max-w-[260px]">
                               <div className="font-medium text-[var(--color-text)] truncate">
-                                {d.project_slug} #{d.issue_id}: {d.issue_title}
+                                {d.issue_id !== null
+                                  ? `${d.project_slug} #${d.issue_id}: ${d.issue_title}`
+                                  : `${d.project_slug}: ${d.issue_title}`}
                               </div>
                               {d.error_message && (
                                 <div className="text-[11px] text-[#ae2e24] truncate">
@@ -572,12 +586,19 @@ export function AlertsView({
                 <label className="block text-xs font-semibold mb-1">Trigger</label>
                 <select
                   value={ruleTrigger}
-                  onChange={(e) => setRuleTrigger(e.target.value as AlertTriggerType)}
+                  onChange={(e) => {
+                    const next = e.target.value as AlertTriggerType;
+                    setRuleTrigger(next);
+                    if (next === "perf_p95") setPerfThreshold("500");
+                    if (next === "perf_error_rate") setPerfThreshold("5");
+                  }}
                   className="pm-input h-9 text-sm"
                 >
                   <option value="new_issue">New issue</option>
                   <option value="regression">Regression (resolved issue reopened)</option>
                   <option value="spike">Event spike (threshold in window)</option>
+                  <option value="perf_p95">Performance: p95 latency above threshold</option>
+                  <option value="perf_error_rate">Performance: error rate above threshold</option>
                 </select>
               </div>
 
@@ -629,6 +650,64 @@ export function AlertsView({
                   className="pm-input h-9 text-sm"
                 />
               </div>
+
+              {isPerfTrigger && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="block text-xs font-semibold mb-1">
+                      Transaction (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={perfTransaction}
+                      onChange={(e) => setPerfTransaction(e.target.value)}
+                      maxLength={512}
+                      placeholder="e.g. GET /api/orders — empty = whole project"
+                      className="pm-input h-9 text-sm pm-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold mb-1">
+                      {ruleTrigger === "perf_p95" ? "p95 above (ms)" : "Error rate above (%)"}
+                    </label>
+                    <input
+                      type="number"
+                      min={ruleTrigger === "perf_p95" ? 1 : 0}
+                      max={ruleTrigger === "perf_p95" ? 600000 : 99.99}
+                      step={ruleTrigger === "perf_p95" ? 1 : 0.1}
+                      value={perfThreshold}
+                      onChange={(e) => setPerfThreshold(e.target.value)}
+                      required
+                      className="pm-input h-9 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold mb-1">Window (min)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={perfWindow}
+                      onChange={(e) => setPerfWindow(e.target.value)}
+                      required
+                      className="pm-input h-9 text-sm"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-semibold mb-1">
+                      Minimum transactions in window
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={perfMinCount}
+                      onChange={(e) => setPerfMinCount(e.target.value)}
+                      required
+                      className="pm-input h-9 text-sm"
+                    />
+                  </div>
+                </div>
+              )}
 
               {ruleTrigger === "spike" && (
                 <div className="grid grid-cols-2 gap-2">

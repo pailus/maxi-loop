@@ -58,7 +58,9 @@ pub struct AlertPayload {
     pub tenant_id: i64,
     pub project_id: i64,
     pub project_slug: String,
-    pub issue_id: i64,
+    /// Omitted for performance alerts (`F019`), which are not tied to an issue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_id: Option<i64>,
     pub title: String,
     pub exception_type: String,
     pub exception_value: String,
@@ -70,6 +72,22 @@ pub struct AlertPayload {
     pub issue_url: String,
     pub triggered_at: DateTime<Utc>,
     pub details: Option<String>,
+    /// `F019` performance alert context (omitted for issue alerts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub performance: Option<PerformanceAlertContext>,
+}
+
+/// Metric context of a performance alert (`F019`).
+#[derive(Clone, Debug, Serialize)]
+pub struct PerformanceAlertContext {
+    /// `p95_ms` or `error_rate_pct`.
+    pub metric: String,
+    pub value: f64,
+    pub threshold: f64,
+    pub window_minutes: i32,
+    /// `None` = all transactions of the project.
+    pub transaction: Option<String>,
+    pub transaction_count: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -254,10 +272,20 @@ fn format_alert_text(payload: &AlertPayload) -> String {
             payload.event.to_uppercase(),
             payload.project_slug
         ),
-        format!("Issue #{}: {}", payload.issue_id, payload.title),
+        match payload.issue_id {
+            Some(id) => format!("Issue #{id}: {}", payload.title),
+            None => payload.title.clone(),
+        },
         format!(
-            "Level: {} | Env: {} | Events: {}",
-            payload.level, payload.environment, payload.event_count
+            "Level: {} | Env: {} | {}: {}",
+            payload.level,
+            payload.environment,
+            if payload.performance.is_some() {
+                "Transactions"
+            } else {
+                "Events"
+            },
+            payload.event_count
         ),
     ];
     if let Some(rel) = &payload.release {

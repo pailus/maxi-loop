@@ -17,6 +17,7 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 maxi-loop-auth.workspace = true
+maxi-loop-performance.workspace = true
 maxi-loop-platform.workspace = true
 rustls.workspace = true
 serde.workspace = true

@@ -1144,6 +1144,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "maxi-loop-auth",
+ "maxi-loop-performance",
  "maxi-loop-platform",
  "rustls",
  "serde",

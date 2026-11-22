@@ -407,7 +407,7 @@
     {
       "id": "F019",
       "title": "Performance alerts: p95 latency and error-rate thresholds per transaction/project",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "acceptance_criteria": [
         "New alert rule types for p95 > X ms and error_rate > Y% on a transaction or project, evaluated every minute from `transaction_minute_metrics`",
@@ -418,12 +418,13 @@
         "cargo fmt --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
         "cargo test --workspace",
-        "cargo build --workspace"
+        "cargo build --workspace",
+        "tests/e2e/python/.venv/bin/python tests/e2e/python/verify_performance_alerts.py"
       ],
       "depends_on": [
         "F017"
       ],
-      "notes": "Agreed with user 2026-11-22 as high-value follow-up."
+      "notes": "Agreed with user 2026-11-22 as high-value follow-up. Done 2026-11-22: migration 0013, D011. Deliveries with status 'failed' do not start a cooldown (same as issue alerts), so a failing channel is retried every tick while the condition holds."
     }
   ]
 }

@@ -5,6 +5,41 @@
 
 ---
 
+### 2026-11-22 — Antigravity — MaxiBoard-style Top-Left Workspace Switcher & Create Workspace Dialog
+
+**Status at end of session:** done
+
+**Done:**
+- Reviewed `maxi-code` MaxiBoard (`WorkspaceMenu.jsx`, `workspaceSwitcher.js`, `BoardShell.jsx`, `CreateWorkspaceDialog.jsx`, `WorkspaceSettingsPage.jsx`) and identified why creating/switching workspaces was missing in MaxiLoop UI (`App.tsx` skipped `fetchWorkspaces()` in `single_tenant_mode`, rendered a non-clickable top-left workspace block, and had no UI form calling `POST /api/v1/workspaces`)
+- Created `web/src/modules/workspaces/` vertical-slice UI module:
+  - `workspacePrefs.ts`: MaxiBoard 9-color workspace palette, localStorage preferences (colors, starred workspaces, recently-opened timestamps, last-active workspace per tenant), and `arrangeWorkspaces` (Starred → Recently opened → All A–Z + ranked search & match highlight from `SEARCH_MIN = 6`)
+  - `WorkspaceMark.tsx`: MaxiBoard rounded square colored initial mark
+  - `CreateWorkspaceDialog.tsx`: Portaled centered MaxiBoard modal (`Escape`/backdrop close) calling `POST /api/v1/workspaces` with Workspace name, auto-generated editable URL-safe slug, 9-color swatches, and optional parameter overrides (`retention_days_override` bounded by tenant limit, `default_rate_limit_per_minute_override`)
+  - `WorkspaceSwitcher.tsx`: Clickable top-left sidebar trigger (`WorkspaceMark`, name, project count, rotating chevron) opening a portaled MaxiBoard dropdown (`Ctrl/⌘+K` shortcut, keyboard `↑`/`↓`/`Enter` navigation, search box when `>= 6` workspaces, star/unstar, active workspace parameters strip showing tenant/mode, effective workspace role, retention days, and rate limit, plus fixed bottom actions: **Workspace settings & limits**, **Members & access**, and **Create workspace**)
+- Updated `web/src/app/App.tsx`: always loads accessible workspaces (in both single-tenant and multi-tenant modes), restores `?workspace=` or last-opened workspace with accessible-workspace fallback, computes per-workspace effective role matching server RBAC, switches cleanly into newly created workspaces with bottom toast, and wires active workspace retention/limit into sidebar footer & `ProjectsView`
+- Updated `web/src/modules/admin/TeamAndSettingsView.tsx` (supports `initialTab`/`tabNonce` deep jumps from dropdown, adds `+ Create workspace` button, workspace name + color badge editing alongside retention & rate-limit overrides) and `web/src/modules/mcp/McpView.tsx` (passes active `workspace_slug` when creating workspace-scoped MCP tokens)
+- Added `.pm-fade-in` transition in `web/src/index.css`; updated `.harness/ARCHITECTURE.md` and archived `F010` to `.harness/progress-archive.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo check --workspace` → PASS
+- `cargo test --workspace` → PASS (89/89 passed across 39 suites)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Live Headless Chrome E2E smoke test against restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth `GET`/`POST /api/v1/workspaces` `401`/`401`, invalid slug `400`, top-left dropdown opened with parameters & actions, created `Smoke Platform` `14d`/`500/min` via modal, auto-switched workspace + toast verified, temporary workspace cleaned up)
+
+**Security notes:**
+- Self-review passed: all workspace creation and update calls still go through existing server-side validated `POST /api/v1/workspaces` & `PATCH /api/v1/workspaces/{slug}/settings` with `AuthSession` + CSRF + `can_manage_tenant()`/`can_manage_workspace()` + Postgres RLS; UI only persists non-sensitive display prefs (color, stars, last-opened slug) in `localStorage`; negative checks verified unauthenticated `401` and invalid slug `400`
+- Dependencies: 0 new Rust or npm dependencies added
+
+**Key decisions & why:**
+- Portaled the workspace switcher popover to `document.body` anchored to the top-left trigger button's bounding rect so it renders at a comfortable 296px width without being clipped by the 240px sidebar's `overflow-y-auto`, and enabled workspace loading in `single_tenant_mode` since single-tenant hides the tenant tier rather than workspaces within the tenant
+
+**Not finished / blockers:**
+- None
+
 ### 2026-11-22 — Antigravity — F016: P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates
 
 **Status at end of session:** done

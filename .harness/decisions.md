@@ -8,6 +8,12 @@
 
 ---
 
+### D011 — 2026-11-22 — Performance alerts reuse `alert_rules` / `alert_deliveries` (F019)
+**Decision:** `perf_p95` and `perf_error_rate` are new `alert_rules.trigger_type`s (columns `transaction_name` (NULL = whole project), `perf_threshold` (ms / %), `perf_window_minutes` default 5, `perf_min_count` default 10), evaluated on the existing alert-engine tick (60s) from `transaction_minute_metrics` (all transactions, not just sampled). A rule fires per project in scope when the window value is strictly above the threshold. Deliveries reuse `alert_deliveries` with nullable `issue_id` (+ `transaction_name`, `metric_value`, `subject`); cooldown key = (rule, project, transaction). Webhook payload keeps the issue-alert shape, omits `issue_id` and adds a `performance` object; `issue_url` points to `/?view=performance&project=<slug>`.
+**Why:** Same channels, SSRF-safe delivery, cooldown and audit log/UI as issue alerts with no parallel tables or UI.
+**Rejected:** Separate `performance_alert_rules`/`performance_alert_deliveries` tables; firing only on state change (resolve/re-fire) — cooldown dedup matches the acceptance criteria and existing spike rules.
+**Decided by:** assistant (F019 acceptance criteria agreed with user)
+
 ### D010 — 2026-11-22 — Users affected = keyed, tenant-scoped user hash (F018)
 **Decision:** Count users from the event `user` interface (`id` > `email` (lowercased) > `username` > `ip_address`, `{{auto}}`/`[Filtered]` ignored), derived *before* PII scrubbing as an in-memory SHA-256 digest, then persisted only as `HMAC-SHA256(instance_secrets.user_hash_key, tenant_id || digest)[..16]` in `issue_users` / `events.user_hash`. The key is generated in migration 0012 (`gen_random_uuid`-based, 32 bytes), readable only by `maxi_loop_worker`. `issues.user_count` is a lifetime distinct count kept by the worker (merge = union, split = users of moved stored events). Spike rules get `spike_metric = events | users` (users = distinct `issue_users.last_seen` inside the window).
 **Why:** Exact distinct counts and impact sorting without storing raw PII, no dictionary reversal of emails without the DB-held key, no cross-tenant correlation, and no new config/env needed.

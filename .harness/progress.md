@@ -33,6 +33,33 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F019: Performance alerts (p95 latency / error rate)
+
+**Status at end of session:** done
+
+**Done:**
+- `migrations/0013_performance_alerts.sql`: `alert_rules` trigger types `perf_p95` / `perf_error_rate` + `transaction_name`, `perf_threshold`, `perf_window_minutes`, `perf_min_count` (CHECKs per type); `alert_deliveries.issue_id` nullable + `transaction_name`, `metric_value`, `subject`, perf cooldown index
+- `crates/alerts`: `evaluate_performance_rules` on the 60s engine tick (p95 from merged log histograms via `maxi_loop_performance::histogram::estimate_percentile`, error rate from counts), cooldown per (rule, project, transaction), audit log rows; validation for create/update (per-type threshold ranges, window, min count, transaction name); payload `performance` context, `issue_id` omitted for perf alerts
+- UI (Alerts): p95 / error-rate triggers with transaction, threshold, window, min transactions; rule summary; delivery log handles issue-less rows
+- Tests: `crates/server/tests/f019_performance_alerts.rs` (fire / no-fire / min traffic / cooldown / audit log / 9 validation negatives), engine unit tests, E2E `tests/e2e/python/verify_performance_alerts.py` (official sentry-sdk, cleans up its rules)
+
+**Verification run:**
+- `npm --prefix web run build` → PASS
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace` → PASS (115 passed, 0 failed)
+- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; dev service restarted (migration 0013 applied); `cargo tree --depth 1 -p maxi-loop-mcp` → 0 direct `sqlx`
+- `verify_performance_alerts.py` → PASS (delivery `failed` = no SMTP on dev host, by design no off-host traffic)
+- Headless Chrome screenshots (Alerts rules + perf form, delivery log) → OK
+
+**Security notes:**
+- New rule inputs allow-listed / range-checked server-side and by DB CHECKs (negatives tested); queries parameterized; same role checks + RLS as existing alert endpoints; delivery path (SSRF guard, header sanitizing) unchanged; only internal crate dependency added (`alerts` → `performance`).
+
+**Key decisions & why:**
+- D011 (reuse `alert_rules`/`alert_deliveries`, nullable `issue_id`)
+
+**Not finished / blockers:**
+- None.
+
 ### 2026-11-22 — Claude Code — F018: Users affected per issue + impact sorting
 
 **Status at end of session:** done
@@ -218,41 +245,6 @@
 
 **Key decisions & why:**
 - Used a dedicated blocking `stdin` reader thread feeding a bounded `mpsc` channel into the Tokio runtime rather than holding a blocking lock across `.await`, and routed all `maxi-loop mcp` tracing strictly to `stderr` so `stdout` never carries non-JSON-RPC bytes
-
-**Not finished / blockers:**
-- None
-
-### 2026-11-22 — Antigravity — MaxiBoard-style Top-Left Workspace Switcher & Create Workspace Dialog
-
-**Status at end of session:** done
-
-**Done:**
-- Reviewed `maxi-code` MaxiBoard (`WorkspaceMenu.jsx`, `workspaceSwitcher.js`, `BoardShell.jsx`, `CreateWorkspaceDialog.jsx`, `WorkspaceSettingsPage.jsx`) and identified why creating/switching workspaces was missing in MaxiLoop UI (`App.tsx` skipped `fetchWorkspaces()` in `single_tenant_mode`, rendered a non-clickable top-left workspace block, and had no UI form calling `POST /api/v1/workspaces`)
-- Created `web/src/modules/workspaces/` vertical-slice UI module:
-  - `workspacePrefs.ts`: MaxiBoard 9-color workspace palette, localStorage preferences (colors, starred workspaces, recently-opened timestamps, last-active workspace per tenant), and `arrangeWorkspaces` (Starred → Recently opened → All A–Z + ranked search & match highlight from `SEARCH_MIN = 6`)
-  - `WorkspaceMark.tsx`: MaxiBoard rounded square colored initial mark
-  - `CreateWorkspaceDialog.tsx`: Portaled centered MaxiBoard modal (`Escape`/backdrop close) calling `POST /api/v1/workspaces` with Workspace name, auto-generated editable URL-safe slug, 9-color swatches, and optional parameter overrides (`retention_days_override` bounded by tenant limit, `default_rate_limit_per_minute_override`)
-  - `WorkspaceSwitcher.tsx`: Clickable top-left sidebar trigger (`WorkspaceMark`, name, project count, rotating chevron) opening a portaled MaxiBoard dropdown (`Ctrl/⌘+K` shortcut, keyboard `↑`/`↓`/`Enter` navigation, search box when `>= 6` workspaces, star/unstar, active workspace parameters strip showing tenant/mode, effective workspace role, retention days, and rate limit, plus fixed bottom actions: **Workspace settings & limits**, **Members & access**, and **Create workspace**)
-- Updated `web/src/app/App.tsx`: always loads accessible workspaces (in both single-tenant and multi-tenant modes), restores `?workspace=` or last-opened workspace with accessible-workspace fallback, computes per-workspace effective role matching server RBAC, switches cleanly into newly created workspaces with bottom toast, and wires active workspace retention/limit into sidebar footer & `ProjectsView`
-- Updated `web/src/modules/admin/TeamAndSettingsView.tsx` (supports `initialTab`/`tabNonce` deep jumps from dropdown, adds `+ Create workspace` button, workspace name + color badge editing alongside retention & rate-limit overrides) and `web/src/modules/mcp/McpView.tsx` (passes active `workspace_slug` when creating workspace-scoped MCP tokens)
-- Added `.pm-fade-in` transition in `web/src/index.css`; updated `.harness/ARCHITECTURE.md` and archived `F010` to `.harness/progress-archive.md`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo check --workspace` → PASS
-- `cargo test --workspace` → PASS (89/89 passed across 39 suites)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- Live Headless Chrome E2E smoke test against restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth `GET`/`POST /api/v1/workspaces` `401`/`401`, invalid slug `400`, top-left dropdown opened with parameters & actions, created `Smoke Platform` `14d`/`500/min` via modal, auto-switched workspace + toast verified, temporary workspace cleaned up)
-
-**Security notes:**
-- Self-review passed: all workspace creation and update calls still go through existing server-side validated `POST /api/v1/workspaces` & `PATCH /api/v1/workspaces/{slug}/settings` with `AuthSession` + CSRF + `can_manage_tenant()`/`can_manage_workspace()` + Postgres RLS; UI only persists non-sensitive display prefs (color, stars, last-opened slug) in `localStorage`; negative checks verified unauthenticated `401` and invalid slug `400`
-- Dependencies: 0 new Rust or npm dependencies added
-
-**Key decisions & why:**
-- Portaled the workspace switcher popover to `document.body` anchored to the top-left trigger button's bounding rect so it renders at a comfortable 296px width without being clipped by the 240px sidebar's `overflow-y-auto`, and enabled workspace loading in `single_tenant_mode` since single-tenant hides the tenant tier rather than workspaces within the tenant
 
 **Not finished / blockers:**
 - None

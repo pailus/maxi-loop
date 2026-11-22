@@ -71,6 +71,10 @@ struct RuleRow {
     spike_threshold: Option<i32>,
     spike_window_minutes: Option<i32>,
     spike_metric: String,
+    transaction_name: Option<String>,
+    perf_threshold: Option<f64>,
+    perf_window_minutes: Option<i32>,
+    perf_min_count: i32,
     cooldown_minutes: i32,
     is_enabled: bool,
     created_at: DateTime<Utc>,
@@ -101,6 +105,10 @@ fn map_rule(row: RuleRow) -> AlertRuleView {
         spike_threshold: row.spike_threshold,
         spike_window_minutes: row.spike_window_minutes,
         spike_metric: row.spike_metric,
+        transaction_name: row.transaction_name,
+        perf_threshold: row.perf_threshold,
+        perf_window_minutes: row.perf_window_minutes,
+        perf_min_count: row.perf_min_count,
         cooldown_minutes: row.cooldown_minutes,
         is_enabled: row.is_enabled,
         created_at: row.created_at,
@@ -118,8 +126,10 @@ struct DeliveryRow {
     rule_name: String,
     channel_id: i64,
     channel_name: String,
-    issue_id: i64,
+    issue_id: Option<i64>,
     issue_title: String,
+    transaction_name: Option<String>,
+    metric_value: Option<f64>,
     trigger_type: String,
     channel_type: String,
     status: String,
@@ -338,6 +348,7 @@ pub async fn list_alert_rules(
                 r.channel_id, c.name AS channel_name, c.channel_type,
                 r.name, r.trigger_type, r.environment_filter,
                 r.spike_threshold, r.spike_window_minutes, r.spike_metric, r.cooldown_minutes,
+                r.transaction_name, r.perf_threshold, r.perf_window_minutes, r.perf_min_count,
                 r.is_enabled, r.created_at, r.updated_at
          FROM alert_rules r
          JOIN alert_channels c ON c.tenant_id = r.tenant_id AND c.id = r.channel_id
@@ -415,8 +426,26 @@ pub async fn create_alert_rule(
             }
             (Some(threshold), Some(window))
         }
-        AlertTriggerType::NewIssue | AlertTriggerType::Regression => (None, None),
+        AlertTriggerType::NewIssue
+        | AlertTriggerType::Regression
+        | AlertTriggerType::PerfP95
+        | AlertTriggerType::PerfErrorRate => (None, None),
     };
+
+    // Performance rules (`F019`).
+    let (transaction_name, perf_threshold, perf_window_minutes, perf_min_count) =
+        if trigger_type.is_performance() {
+            let threshold = input.perf_threshold.ok_or_else(|| {
+                AppError::Validation("perf_threshold is required for performance rules".to_owned())
+            })?;
+            let threshold = trigger_type.validate_perf_threshold(threshold)?;
+            let window = validate_perf_window(input.perf_window_minutes.unwrap_or(5))?;
+            let min_count = validate_perf_min_count(input.perf_min_count.unwrap_or(10))?;
+            let tx_name = validate_transaction_name(input.transaction_name.as_deref())?;
+            (tx_name, Some(threshold), Some(window), min_count)
+        } else {
+            (None, None, None, 10)
+        };
 
     let spike_metric = match input.spike_metric.as_deref() {
         Some(raw) => SpikeMetric::parse(raw)?,
@@ -458,8 +487,8 @@ pub async fn create_alert_rule(
         "INSERT INTO alert_rules (
              tenant_id, workspace_id, project_id, channel_id, name, trigger_type,
              environment_filter, spike_threshold, spike_window_minutes, cooldown_minutes, is_enabled,
-             spike_metric
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             spike_metric, transaction_name, perf_threshold, perf_window_minutes, perf_min_count
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING id, created_at, updated_at",
     )
     .bind(tenant_ctx.tenant_id())
@@ -474,6 +503,10 @@ pub async fn create_alert_rule(
     .bind(cooldown_minutes)
     .bind(is_enabled)
     .bind(spike_metric.as_str())
+    .bind(&transaction_name)
+    .bind(perf_threshold)
+    .bind(perf_window_minutes)
+    .bind(perf_min_count)
     .fetch_one(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("insert alert_rule: {err}")))?;
@@ -498,6 +531,10 @@ pub async fn create_alert_rule(
         spike_threshold,
         spike_window_minutes,
         spike_metric: spike_metric.as_str().to_owned(),
+        transaction_name,
+        perf_threshold,
+        perf_window_minutes,
+        perf_min_count,
         cooldown_minutes,
         is_enabled,
         created_at: inserted.1,
@@ -538,6 +575,24 @@ pub async fn update_alert_rule(
         .map(SpikeMetric::parse)
         .transpose()?
         .map(SpikeMetric::as_str);
+    let perf_window_minutes = input
+        .perf_window_minutes
+        .map(validate_perf_window)
+        .transpose()?;
+    let perf_min_count = input
+        .perf_min_count
+        .map(validate_perf_min_count)
+        .transpose()?;
+    // `Some("")` clears the transaction filter (rule applies to the whole project).
+    let transaction_name_update = match input.transaction_name.as_deref() {
+        Some(raw) if raw.trim().is_empty() => Some(None),
+        Some(raw) => Some(validate_transaction_name(Some(raw))?),
+        None => None,
+    };
+    let touches_perf = input.perf_threshold.is_some()
+        || perf_window_minutes.is_some()
+        || perf_min_count.is_some()
+        || transaction_name_update.is_some();
     if let Some(cd) = input.cooldown_minutes
         && !(1..=1440).contains(&cd)
     {
@@ -560,6 +615,30 @@ pub async fn update_alert_rule(
     };
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+
+    let perf_threshold = if touches_perf {
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT trigger_type FROM alert_rules WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_ctx.tenant_id())
+        .bind(rule_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("lookup alert_rule type: {err}")))?;
+        let trigger = AlertTriggerType::parse(&current.ok_or(AppError::NotFound)?)?;
+        if !trigger.is_performance() {
+            return Err(AppError::Validation(
+                "perf_* and transaction_name only apply to performance rules".to_owned(),
+            ));
+        }
+        input
+            .perf_threshold
+            .map(|th| trigger.validate_perf_threshold(th))
+            .transpose()?
+    } else {
+        None
+    };
+
     let updated: Option<i64> = sqlx::query_scalar(
         "UPDATE alert_rules
          SET name = COALESCE($3, name),
@@ -569,6 +648,10 @@ pub async fn update_alert_rule(
              cooldown_minutes = COALESCE($7, cooldown_minutes),
              is_enabled = COALESCE($8, is_enabled),
              spike_metric = COALESCE($9, spike_metric),
+             perf_threshold = COALESCE($10, perf_threshold),
+             perf_window_minutes = COALESCE($11, perf_window_minutes),
+             perf_min_count = COALESCE($12, perf_min_count),
+             transaction_name = CASE WHEN $13 THEN $14 ELSE transaction_name END,
              updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2
          RETURNING id",
@@ -587,6 +670,11 @@ pub async fn update_alert_rule(
     .bind(input.cooldown_minutes)
     .bind(input.is_enabled)
     .bind(spike_metric)
+    .bind(perf_threshold)
+    .bind(perf_window_minutes)
+    .bind(perf_min_count)
+    .bind(transaction_name_update.is_some())
+    .bind(transaction_name_update.flatten())
     .fetch_optional(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("update alert_rule: {err}")))?;
@@ -601,6 +689,7 @@ pub async fn update_alert_rule(
                 r.channel_id, c.name AS channel_name, c.channel_type,
                 r.name, r.trigger_type, r.environment_filter,
                 r.spike_threshold, r.spike_window_minutes, r.spike_metric, r.cooldown_minutes,
+                r.transaction_name, r.perf_threshold, r.perf_window_minutes, r.perf_min_count,
                 r.is_enabled, r.created_at, r.updated_at
          FROM alert_rules r
          JOIN alert_channels c ON c.tenant_id = r.tenant_id AND c.id = r.channel_id
@@ -663,13 +752,14 @@ pub async fn list_alert_deliveries(
     let rows: Vec<DeliveryRow> = sqlx::query_as(
         "SELECT d.id, d.tenant_id, d.project_id, p.slug AS project_slug,
                 d.rule_id, r.name AS rule_name, d.channel_id, c.name AS channel_name,
-                d.issue_id, i.title AS issue_title, d.trigger_type, d.channel_type,
+                d.issue_id, COALESCE(i.title, d.subject, '') AS issue_title,
+                d.transaction_name, d.metric_value, d.trigger_type, d.channel_type,
                 d.status, d.http_status, d.error_message, d.created_at
          FROM alert_deliveries d
          JOIN projects p ON p.tenant_id = d.tenant_id AND p.id = d.project_id
          JOIN alert_rules r ON r.tenant_id = d.tenant_id AND r.id = d.rule_id
          JOIN alert_channels c ON c.tenant_id = d.tenant_id AND c.id = d.channel_id
-         JOIN issues i ON i.tenant_id = d.tenant_id AND i.project_id = d.project_id AND i.id = d.issue_id
+         LEFT JOIN issues i ON i.tenant_id = d.tenant_id AND i.project_id = d.project_id AND i.id = d.issue_id
          WHERE d.tenant_id = $1
          ORDER BY d.created_at DESC, d.id DESC
          LIMIT $2",
@@ -697,6 +787,8 @@ pub async fn list_alert_deliveries(
             channel_name: r.channel_name,
             issue_id: r.issue_id,
             issue_title: r.issue_title,
+            transaction_name: r.transaction_name,
+            metric_value: r.metric_value,
             trigger_type: r.trigger_type,
             channel_type: r.channel_type,
             status: r.status,
@@ -775,5 +867,38 @@ async fn resolve_optional_scope_in_tx(
             };
             Ok((Some(ws_id), Some(ws_s), Some(p_id), Some(p_s)))
         }
+    }
+}
+
+fn validate_perf_window(window: i32) -> Result<i32, AppError> {
+    if (1..=1440).contains(&window) {
+        Ok(window)
+    } else {
+        Err(AppError::Validation(
+            "perf_window_minutes must be between 1 and 1440".to_owned(),
+        ))
+    }
+}
+
+fn validate_perf_min_count(min_count: i32) -> Result<i32, AppError> {
+    if (1..=1_000_000).contains(&min_count) {
+        Ok(min_count)
+    } else {
+        Err(AppError::Validation(
+            "perf_min_count must be between 1 and 1000000".to_owned(),
+        ))
+    }
+}
+
+/// Exact transaction name filter for performance rules; `None`/blank = whole project.
+fn validate_transaction_name(raw: Option<&str>) -> Result<Option<String>, AppError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(name) if name.chars().count() <= 512 && !name.chars().any(char::is_control) => {
+            Ok(Some(name.to_owned()))
+        }
+        Some(_) => Err(AppError::Validation(
+            "transaction_name must be at most 512 printable characters".to_owned(),
+        )),
     }
 }
