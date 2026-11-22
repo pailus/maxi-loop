@@ -48,6 +48,36 @@ impl CompressionKind {
     }
 }
 
+/// Which Sentry item type each envelope carries (`F021`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayloadKind {
+    Error,
+    Transaction,
+    /// Alternates error and transaction envelopes.
+    Mixed,
+}
+
+impl PayloadKind {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "error" | "event" => Ok(Self::Error),
+            "transaction" | "tx" => Ok(Self::Transaction),
+            "mixed" => Ok(Self::Mixed),
+            other => Err(format!(
+                "unsupported kind '{other}' (expected error, transaction, or mixed)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Transaction => "transaction",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadMode {
     TotalRequests(u64),
@@ -223,6 +253,7 @@ pub struct LoadgenConfig {
     pub mode: LoadMode,
     pub concurrency: usize,
     pub unique_issues: usize,
+    pub payload_kind: PayloadKind,
     pub compression: CompressionKind,
     pub environment: String,
     pub release: Option<String>,
@@ -239,7 +270,8 @@ pub fn usage_text() -> &'static str {
        --total <N>                  Total envelopes to send (default: 2000; mutually exclusive with --duration-secs)\n\
        --duration-secs <S>          Run load test for S seconds (1..=3600)\n\
        --concurrency <C>            Concurrent HTTP/1.1 keep-alive workers (default: 16, max: 512)\n\
-       --unique-issues <U>          Distinct synthetic issue templates (default: 20, max: 100000)\n\
+       --unique-issues <U>          Distinct synthetic issue / transaction templates (default: 20, max: 100000)\n\
+       --kind <KIND>                error | transaction | mixed (default: error)\n\
        --compression <KIND>         none | gzip | deflate | br (default: gzip)\n\
        --environment <ENV>          Event environment tag (default: loadtest)\n\
        --release <REL>              Optional release identifier\n\
@@ -269,6 +301,7 @@ where
     let mut concurrency: usize = 16;
     let mut unique_issues: usize = 20;
     let mut compression = CompressionKind::Gzip;
+    let mut payload_kind = PayloadKind::Error;
     let mut environment = "loadtest".to_owned();
     let mut release: Option<String> = None;
     let mut timeout_ms: u64 = 5_000;
@@ -316,6 +349,10 @@ where
             "--compression" => {
                 let raw = take_val(&mut iter, "--compression")?;
                 compression = CompressionKind::parse(&raw)?;
+            }
+            "--kind" => {
+                let raw = take_val(&mut iter, "--kind")?;
+                payload_kind = PayloadKind::parse(&raw)?;
             }
             "--environment" => {
                 environment = take_val(&mut iter, "--environment")?;
@@ -406,6 +443,7 @@ where
         mode,
         concurrency,
         unique_issues,
+        payload_kind,
         compression,
         environment: env_trimmed.to_owned(),
         release: release_clean,
@@ -471,6 +509,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("--concurrency"));
+    }
+
+    #[test]
+    fn parses_payload_kind_and_rejects_unknown() {
+        let base = [
+            "maxi-loop-loadgen",
+            "--dsn",
+            "http://abc123@127.0.0.1:8080/1",
+        ];
+        let cfg = parse_args_with_env(base, None)
+            .expect("parse ok")
+            .expect("config");
+        assert_eq!(cfg.payload_kind, PayloadKind::Error);
+
+        let cfg = parse_args_with_env(base.into_iter().chain(["--kind", "mixed"]), None)
+            .expect("parse ok")
+            .expect("config");
+        assert_eq!(cfg.payload_kind, PayloadKind::Mixed);
+
+        let err =
+            parse_args_with_env(base.into_iter().chain(["--kind", "replay"]), None).unwrap_err();
+        assert!(err.contains("unsupported kind"));
     }
 
     #[test]

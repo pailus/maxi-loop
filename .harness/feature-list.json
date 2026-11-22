@@ -452,6 +452,30 @@
         "F005"
       ],
       "notes": "Agreed with user 2026-11-22 (production packaging moved to the end). PRD §8 / design §5.2 spool file. Done 2026-11-22: D012 (segments rotate at 64 MiB or 30 s, checkpoint after each batch, at-least-once). MSRV raised to 1.89 for File::try_lock. E2E SIGKILL test: 1200 accepted, 210 replayed, 0 lost, 0 duplicates."
+    },
+    {
+      "id": "F021",
+      "title": "Phase 2 load test: transaction/mixed loadgen modes and benchmark report",
+      "status": "done",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "`maxi-loop-loadgen --kind error|transaction|mixed`; transaction envelopes carry realistic spans incl. N+1 DB patterns",
+        "Benchmarks on the current release: idle/peak RSS, HTTP throughput & latency, sustained persistence rate, 429 behaviour, with and without INGEST_SPOOL_DIR",
+        "Results and reproduction steps in docs/benchmarks-phase2.md; no accepted event lost"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --release -p maxi-loop -p maxi-loop-loadgen"
+      ],
+      "depends_on": [
+        "F009",
+        "F012",
+        "F017",
+        "F020"
+      ],
+      "notes": "Agreed with user 2026-11-22 (after F020; production packaging last). Done 2026-11-22: loadgen --kind error|transaction|mixed + bench_phase2.py + docs/benchmarks-phase2.md. 240,600 accepted envelopes across 8 runs (no-spool & spool), 0 lost, 0 5xx; idle RSS 12.0 MiB, peak RSS 115.3 / 106.0 MiB, sustained persist 3.67k err / 3.22k tx / 2.22k mixed items/s (spool overhead 0.5%–3.2%)."
     }
   ]
 }

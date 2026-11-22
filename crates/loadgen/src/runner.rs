@@ -33,6 +33,7 @@ pub struct LoadgenReport {
     pub compression: String,
     pub concurrency: usize,
     pub unique_issues: usize,
+    pub payload_kind: String,
     pub include_unsupported_item: bool,
     pub elapsed_secs: f64,
     pub total_requests: u64,
@@ -152,6 +153,7 @@ pub async fn run_load_test(config: LoadgenConfig) -> Result<LoadgenReport, Strin
         compression: config.compression.as_str().to_owned(),
         concurrency: config.concurrency,
         unique_issues: config.unique_issues,
+        payload_kind: config.payload_kind.as_str().to_owned(),
         include_unsupported_item: config.include_unsupported_item,
         elapsed_secs,
         total_requests,
@@ -199,6 +201,7 @@ async fn run_worker(
 
         let envelope = match build_synthetic_envelope(
             seq,
+            config.payload_kind,
             config.unique_issues,
             &config.environment,
             config.release.as_deref(),
@@ -340,7 +343,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::cli::{CompressionKind, ParsedDsn};
+    use crate::cli::{CompressionKind, ParsedDsn, PayloadKind};
 
     #[test]
     fn computes_latency_percentiles_accurately() {
@@ -402,6 +405,7 @@ mod tests {
             mode: LoadMode::TotalRequests(25),
             concurrency: 4,
             unique_issues: 5,
+            payload_kind: PayloadKind::Error,
             compression: CompressionKind::Gzip,
             environment: "test".to_owned(),
             release: Some("rev-test".to_owned()),

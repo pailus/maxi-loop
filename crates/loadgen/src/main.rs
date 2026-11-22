@@ -42,8 +42,8 @@ fn print_pretty_report(r: &LoadgenReport) {
     println!("=== Maxi Loop Envelope Load Test ===");
     println!("Target:           {}", r.target);
     println!(
-        "Config:           concurrency={}, compression={}, unique_issues={}, unsupported_item={}",
-        r.concurrency, r.compression, r.unique_issues, r.include_unsupported_item
+        "Config:           kind={}, concurrency={}, compression={}, unique_templates={}, unsupported_item={}",
+        r.payload_kind, r.concurrency, r.compression, r.unique_issues, r.include_unsupported_item
     );
     println!(
         "Summary:          {} requests in {:.3}s ({:.1} req/s total, {:.1} req/s 2xx)",

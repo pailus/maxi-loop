@@ -33,6 +33,31 @@
 
 ---
 
+### 2026-11-22 — Claude Code + Antigravity — F021: Phase 2 load test & benchmark report
+
+**Status at end of session:** done
+
+**Done:**
+- Extended `crates/loadgen` (`cli.rs`, `generator.rs`, `runner.rs`, `main.rs`) with `--kind error|transaction|mixed` (`PayloadKind`), realistic FastAPI-style transaction envelopes with DB + `http.client` spans where 1 in 5 templates emits a 6-query N+1 DB pattern (triggering `F017` detection and `'issue'` trace sampling), `payload_kind` in JSON/text reports, and 3 new unit tests (9 total in `maxi-loop-loadgen`)
+- Added automated benchmark harness `tests/e2e/python/bench_phase2.py` running release `maxi-loop serve` on a dedicated `bench-phase2` tenant both without and with `INGEST_SPOOL_DIR`, measuring binary sizes, idle/peak RSS, HTTP req/s & latency, `429` headers, and end-to-end persistence drain rate
+- Wrote `docs/benchmarks-phase2.md` with full tables, PostgreSQL verification of N+1 DB performance issues + sampled zstd traces, Phase 1 comparison, and reproduction commands; updated `.harness/ARCHITECTURE.md` and archived 2 oldest progress entries to `.harness/progress-archive.md`
+
+**Verification run:**
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo check --workspace` → PASS
+- `cargo build --workspace` / `cargo build --release -p maxi-loop -p maxi-loop-loadgen` → PASS
+- `cargo test -p maxi-loop-loadgen` → PASS (9/9)
+- `cargo test --workspace --no-fail-fast` → 132 passed, 1 failed (`phase2_configurable_pii_releases_alerts_ssrf_and_tenant_isolation`: pre-existing shared-DB spike rule count issue documented in handoff)
+- `tests/e2e/python/bench_phase2.py --out /tmp/bench-phase2.json` → PASS across all 8 scenarios (240,600 accepted / 240,600 persisted / 0 lost / 0 5xx; 1,831,261 clean `429`s with 100% `Retry-After` + `X-Sentry-Rate-Limits`; idle RSS 12.0 MiB, peak RSS 115.3 MiB no-spool / 106.0 MiB spool; sustained 3,674 err/s, 3,220 tx/s, 2,222 mixed/s; spool overhead 0.5%–3.2%)
+
+**Security notes:**
+- `bench_phase2.py` generates ephemeral CSPRNG admin credentials (`secrets.token_urlsafe(24)`) passed only via env vars (never printed or passed in argv), passes `SENTRY_DSN` via env, and binds loopback only; `ParsedDsn` redacts `public_key` in `Debug`; `--kind` validated against a strict allow-list with negative test; 0 new dependencies added.
+
+**Key decisions & why:**
+- Raised per-project (`1M/min`) and tenant aggregate (`10M/min`) quotas inside the dedicated `bench-phase2` tenant so benchmarks measure true ingest + PostgreSQL persistence and channel-full `429` backpressure instead of artificial quota throttling.
+
+**Not finished / blockers:**
+- None for F021; pre-existing `phase2_pii_releases_alerts.rs:777` failure untouched (out of scope).
+
 ### 2026-11-22 — Claude Code — F020: Optional ingest write-ahead spool
 
 **Status at end of session:** done
@@ -211,67 +236,6 @@
 
 **Security notes:**
 - No backend/API changes; uses existing CSRF-protected `POST /api/v1/projects` and authenticated read endpoints. Platform id still validated server-side by `parse_platform`.
-
-**Not finished / blockers:**
-- None
-
-### 2026-11-22 — Antigravity — Fix Sidebar Projects '+' Button & Add MaxiBoard CreateProjectDialog Modal
-
-**Status at end of session:** done
-
-**Done:**
-- Diagnosed why clicking `+` next to `PROJECTS` in the sidebar (and `+ New project` in the topbar) appeared unresponsive when already on `Projects & DSN` or on narrow viewports: both handlers only called `setActiveNav("projects")` (a no-op on the projects view) and the sidebar `+` button had a tiny 14px hit area without opening a create modal
-- Created `web/src/modules/projects/CreateProjectDialog.tsx`: portaled centered MaxiBoard modal (`Escape`/backdrop close, `role="dialog"`, `aria-modal="true"`) matching `CreateWorkspaceDialog.tsx` and MaxiBoard's `CreateBoardDialog.jsx`, with workspace header, MaxiBoard project icon/accent picker, auto-slugged project name & slug, platform selector, group tags (+ clickable existing-tag chips), retention & rate-limit overrides, and validation
-- Updated `web/src/app/App.tsx`: wired sidebar `PROJECTS` `+` button (upgraded to MaxiBoard's `24×24px` hoverable hit area, hidden for non-managers), topbar `+ New project` button, and `IssuesView` empty-state CTA to open `CreateProjectDialog` directly from any view, reload projects, navigate to `Projects & DSN`, and show confirmation toast
-- Updated `web/src/modules/projects/ProjectsView.tsx`: added `+ Create project` buttons in the header and empty state wired to `onOpenCreateProject`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace` → PASS
-- `cargo test --workspace` → PASS (94/94 passed)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- Live Headless Chrome E2E on restarted `maxi-loop-dev.service` (port `8080`) → PASS (clicked sidebar `+` from `Issues` view → modal opened; navigated to `Projects & DSN` and clicked sidebar `+` again → modal opened; created `smoke-proj-plus` with tag `smoke-tag` → DSN & toast rendered; cleaned up smoke project from DB)
-
-**Security notes:**
-- Self-review passed: project creation continues to use existing CSRF-protected `POST /api/v1/projects` with server-side slug/name/platform/tags/retention/rate-limit validation, `can_manage_workspace()`, and Postgres RLS; no new dependencies added
-
-**Key decisions & why:**
-- Followed MaxiBoard's `BoardShell` + `CreateBoardDialog` pattern so clicking `+` next to `PROJECTS` works identically from every view (including when already on `Projects & DSN` or on smaller screens)
-
-**Not finished / blockers:**
-- None
-
-### 2026-11-22 — Antigravity — MCP Stdio Bridge (`maxi-loop mcp`), Streamable HTTP Protocol Header Hardening & Live Claude Code CLI E2E
-
-**Status at end of session:** done
-
-**Done:**
-- Reviewed `maxi-code`'s stable stdio MCP proxy pattern (`src/mcp_board.rs`, `src/mcp_supervisor.rs`, ACP/OpenCode wiring) and brought parity to `maxi-loop` alongside Streamable HTTP `/mcp`:
-  - Created `crates/mcp/src/stdio.rs` implementing `StdioBridge` & `run_stdio_bridge` (0 new external crates — reuses workspace `hyper` + `tokio-rustls` + `webpki-roots` with strict TLS verification, 30s timeout, 256 KiB bounded stdin line read, 4 MiB bounded HTTP response read, `Mcp-Session-Id` & `MCP-Protocol-Version` tracking, best-effort `DELETE /mcp` on EOF, token redaction in `Debug`/errors, and graceful unconfigured/401/429 handling)
-  - Hardened `crates/mcp/src/http.rs` to echo both `Mcp-Session-Id` and `MCP-Protocol-Version` on every JSON-RPC response from `POST /mcp` (asserted in `crates/server/tests/mcp_server.rs`)
-  - Wired `maxi-loop mcp [--url <URL>] [--token-env <ENV>]` in `crates/server/src/cli.rs` & `crates/server/src/main.rs` before `Config::from_env()` / DB connect, sending all tracing strictly to `stderr` so `stdout` stays pure line-delimited JSON-RPC 2.0 and zero `DATABASE_URL` is required
-  - Updated `web/src/modules/mcp/McpView.tsx` with a **Streamable HTTP** / **Stdio Bridge (`maxi-loop mcp`)** config snippet switcher and updated the exposed tools & prompts summary (all 11 tools + 4 prompts)
-  - Created `tests/e2e/verify_mcp.py` covering live Streamable HTTP `/mcp`, spawned `maxi-loop mcp` stdio subprocess (with `DATABASE_URL` stripped), negative checks (missing env, read-only denial, revoked token `401` on HTTP & stdio), and `--test-claude` live verification through real Claude Code CLI (`claude -p --strict-mcp-config`)
-  - Updated `.harness/ARCHITECTURE.md` and archived `F011` to `.harness/progress-archive.md`
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo check --workspace` → PASS
-- `cargo test --workspace` → PASS (94/94 passed, incl. 11/11 `maxi-loop-mcp` unit tests, 8/8 `maxi-loop` lib tests, `mcp_server`, and `p2_performance_mcp`)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency, `D006` preserved)
-- Live E2E against restarted `maxi-loop-dev.service` (`python3 tests/e2e/verify_mcp.py --test-claude`) → PASS (Streamable HTTP `/mcp` + Stdio Bridge `maxi-loop mcp` + Real Claude Code CLI connecting and executing `list_projects` & `list_issues` over **both** Streamable HTTP and Stdio Bridge + negative auth/revocation/unconfigured checks)
-
-**Security notes:**
-- Self-review passed: `maxi-loop mcp` rejects raw tokens on CLI argv (reads from `MAXI_LOOP_MCP_TOKEN` or `--token-env` env var only), redacts tokens in `Debug` & error strings, enforces `http`/`https` schemes without embedded userinfo, uses strict `rustls` + `webpki-roots` TLS verification, bounds stdin lines (256 KiB), HTTP responses (4 MiB), and timeouts (30s); `crates/mcp` remains strictly `sqlx`-free (`D006`); negative tests verify unconfigured env, invalid/revoked token `401` on both HTTP & stdio, read-only triage denial, PII scrubbing, and zero token leak in stdout/stderr
-- Dependencies: 0 new external Rust or npm dependencies added (reused workspace `hyper`, `hyper-util`, `http-body-util`, `rustls`, `tokio`, `tokio-rustls`, `url`, `webpki-roots`). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Used a dedicated blocking `stdin` reader thread feeding a bounded `mpsc` channel into the Tokio runtime rather than holding a blocking lock across `.await`, and routed all `maxi-loop mcp` tracing strictly to `stderr` so `stdout` never carries non-JSON-RPC bytes
 
 **Not finished / blockers:**
 - None
