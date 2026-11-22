@@ -33,6 +33,41 @@
 
 ---
 
+### 2026-11-22 — Antigravity — MaxiBoard-style Top-Left Workspace Switcher & Create Workspace Dialog
+
+**Status at end of session:** done
+
+**Done:**
+- Reviewed `maxi-code` MaxiBoard (`WorkspaceMenu.jsx`, `workspaceSwitcher.js`, `BoardShell.jsx`, `CreateWorkspaceDialog.jsx`, `WorkspaceSettingsPage.jsx`) and identified why creating/switching workspaces was missing in MaxiLoop UI (`App.tsx` skipped `fetchWorkspaces()` in `single_tenant_mode`, rendered a non-clickable top-left workspace block, and had no UI form calling `POST /api/v1/workspaces`)
+- Created `web/src/modules/workspaces/` vertical-slice UI module:
+  - `workspacePrefs.ts`: MaxiBoard 9-color workspace palette, localStorage preferences (colors, starred workspaces, recently-opened timestamps, last-active workspace per tenant), and `arrangeWorkspaces` (Starred → Recently opened → All A–Z + ranked search & match highlight from `SEARCH_MIN = 6`)
+  - `WorkspaceMark.tsx`: MaxiBoard rounded square colored initial mark
+  - `CreateWorkspaceDialog.tsx`: Portaled centered MaxiBoard modal (`Escape`/backdrop close) calling `POST /api/v1/workspaces` with Workspace name, auto-generated editable URL-safe slug, 9-color swatches, and optional parameter overrides (`retention_days_override` bounded by tenant limit, `default_rate_limit_per_minute_override`)
+  - `WorkspaceSwitcher.tsx`: Clickable top-left sidebar trigger (`WorkspaceMark`, name, project count, rotating chevron) opening a portaled MaxiBoard dropdown (`Ctrl/⌘+K` shortcut, keyboard `↑`/`↓`/`Enter` navigation, search box when `>= 6` workspaces, star/unstar, active workspace parameters strip showing tenant/mode, effective workspace role, retention days, and rate limit, plus fixed bottom actions: **Workspace settings & limits**, **Members & access**, and **Create workspace**)
+- Updated `web/src/app/App.tsx`: always loads accessible workspaces (in both single-tenant and multi-tenant modes), restores `?workspace=` or last-opened workspace with accessible-workspace fallback, computes per-workspace effective role matching server RBAC, switches cleanly into newly created workspaces with bottom toast, and wires active workspace retention/limit into sidebar footer & `ProjectsView`
+- Updated `web/src/modules/admin/TeamAndSettingsView.tsx` (supports `initialTab`/`tabNonce` deep jumps from dropdown, adds `+ Create workspace` button, workspace name + color badge editing alongside retention & rate-limit overrides) and `web/src/modules/mcp/McpView.tsx` (passes active `workspace_slug` when creating workspace-scoped MCP tokens)
+- Added `.pm-fade-in` transition in `web/src/index.css`; updated `.harness/ARCHITECTURE.md` and archived `F010` to `.harness/progress-archive.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo check --workspace` → PASS
+- `cargo test --workspace` → PASS (89/89 passed across 39 suites)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Live Headless Chrome E2E smoke test against restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth `GET`/`POST /api/v1/workspaces` `401`/`401`, invalid slug `400`, top-left dropdown opened with parameters & actions, created `Smoke Platform` `14d`/`500/min` via modal, auto-switched workspace + toast verified, temporary workspace cleaned up)
+
+**Security notes:**
+- Self-review passed: all workspace creation and update calls still go through existing server-side validated `POST /api/v1/workspaces` & `PATCH /api/v1/workspaces/{slug}/settings` with `AuthSession` + CSRF + `can_manage_tenant()`/`can_manage_workspace()` + Postgres RLS; UI only persists non-sensitive display prefs (color, stars, last-opened slug) in `localStorage`; negative checks verified unauthenticated `401` and invalid slug `400`
+- Dependencies: 0 new Rust or npm dependencies added
+
+**Key decisions & why:**
+- Portaled the workspace switcher popover to `document.body` anchored to the top-left trigger button's bounding rect so it renders at a comfortable 296px width without being clipped by the 240px sidebar's `overflow-y-auto`, and enabled workspace loading in `single_tenant_mode` since single-tenant hides the tenant tier rather than workspaces within the tenant
+
+**Not finished / blockers:**
+- None
+
 ### 2026-11-22 — Antigravity — F016: P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates
 
 **Status at end of session:** done
@@ -317,42 +352,3 @@
 
 **Not finished / blockers:**
 - Ready to begin Phase 3 — `F012` (Performance monitoring: transactions, spans, 1-minute duration histograms, sampled zstd traces, distributed waterfall, and MCP `list_transactions` / `get_trace` tools)
-
-### 2026-11-22 — Antigravity — F010: Phase 2: Configurable PII scrubbing, Release tracking, and Alerts (Webhook, Telegram, Email)
-
-**Status at end of session:** done
-
-**Done:**
-- Created `migrations/0003_phase2_pii_releases_alerts.sql` adding `issues.first_release`, `pii_scrub_rules`, `releases`, `issue_releases`, `alert_channels`, `alert_rules`, and `alert_deliveries`, all with leading `tenant_id` keys/indexes and `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
-- Extended `crates/platform` with decoupled observer traits (`PiiScrubRulesObserver`, `AlertSignalObserver`) and optional `SmtpConfig` (with redacted password in `Debug`); updated `.env.example` with safe commented SMTP placeholders
-- Implemented inherited configurable PII scrubbing:
-  - `crates/org/src/pii.rs` + `/api/v1/pii-rules` CRUD API (tenant/workspace/project scope, `field_name`/`header_name`/`value_substring`) updating `ScrubRulesCache` live with 0 per-event DB queries
-  - `crates/ingest/src/scrub.rs` & `scrub_cache.rs`: always enforces mandatory baseline scrubbing (`D002`) first, then applies enabled inherited custom rules
-- Implemented Release tracking:
-  - `crates/ingest/src/worker.rs`: persists `issues.first_release`, batch-upserts `releases` (auto-inferring 7..40 hex `commit_sha`) & `issue_releases`, and emits real-time `AlertSignal`s (`NewIssue`, `Regression`) after commit
-  - `crates/issues/src/releases.rs`: `/api/v1/releases`, `/api/v1/projects/{slug}/releases`, `POST /api/v1/releases` (register/annotate commit SHA & notes), and `GET /api/v1/releases/{id}/issues`; updated issue release filter to match `issue_releases`
-- Created `crates/alerts` (`maxi-loop-alerts`):
-  - `ssrf.rs`: static URL + DNS-resolved IP-pinned SSRF guard blocking loopback, private RFC1918, link-local/cloud metadata (`169.254.169.254`), CGNAT, IPv4-mapped IPv6, and non-HTTP(S) schemes
-  - `delivery.rs`: Webhook JSON `POST` with optional HMAC-SHA256 `X-MaxiLoop-Signature` (priority #1 per `D002`), Telegram Bot API (`https://api.telegram.org`), and server-configured SMTP/TLS Email (`tokio-rustls` + `webpki-roots`), with masked secrets in API responses
-  - `engine.rs`, `service.rs`, `http.rs`: real-time `new_issue`/`regression` signal consumer + 60s `spike` threshold evaluator with cooldown deduplication and `alert_deliveries` audit log, plus `/api/v1/alerts/{channels,rules,deliveries}` routes
-- Added MaxiBoard UI views `web/src/modules/releases/ReleasesView.tsx` and `web/src/modules/alerts/AlertsView.tsx` (Alert Rules, Channels & Delivery Log, Configurable PII Scrubbing) wired into `App.tsx` and `api.ts`
-- Added PostgreSQL 16 integration test `crates/server/tests/phase2_pii_releases_alerts.rs` covering inherited PII scrubbing, release-issue linking, SSRF blocking, secret masking, Webhook HMAC-SHA256 (`new_issue`), Telegram (`regression`), SMTP Email (`spike` + cooldown), and Tenant A vs Tenant B isolation
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (48/48 passed)
-- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
-- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified `/api/v1/health`, `/api/v1/pii-rules`, `/api/v1/releases`, `/api/v1/alerts/{channels,rules,deliveries}`, and live `400` SSRF block on `169.254.169.254`) → PASS
-
-**Security notes:**
-- Self-review passed: all PII rules, releases, alert channels, and alert rules validated server-side with strict allow-lists and length/range bounds (no user regexes — prevents ReDoS); webhook & Telegram outbound requests validate URLs statically AND resolve/pin IPs at connect time (blocking loopback, RFC1918, CGNAT, link-local, `169.254.169.254`, IPv4-mapped IPv6, redirects disabled, 10s timeout, strict `webpki-roots` TLS verification); SMTP host/credentials come strictly from server env (`Config.smtp`), never user input, and CRLF header injection is stripped; webhook secrets and Telegram bot tokens are masked in API responses and never logged; all tenant CRUD runs via `begin_tenant_tx` (Postgres RLS) + CSRF + role checks (`can_manage_projects` / `can_triage_issues`); negative tests cover SSRF blocking, secret masking, cooldown suppression, and cross-tenant isolation
-- New dependency: `tokio-rustls` v0.26.6 (official Rustls async Tokio wrapper using `rustls` 0.23 already in `Cargo.lock`, required for TLS-verified outbound Webhook/Telegram HTTPS and SMTP STARTTLS/SMTPS without pulling heavy HTTP/mail client stacks). Promoted `base64`, `hmac`, `rustls`, `url`, `webpki-roots` already in `Cargo.lock`. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
-
-**Key decisions & why:**
-- Kept configurable PII scrubbing strictly additive to mandatory baseline scrubbing (`D002`) using non-regex matchers (`field_name`, `header_name`, `value_substring`) to eliminate ReDoS risk on the ingest worker hot path
-
-**Not finished / blockers:**
-- Ready to begin Phase 2b — `F011` (Embedded MCP server `/mcp` Streamable HTTP for AI issue analysis and triage)

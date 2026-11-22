@@ -5,6 +5,45 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F010: Phase 2: Configurable PII scrubbing, Release tracking, and Alerts (Webhook, Telegram, Email)
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0003_phase2_pii_releases_alerts.sql` adding `issues.first_release`, `pii_scrub_rules`, `releases`, `issue_releases`, `alert_channels`, `alert_rules`, and `alert_deliveries`, all with leading `tenant_id` keys/indexes and `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Extended `crates/platform` with decoupled observer traits (`PiiScrubRulesObserver`, `AlertSignalObserver`) and optional `SmtpConfig` (with redacted password in `Debug`); updated `.env.example` with safe commented SMTP placeholders
+- Implemented inherited configurable PII scrubbing:
+  - `crates/org/src/pii.rs` + `/api/v1/pii-rules` CRUD API (tenant/workspace/project scope, `field_name`/`header_name`/`value_substring`) updating `ScrubRulesCache` live with 0 per-event DB queries
+  - `crates/ingest/src/scrub.rs` & `scrub_cache.rs`: always enforces mandatory baseline scrubbing (`D002`) first, then applies enabled inherited custom rules
+- Implemented Release tracking:
+  - `crates/ingest/src/worker.rs`: persists `issues.first_release`, batch-upserts `releases` (auto-inferring 7..40 hex `commit_sha`) & `issue_releases`, and emits real-time `AlertSignal`s (`NewIssue`, `Regression`) after commit
+  - `crates/issues/src/releases.rs`: `/api/v1/releases`, `/api/v1/projects/{slug}/releases`, `POST /api/v1/releases` (register/annotate commit SHA & notes), and `GET /api/v1/releases/{id}/issues`; updated issue release filter to match `issue_releases`
+- Created `crates/alerts` (`maxi-loop-alerts`):
+  - `ssrf.rs`: static URL + DNS-resolved IP-pinned SSRF guard blocking loopback, private RFC1918, link-local/cloud metadata (`169.254.169.254`), CGNAT, IPv4-mapped IPv6, and non-HTTP(S) schemes
+  - `delivery.rs`: Webhook JSON `POST` with optional HMAC-SHA256 `X-MaxiLoop-Signature` (priority #1 per `D002`), Telegram Bot API (`https://api.telegram.org`), and server-configured SMTP/TLS Email (`tokio-rustls` + `webpki-roots`), with masked secrets in API responses
+  - `engine.rs`, `service.rs`, `http.rs`: real-time `new_issue`/`regression` signal consumer + 60s `spike` threshold evaluator with cooldown deduplication and `alert_deliveries` audit log, plus `/api/v1/alerts/{channels,rules,deliveries}` routes
+- Added MaxiBoard UI views `web/src/modules/releases/ReleasesView.tsx` and `web/src/modules/alerts/AlertsView.tsx` (Alert Rules, Channels & Delivery Log, Configurable PII Scrubbing) wired into `App.tsx` and `api.ts`
+- Added PostgreSQL 16 integration test `crates/server/tests/phase2_pii_releases_alerts.rs` covering inherited PII scrubbing, release-issue linking, SSRF blocking, secret masking, Webhook HMAC-SHA256 (`new_issue`), Telegram (`regression`), SMTP Email (`spike` + cooldown), and Tenant A vs Tenant B isolation
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (48/48 passed)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- Manual live smoke check (restarted `maxi-loop-dev.service` on port `8080`, verified `/api/v1/health`, `/api/v1/pii-rules`, `/api/v1/releases`, `/api/v1/alerts/{channels,rules,deliveries}`, and live `400` SSRF block on `169.254.169.254`) → PASS
+
+**Security notes:**
+- Self-review passed: all PII rules, releases, alert channels, and alert rules validated server-side with strict allow-lists and length/range bounds (no user regexes — prevents ReDoS); webhook & Telegram outbound requests validate URLs statically AND resolve/pin IPs at connect time (blocking loopback, RFC1918, CGNAT, link-local, `169.254.169.254`, IPv4-mapped IPv6, redirects disabled, 10s timeout, strict `webpki-roots` TLS verification); SMTP host/credentials come strictly from server env (`Config.smtp`), never user input, and CRLF header injection is stripped; webhook secrets and Telegram bot tokens are masked in API responses and never logged; all tenant CRUD runs via `begin_tenant_tx` (Postgres RLS) + CSRF + role checks (`can_manage_projects` / `can_triage_issues`); negative tests cover SSRF blocking, secret masking, cooldown suppression, and cross-tenant isolation
+- New dependency: `tokio-rustls` v0.26.6 (official Rustls async Tokio wrapper using `rustls` 0.23 already in `Cargo.lock`, required for TLS-verified outbound Webhook/Telegram HTTPS and SMTP STARTTLS/SMTPS without pulling heavy HTTP/mail client stacks). Promoted `base64`, `hmac`, `rustls`, `url`, `webpki-roots` already in `Cargo.lock`. `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Kept configurable PII scrubbing strictly additive to mandatory baseline scrubbing (`D002`) using non-regex matchers (`field_name`, `header_name`, `value_substring`) to eliminate ReDoS risk on the ingest worker hot path
+
+**Not finished / blockers:**
+- Ready to begin Phase 2b — `F011` (Embedded MCP server `/mcp` Streamable HTTP for AI issue analysis and triage)
+
 ### 2026-11-21 — Antigravity — F009: Envelope load-test generator and real Python (Django/FastAPI) Sentry SDK E2E verification
 
 **Status at end of session:** done

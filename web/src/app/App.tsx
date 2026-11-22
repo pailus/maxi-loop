@@ -19,6 +19,7 @@ import {
   type AuthSessionView,
   type HealthPayload,
   type ProjectView,
+  type Role,
   type WorkspaceView,
   fetchCurrentSession,
   fetchHealth,
@@ -26,7 +27,10 @@ import {
   fetchWorkspaces,
   logoutSession,
 } from "../lib/api";
-import { TeamAndSettingsView } from "../modules/admin/TeamAndSettingsView";
+import {
+  type AdminTab,
+  TeamAndSettingsView,
+} from "../modules/admin/TeamAndSettingsView";
 import { AlertsView } from "../modules/alerts/AlertsView";
 import { LoginView } from "../modules/auth/LoginView";
 import { HealthCard } from "../modules/health/HealthCard";
@@ -39,6 +43,12 @@ import {
 import { ProjectIcon } from "../modules/projects/ProjectIcon";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
+import { CreateWorkspaceDialog } from "../modules/workspaces/CreateWorkspaceDialog";
+import { WorkspaceSwitcher } from "../modules/workspaces/WorkspaceSwitcher";
+import {
+  getLastActiveWorkspaceSlug,
+  recordWorkspaceOpened,
+} from "../modules/workspaces/workspacePrefs";
 
 type ActiveNav =
   | "issues"
@@ -63,6 +73,37 @@ function getInitials(name: string, email: string): string {
     return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
   }
   return src.slice(0, 2).toUpperCase();
+}
+
+const ROLE_RANK: Record<Role, number> = {
+  tenant_owner: 5,
+  tenant_admin: 4,
+  workspace_admin: 3,
+  member: 2,
+  viewer: 1,
+};
+
+function resolveEffectiveWorkspaceRole(
+  session: AuthSessionView,
+  workspaceId: number | null,
+): Role {
+  const tenantRole = session.tenant_role;
+  const wsRole =
+    workspaceId !== null ? session.workspace_roles[String(workspaceId)] : undefined;
+  if (tenantRole && wsRole) {
+    return ROLE_RANK[wsRole] > ROLE_RANK[tenantRole] ? wsRole : tenantRole;
+  }
+  return tenantRole ?? wsRole ?? session.role;
+}
+
+function resolveInitialWorkspaceSlug(session: AuthSessionView): string {
+  const params = new URLSearchParams(window.location.search);
+  const urlWs = params.get("workspace")?.trim();
+  if (urlWs) return urlWs;
+  return (
+    getLastActiveWorkspaceSlug(session.tenant.slug) ??
+    session.default_workspace.slug
+  );
 }
 
 export function App() {
@@ -105,6 +146,13 @@ export function App() {
   });
   const [globalSearch, setGlobalSearch] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [createWsInitialName, setCreateWsInitialName] = useState<string | null>(
+    null,
+  );
+  const [teamTabRequest, setTeamTabRequest] = useState<{
+    tab: AdminTab;
+    nonce: number;
+  }>({ tab: "members", nonce: 0 });
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = useCallback((message: string, undoAction?: () => void) => {
@@ -144,7 +192,7 @@ export function App() {
       if (healthData) setHealth(healthData);
       if (sessionData) {
         setSession(sessionData);
-        setActiveWorkspaceSlug(sessionData.default_workspace.slug);
+        setActiveWorkspaceSlug(resolveInitialWorkspaceSlug(sessionData));
       }
       setBootstrapping(false);
     });
@@ -157,13 +205,23 @@ export function App() {
     async (wsSlug?: string) => {
       if (!session) return;
       try {
-        const [projList, wsList] = await Promise.all([
-          fetchProjects(wsSlug || undefined),
-          session.single_tenant_mode ? Promise.resolve([]) : fetchWorkspaces(),
-        ]);
+        const wsList = await fetchWorkspaces();
+        setWorkspaces(wsList);
+
+        let targetSlug = wsSlug || session.default_workspace.slug;
+        if (
+          wsList.length > 0 &&
+          !wsList.some((w) => w.slug === targetSlug)
+        ) {
+          targetSlug = wsList[0].slug;
+          setActiveWorkspaceSlug(targetSlug);
+          setSelectedProjectSlug("");
+        }
+
+        const projList = await fetchProjects(targetSlug || undefined);
         setProjects(projList);
-        if (!session.single_tenant_mode) {
-          setWorkspaces(wsList);
+        if (targetSlug) {
+          recordWorkspaceOpened(session.tenant.slug, targetSlug);
         }
       } catch {
         // Keep current list on transient error
@@ -180,6 +238,23 @@ export function App() {
     }
   }, [session, activeWorkspaceSlug, loadWorkspaceResources]);
 
+  const handleSelectWorkspace = useCallback(
+    (nextSlug: string) => {
+      setActiveWorkspaceSlug(nextSlug);
+      setSelectedProjectSlug("");
+      setSelectedReleaseFilter("");
+      if (session) {
+        recordWorkspaceOpened(session.tenant.slug, nextSlug);
+      }
+    },
+    [session],
+  );
+
+  const openTeamTab = useCallback((tab: AdminTab) => {
+    setTeamTabRequest((prev) => ({ tab, nonce: prev.nonce + 1 }));
+    setActiveNav("team");
+  }, []);
+
   async function handleLogout() {
     try {
       await logoutSession();
@@ -187,8 +262,11 @@ export function App() {
       // Clear local session state regardless
     }
     setSession(null);
+    setWorkspaces([]);
+    setActiveWorkspaceSlug("");
     setProjects([]);
     setSelectedProjectSlug("");
+    setCreateWsInitialName(null);
   }
 
   if (bootstrapping) {
@@ -205,21 +283,31 @@ export function App() {
         health={health}
         onAuthenticated={(newSession) => {
           setSession(newSession);
-          setActiveWorkspaceSlug(newSession.default_workspace.slug);
+          setActiveWorkspaceSlug(resolveInitialWorkspaceSlug(newSession));
         }}
       />
     );
   }
 
   const dbHealthy = health?.database === "ok" && health?.status === "ok";
-  const canTriage = session.role !== "viewer";
+  const activeWorkspace =
+    workspaces.find((w) => w.slug === activeWorkspaceSlug) ??
+    workspaces.find((w) => w.slug === session.default_workspace.slug) ??
+    null;
+  const activeWorkspaceRole = resolveEffectiveWorkspaceRole(
+    session,
+    activeWorkspace?.id ?? session.default_workspace.id,
+  );
+  const canTriage = activeWorkspaceRole !== "viewer";
   const canManageProjects =
-    session.role === "tenant_owner" ||
-    session.role === "tenant_admin" ||
-    session.role === "workspace_admin";
+    activeWorkspaceRole === "tenant_owner" ||
+    activeWorkspaceRole === "tenant_admin" ||
+    activeWorkspaceRole === "workspace_admin";
+  const canCreateWorkspace =
+    session.tenant_role === "tenant_owner" ||
+    session.tenant_role === "tenant_admin";
   const currentWorkspaceName =
-    workspaces.find((w) => w.slug === activeWorkspaceSlug)?.name ??
-    session.default_workspace.name;
+    activeWorkspace?.name ?? session.default_workspace.name;
   const userInitials = getInitials(session.user.name, session.user.email);
 
   const issuesTabMode: IssuesTabMode =
@@ -313,42 +401,25 @@ export function App() {
         {/* 240px MaxiBoard Sunken Sidebar */}
         <aside className="w-60 shrink-0 bg-[var(--color-bg-sidebar)] border-r border-[var(--color-border)] p-2.5 flex flex-col justify-between overflow-y-auto">
           <div>
-            {/* Workspace Mark Header (hides tenant switcher when single_tenant_mode is true per F-ADM-10) */}
-            <div className="p-2 rounded-md mb-2 flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-[6px] bg-[var(--color-success)] text-white font-bold text-sm inline-flex items-center justify-center shrink-0">
-                {currentWorkspaceName.slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-bold text-[var(--color-text)] truncate">
-                  {currentWorkspaceName}
-                </div>
-                <div className="text-xs text-[var(--color-text-dim)] truncate">
-                  {session.single_tenant_mode
-                    ? `Single-tenant · ${projects.length} projects`
-                    : `${session.tenant.name} · ${projects.length} projects`}
-                </div>
-              </div>
-            </div>
-
-            {!session.single_tenant_mode && workspaces.length > 1 && (
-              <div className="px-2 mb-2">
-                <select
-                  value={activeWorkspaceSlug}
-                  onChange={(e) => {
-                    setActiveWorkspaceSlug(e.target.value);
-                    setSelectedProjectSlug("");
-                  }}
-                  aria-label="Switch workspace"
-                  className="pm-input h-8 text-xs"
-                >
-                  {workspaces.map((w) => (
-                    <option key={w.id} value={w.slug}>
-                      Workspace: {w.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            {/* Top-Left MaxiBoard Workspace Switcher & Dropdown */}
+            <WorkspaceSwitcher
+              session={session}
+              workspaces={workspaces}
+              activeWorkspace={activeWorkspace}
+              activeWorkspaceSlug={
+                activeWorkspaceSlug || session.default_workspace.slug
+              }
+              activeWorkspaceRole={activeWorkspaceRole}
+              projectCount={projects.length}
+              canCreateWorkspace={canCreateWorkspace}
+              canManageWorkspace={canManageProjects}
+              onSelectWorkspace={handleSelectWorkspace}
+              onOpenCreateWorkspace={(initialName = "") =>
+                setCreateWsInitialName(initialName)
+              }
+              onOpenWorkspaceSettings={() => openTeamTab("settings")}
+              onOpenWorkspaceMembers={() => openTeamTab("members")}
+            />
 
             {/* Primary Nav Items */}
             <nav className="space-y-0.5" aria-label="Main navigation">
@@ -538,9 +609,19 @@ export function App() {
           {/* Sidebar Runtime & User Session Footer */}
           <div className="pt-3 border-t border-[var(--color-border)] px-2 space-y-1 text-[11px] text-[var(--color-text-dim)]">
             <div>Ingest worker: 100ms batch</div>
-            <div>Retention: {session.tenant.retention_days}d daily partitions</div>
+            <div>
+              Retention:{" "}
+              {activeWorkspace?.effective_retention_days ??
+                session.tenant.retention_days}
+              d ·{" "}
+              {(
+                activeWorkspace?.effective_rate_limit_per_minute ??
+                session.tenant.default_rate_limit_per_minute
+              ).toLocaleString()}
+              /m
+            </div>
             <div className="pt-1.5 font-semibold text-[var(--color-text-muted)] truncate">
-              {session.user.email} ({session.role})
+              {session.user.email} ({activeWorkspaceRole})
             </div>
             <button
               type="button"
@@ -610,6 +691,7 @@ export function App() {
         {activeNav === "mcp" && (
           <McpView
             workspaceName={currentWorkspaceName}
+            workspaceSlug={activeWorkspaceSlug || session.default_workspace.slug}
             projects={projects}
             canTriage={canTriage}
             onShowToast={(msg) => showToast(msg)}
@@ -620,7 +702,10 @@ export function App() {
           <ProjectsView
             workspaceName={currentWorkspaceName}
             workspaceSlug={activeWorkspaceSlug || undefined}
-            globalRetentionDays={session.tenant.retention_days}
+            globalRetentionDays={
+              activeWorkspace?.effective_retention_days ??
+              session.tenant.retention_days
+            }
             projects={projects}
             canManageProjects={canManageProjects}
             onProjectsChanged={() =>
@@ -640,6 +725,16 @@ export function App() {
           <TeamAndSettingsView
             session={session}
             projects={projects}
+            initialTab={teamTabRequest.tab}
+            tabNonce={teamTabRequest.nonce}
+            activeWorkspaceSlug={
+              activeWorkspaceSlug || session.default_workspace.slug
+            }
+            onOpenCreateWorkspace={
+              canCreateWorkspace
+                ? () => setCreateWsInitialName("")
+                : undefined
+            }
             onSettingsChanged={async () => {
               const refreshed = await fetchCurrentSession().catch(() => null);
               if (refreshed) setSession(refreshed);
@@ -653,6 +748,25 @@ export function App() {
 
         {activeNav === "health" && <HealthCard />}
       </div>
+
+      {/* Create Workspace Modal (MaxiBoard style) */}
+      {createWsInitialName !== null && (
+        <CreateWorkspaceDialog
+          tenant={session.tenant}
+          initialName={createWsInitialName}
+          onClose={() => setCreateWsInitialName(null)}
+          onCreated={(created) => {
+            setCreateWsInitialName(null);
+            setWorkspaces((prev) =>
+              prev.some((w) => w.id === created.id)
+                ? prev
+                : [...prev, created],
+            );
+            handleSelectWorkspace(created.slug);
+            showToast(`Workspace ${created.name} created`);
+          }}
+        />
+      )}
 
       {/* MaxiBoard Bottom Toast (#172B4D) */}
       {toast && (

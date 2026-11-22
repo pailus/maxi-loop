@@ -35,7 +35,7 @@ tests/
 web/                     — React + TypeScript + Vite + Tailwind CSS v4 frontend (MaxiBoard light theme, built into `web/dist`)
   src/app/               — App shell (56px MaxiBoard topbar, 240px sidebar, global `/` search, URL deep-link support, undo toast)
   src/lib/               — Shared HTTP client (`api.ts` with cookie auth & automatic `X-CSRF-Token`)
-  src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `issues/`, `performance/`, `releases/`, `alerts/`, `mcp/`, `projects/`, `admin/`, `health/`)
+  src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `workspaces/`, `issues/`, `performance/`, `releases/`, `alerts/`, `mcp/`, `projects/`, `admin/`, `health/`)
 docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & integration tests
 .harness/                — AI working rules, feature list, progress log, decisions, handoff
 ```

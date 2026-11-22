@@ -28,15 +28,25 @@ import {
   updateTenantSettings,
   updateWorkspaceSettings,
 } from "../../lib/api";
+import { WorkspaceMark } from "../workspaces/WorkspaceMark";
+import {
+  WORKSPACE_COLORS,
+  resolveWorkspaceColor,
+  saveWorkspaceColor,
+} from "../workspaces/workspacePrefs";
+
+export type AdminTab = "members" | "settings" | "api_tokens";
 
 interface TeamAndSettingsViewProps {
   session: AuthSessionView;
   projects: ProjectView[];
+  initialTab?: AdminTab;
+  tabNonce?: number;
+  activeWorkspaceSlug?: string;
+  onOpenCreateWorkspace?: () => void;
   onSettingsChanged: () => Promise<void>;
   onShowToast: (message: string) => void;
 }
-
-type AdminTab = "members" | "settings" | "api_tokens";
 
 const TENANT_ROLES: Role[] = ["tenant_owner", "tenant_admin", "member", "viewer"];
 const WORKSPACE_ROLES: Role[] = ["workspace_admin", "member", "viewer"];
@@ -44,10 +54,18 @@ const WORKSPACE_ROLES: Role[] = ["workspace_admin", "member", "viewer"];
 export function TeamAndSettingsView({
   session,
   projects,
+  initialTab = "members",
+  tabNonce = 0,
+  activeWorkspaceSlug,
+  onOpenCreateWorkspace,
   onSettingsChanged,
   onShowToast,
 }: TeamAndSettingsViewProps) {
-  const [tab, setTab] = useState<AdminTab>("members");
+  const [tab, setTab] = useState<AdminTab>(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab, tabNonce]);
 
   // Members state
   const [members, setMembers] = useState<TenantMemberView[]>([]);
@@ -78,7 +96,7 @@ export function TeamAndSettingsView({
 
   // Workspace settings editor state
   const [wsEdits, setWsEdits] = useState<
-    Record<string, { retention: string; rpm: string }>
+    Record<string, { name: string; color: string; retention: string; rpm: string }>
   >({});
 
   // Per-project API tokens state
@@ -127,9 +145,14 @@ export function TeamAndSettingsView({
       ]);
       setMembers(mList);
       setWorkspaces(wList);
-      const nextEdits: Record<string, { retention: string; rpm: string }> = {};
+      const nextEdits: Record<
+        string,
+        { name: string; color: string; retention: string; rpm: string }
+      > = {};
       for (const w of wList) {
         nextEdits[w.slug] = {
+          name: w.name,
+          color: resolveWorkspaceColor(session.tenant.slug, w.slug),
           retention:
             w.retention_days_override !== null
               ? String(w.retention_days_override)
@@ -148,7 +171,7 @@ export function TeamAndSettingsView({
     } finally {
       setLoadingMembers(false);
     }
-  }, []);
+  }, [session.tenant.slug]);
 
   const loadApiTokens = useCallback(async () => {
     setLoadingTokens(true);
@@ -167,7 +190,7 @@ export function TeamAndSettingsView({
 
   useEffect(() => {
     void loadMembersAndWorkspaces();
-  }, [loadMembersAndWorkspaces]);
+  }, [loadMembersAndWorkspaces, activeWorkspaceSlug]);
 
   useEffect(() => {
     if (tab === "api_tokens") {
@@ -255,6 +278,11 @@ export function TeamAndSettingsView({
     const edit = wsEdits[wsSlug];
     if (!edit) return;
     try {
+      const cleanName = edit.name.trim();
+      if (!cleanName) {
+        setSettingsError("Workspace name cannot be empty.");
+        return;
+      }
       const retentionOverride = edit.retention.trim()
         ? Number.parseInt(edit.retention.trim(), 10)
         : null;
@@ -262,12 +290,14 @@ export function TeamAndSettingsView({
         ? Number.parseInt(edit.rpm.trim(), 10)
         : null;
       await updateWorkspaceSettings(wsSlug, {
+        name: cleanName,
         retention_days_override: retentionOverride,
         default_rate_limit_per_minute_override: rpmOverride,
       });
+      saveWorkspaceColor(session.tenant.slug, wsSlug, edit.color);
       await onSettingsChanged();
       await loadMembersAndWorkspaces();
-      onShowToast(`Workspace ${wsSlug} inherited overrides updated`);
+      onShowToast(`Workspace ${cleanName} settings updated`);
     } catch (err) {
       setSettingsError(
         err instanceof Error
@@ -719,87 +749,192 @@ export function TeamAndSettingsView({
 
             {/* Workspace Overrides Table */}
             <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-              <h2 className="text-sm font-bold text-[var(--color-text)]">
-                Workspace Inheritance Overrides
-              </h2>
-              <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
-                Leave override fields blank to inherit the tenant default. Changes propagate immediately to the in-memory ingest rate limiter.
-              </p>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="text-sm font-bold text-[var(--color-text)]">
+                    Workspaces &amp; Inheritance Overrides ({workspaces.length})
+                  </h2>
+                  <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
+                    Rename workspaces, pick badge colors, or override tenant defaults. Leave override fields blank to inherit the tenant default. Changes propagate immediately to the in-memory ingest rate limiter.
+                  </p>
+                </div>
+                {canManageTenant && onOpenCreateWorkspace && (
+                  <button
+                    type="button"
+                    onClick={onOpenCreateWorkspace}
+                    className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <Plus size={14} />
+                    <span>Create workspace</span>
+                  </button>
+                )}
+              </div>
 
               <div className="mt-4 space-y-3">
                 {workspaces.map((ws) => {
-                  const edit = wsEdits[ws.slug] ?? { retention: "", rpm: "" };
+                  const edit = wsEdits[ws.slug] ?? {
+                    name: ws.name,
+                    color: resolveWorkspaceColor(session.tenant.slug, ws.slug),
+                    retention: "",
+                    rpm: "",
+                  };
+                  const isCurrentWs = ws.slug === activeWorkspaceSlug;
                   return (
                     <div
                       key={ws.id}
-                      className="rounded-md border border-[var(--color-border-light)] bg-[var(--color-bg-muted)] p-3.5 grid grid-cols-1 md:grid-cols-[1fr_170px_190px_auto] gap-3 items-end"
+                      className={`rounded-md border p-3.5 space-y-3 ${
+                        isCurrentWs
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]/30"
+                          : "border-[var(--color-border-light)] bg-[var(--color-bg-muted)]"
+                      }`}
                     >
-                      <div>
-                        <div className="text-xs font-bold text-[var(--color-text)]">
-                          {ws.name}{" "}
-                          <span className="pm-mono font-normal text-[var(--color-text-dim)]">
-                            ({ws.slug})
-                          </span>
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <WorkspaceMark
+                            name={edit.name || ws.name}
+                            slug={ws.slug}
+                            tenantSlug={session.tenant.slug}
+                            colorOverride={edit.color}
+                            size={30}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-[var(--color-text)] flex items-center gap-1.5 flex-wrap">
+                              <span>{ws.name}</span>
+                              <span className="pm-mono font-normal text-[var(--color-text-dim)]">
+                                ({ws.slug})
+                              </span>
+                              {ws.is_default && (
+                                <span className="pm-lozenge">DEFAULT</span>
+                              )}
+                              {isCurrentWs && (
+                                <span className="pm-lozenge pm-lozenge-primary">
+                                  ACTIVE
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+                              Effective:{" "}
+                              <strong>{ws.effective_retention_days}d</strong>{" "}
+                              retention ·{" "}
+                              <strong>
+                                {ws.effective_rate_limit_per_minute.toLocaleString()}
+                                /min
+                              </strong>{" "}
+                              default project limit
+                            </div>
+                          </div>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
-                          Effective: <strong>{ws.effective_retention_days}d</strong> retention ·{" "}
-                          <strong>
-                            {ws.effective_rate_limit_per_minute.toLocaleString()}/min
-                          </strong>{" "}
-                          default project limit
+
+                        <div className="flex items-center gap-1">
+                          {WORKSPACE_COLORS.map((c) => {
+                            const selected = edit.color === c;
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                disabled={!canManageAnyWorkspace}
+                                onClick={() =>
+                                  setWsEdits((prev) => ({
+                                    ...prev,
+                                    [ws.slug]: { ...edit, color: c },
+                                  }))
+                                }
+                                title={`Workspace color ${c}`}
+                                aria-label={`Workspace color ${c}`}
+                                className="w-5 h-5 rounded flex items-center justify-center cursor-pointer disabled:opacity-50"
+                                style={{
+                                  backgroundColor: c,
+                                  boxShadow: selected
+                                    ? `0 0 0 1.5px var(--color-bg-card), 0 0 0 3px ${c}`
+                                    : undefined,
+                                }}
+                              >
+                                {selected && (
+                                  <Check
+                                    size={11}
+                                    className="text-white"
+                                    strokeWidth={3}
+                                  />
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
 
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
-                          Retention override (d)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={session.tenant.retention_days}
-                          disabled={!canManageAnyWorkspace}
-                          value={edit.retention}
-                          placeholder={`Inherit (${session.tenant.retention_days}d)`}
-                          onChange={(e) =>
-                            setWsEdits((prev) => ({
-                              ...prev,
-                              [ws.slug]: { ...edit, retention: e.target.value },
-                            }))
-                          }
-                          className="pm-input pm-mono h-8 text-xs"
-                        />
-                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-[1fr_170px_190px_auto] gap-3 items-end">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                            Workspace name
+                          </label>
+                          <input
+                            type="text"
+                            maxLength={128}
+                            disabled={!canManageAnyWorkspace}
+                            value={edit.name}
+                            onChange={(e) =>
+                              setWsEdits((prev) => ({
+                                ...prev,
+                                [ws.slug]: { ...edit, name: e.target.value },
+                              }))
+                            }
+                            className="pm-input h-8 text-xs"
+                          />
+                        </div>
 
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
-                          Default limit override (/min)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={1000000}
-                          disabled={!canManageAnyWorkspace}
-                          value={edit.rpm}
-                          placeholder={`Inherit (${session.tenant.default_rate_limit_per_minute})`}
-                          onChange={(e) =>
-                            setWsEdits((prev) => ({
-                              ...prev,
-                              [ws.slug]: { ...edit, rpm: e.target.value },
-                            }))
-                          }
-                          className="pm-input pm-mono h-8 text-xs"
-                        />
-                      </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                            Retention override (d)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={session.tenant.retention_days}
+                            disabled={!canManageAnyWorkspace}
+                            value={edit.retention}
+                            placeholder={`Inherit (${session.tenant.retention_days}d)`}
+                            onChange={(e) =>
+                              setWsEdits((prev) => ({
+                                ...prev,
+                                [ws.slug]: { ...edit, retention: e.target.value },
+                              }))
+                            }
+                            className="pm-input pm-mono h-8 text-xs"
+                          />
+                        </div>
 
-                      <button
-                        type="button"
-                        disabled={!canManageAnyWorkspace}
-                        onClick={() => void handleSaveWorkspaceSettings(ws.slug)}
-                        className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
-                      >
-                        Apply
-                      </button>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                            Default limit override (/min)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={1000000}
+                            disabled={!canManageAnyWorkspace}
+                            value={edit.rpm}
+                            placeholder={`Inherit (${session.tenant.default_rate_limit_per_minute})`}
+                            onChange={(e) =>
+                              setWsEdits((prev) => ({
+                                ...prev,
+                                [ws.slug]: { ...edit, rpm: e.target.value },
+                              }))
+                            }
+                            className="pm-input pm-mono h-8 text-xs"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={!canManageAnyWorkspace}
+                          onClick={() =>
+                            void handleSaveWorkspaceSettings(ws.slug)
+                          }
+                          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Apply
+                        </button>
+                      </div>
                     </div>
                   );
                 })}

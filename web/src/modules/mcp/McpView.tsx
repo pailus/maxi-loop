@@ -25,6 +25,7 @@ import {
 
 interface McpViewProps {
   workspaceName: string;
+  workspaceSlug?: string;
   projects: ProjectView[];
   canTriage: boolean;
   onShowToast: (message: string) => void;
@@ -32,6 +33,7 @@ interface McpViewProps {
 
 export function McpView({
   workspaceName,
+  workspaceSlug,
   projects,
   canTriage,
   onShowToast,
@@ -89,6 +91,7 @@ export function McpView({
       const res = await createMcpToken({
         name: name.trim(),
         access_scope: accessScope,
+        workspace_slug: accessScope === "workspace" ? workspaceSlug : undefined,
         project_slug: accessScope === "project" ? projectSlug : undefined,
         can_triage: canTriage && allowTriage,
         rate_limit_per_minute: Number.isFinite(rpm) ? rpm : 60,
@@ -406,7 +409,9 @@ export function McpView({
                     className="pm-input"
                   >
                     <option value="tenant">Tenant (all accessible projects)</option>
-                    <option value="workspace">Default workspace</option>
+                    <option value="workspace">
+                      Current workspace ({workspaceName})
+                    </option>
                     <option value="project">Single project (least privilege)</option>
                   </select>
                 </div>
