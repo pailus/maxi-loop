@@ -33,6 +33,44 @@
 
 ---
 
+### 2026-11-22 — Antigravity — F015: P2 Issues: Manual issue merge/split (with fingerprint alias routing) and event breadcrumbs viewer
+
+**Status at end of session:** done
+
+**Done:**
+- Created `migrations/0008_p2_issue_merge_split.sql` adding backward-compatible nullable `events.fingerprint TEXT` (across daily partitions) and `issue_fingerprints` (`PRIMARY KEY (tenant_id, project_id, fingerprint)`) with `ENABLE`/`FORCE ROW LEVEL SECURITY` (`maxi_loop_app` + `maxi_loop_worker`)
+- Updated `crates/ingest/src/worker.rs` to persist each event's original computed `fingerprint` on `events` and resolve merged fingerprint aliases via `issue_fingerprints` so future incoming envelopes for merged fingerprints automatically route to the target issue (preserving the target issue's title/exception metadata)
+- Added `crates/issues/src/breadcrumbs.rs` (`F-ISS-10`) extracting & normalizing Sentry event breadcrumbs (`breadcrumbs.values` or flat array, normalizing numeric epoch & ISO-8601 timestamps, level, type, category, message, data; bounded to 200 most recent) and exposed `breadcrumbs` on `IssueEventView` & `IssueDetailView`
+- Added `crates/issues/src/merge_split.rs` and HTTP routes (`POST /api/v1/issues/merge`, `POST /api/v1/issues/{issue_id}/split`, plus `/t/{tenant}/w/{workspace}/p/{project}/...` slug routes) (`F-ISS-9`):
+  - Transactional `merge_issues` (deterministic `ORDER BY id ASC FOR UPDATE` locking, same-project enforcement, re-parenting `events`, `issue_notes`, `alert_deliveries`, merging `issue_hourly_counters` & `issue_releases`, recording `issue_fingerprints` aliases, audit note, deleting merged sources)
+  - Transactional `split_issue` supporting both merged-fingerprint detachment (`fingerprints`) and arbitrary event splitting (`event_ids`), re-allocating events/counters/releases, refreshing `sample_event_id`, removing detached aliases so future events route to the new standalone issue, and recording audit notes
+- Updated MaxiBoard React UI (`web/src/lib/api.ts`, `web/src/modules/issues/BreadcrumbsView.tsx`, `IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`):
+  - Structured chronological **Breadcrumbs** timeline (level/text filter, type/category icons, expandable scrubbed `data` JSON) in full view, expandable stored-events inspector, and compact preview in the right drawer
+  - Multi-select checkboxes + **Merge issues** toolbar in `IssuesView.tsx` (enforcing same-project selection and primary target selector)
+  - **Merged fingerprints** panel & **Split into new issue** action in `IssueDetailFullView.tsx` plus checkbox multi-select **Split selected events** inside the **Stored events** tab
+- Added PostgreSQL 16 integration test `crates/server/tests/p2_merge_split_breadcrumbs.rs` covering breadcrumbs + PII scrubbing, multi-issue merge, post-merge alias ingest routing, split by fingerprint + post-split routing, split by `event_ids`, RBAC (`viewer` `403`), API token scoping, cross-project denial (`400`), and Tenant A vs Tenant B isolation (`404`)
+- Archived `F008` to `.harness/progress-archive.md` and updated `.harness/ARCHITECTURE.md`
+
+**Verification run:**
+- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
+- `npm --prefix web audit` → PASS (0 vulnerabilities)
+- `cargo fmt --check` → PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
+- `cargo test --workspace` → PASS (82/82 passed, incl. 5 `maxi-loop-issues` unit tests & `p2_merge_split_breadcrumbs` Postgres 16 integration test)
+- `cargo build --workspace` & `cargo build --release -p maxi-loop` → PASS
+- `cargo tree --depth 1 -p maxi-loop-mcp` → PASS (0 direct `sqlx` dependency)
+- Live manual smoke check on restarted `maxi-loop-dev.service` (port `8080`) → PASS (unauth merge `401`, breadcrumbs normalized with `Authorization`/`password` `[Filtered]`, merge → post-merge alias ingest routing `3 events` → split `1+2`, embedded SPA `200`)
+
+**Security notes:**
+- Self-review passed: all merge/split inputs validated server-side (`target_issue_id > 0`, `source_issue_ids` 1..=50 non-self deduped, mutually exclusive `fingerprints` 1..=20 or `event_ids` 1..=50, cannot split all events out); all queries parameterized inside `begin_tenant_tx` (Postgres RLS `maxi_loop_app` + `issue_fingerprints` RLS); every endpoint enforces `AuthSession` + CSRF + `enforce_api_token_write()` + `enforce_project_write()` + `can_triage_issues()` + same-project check; breadcrumbs are derived strictly from PII-scrubbed event payloads (`[Filtered]`); negative tests verify unauth (`401`), viewer (`403`), read-only API token (`403`), cross-project merge (`400`), cross-project API token split denial, cross-tenant merge/split (`404`), self-merge (`400`), and splitting all events (`400`)
+- Dependencies: 0 new external Rust or npm dependencies added (promoted workspace `sha2` & `hex` in `crates/issues`). `cargo-audit` and `gitleaks` are not installed on this host (skipped, noted explicitly)
+
+**Key decisions & why:**
+- Stored secondary merged fingerprints in a dedicated RLS-protected `issue_fingerprints` table (plus `events.fingerprint`) rather than mutating `issues.fingerprint` so ingest lookup stays fast (direct PK hit on unmerged issues, single PK alias lookup for merged fingerprints) and split can accurately restore original fingerprints and events
+
+**Not finished / blockers:**
+- Ready to continue P2 with `F016` (Compare releases `F-PRF-6`, Slow DB queries/operations `F-PRF-7`, and MCP `list_slow_queries`/`compare_releases` `F-MCP-14` + prompt templates `F-MCP-15`)
+
 ### 2026-11-22 — Antigravity — Browser Ingest CORS & Official React SDK (`@sentry/react`) Headless Chrome E2E
 
 **Status at end of session:** done
@@ -309,36 +347,3 @@
 
 **Not finished / blockers:**
 - Phase 1 (MVP, `F001`–`F009`) is now 100% complete! Ready to start Phase 2 (`F010`: Configurable PII scrubbing, Release tracking, and Alerts — Webhook first, then Telegram and Email)
-
-### 2026-11-21 — Antigravity — F008: Embedded React UI: Login, Projects & DSN, Issues list/detail, and hourly chart
-
-**Status at end of session:** done
-
-**Done:**
-- Designed and iterated 4-screen FigCraft mockup (`/home/p4ck/Documents/maxi-loop-ui.figcraft`) via FigCraft MCP adopting the **MaxiBoard** light Jira-inspired design system (`D007`)
-- Updated `web/src/index.css` & `web/index.html` with MaxiBoard CSS custom properties (`#FFFFFF`, `#F7F8F9`, `#172B4D`, `#0C66E4`), lozenge utilities (`.pm-lozenge-*`), `.pm-tab`, `.pm-input`, and `.pm-bicon`
-- Extended `web/src/lib/api.ts` with typed endpoints for session auth (`login`, `logout`, `me`), workspaces, projects & DSN rotation, issues list/detail/events/stats, and triage status mutations with automatic `X-CSRF-Token` header enforcement
-- Created `web/src/modules/projects/ProjectIcon.tsx` rendering 12 Maxiflow Doodle SVG project icons (`software-development`, `web-development`, `cloud-devops`, `cyber-security`, `data-analytics`, `ai-automation`, `mobile-app`, `ecommerce`, `finance`, `infrastructure-iot`, `project-management`, `ui-ux-design`) as pure typed React JSX `<svg>` components (zero `dangerouslySetInnerHTML`)
-- Created `web/src/modules/auth/LoginView.tsx` (single-tenant default workspace context, optional tenant slug disclosure, `$ maxi-loop bootstrap` hint)
-- Created `web/src/modules/issues/` (`IssuesView.tsx`, `IssueDetailDrawer.tsx`, `IssueDetailFullView.tsx`, `OccurrenceChart.tsx`, `StackTraceView.tsx`): 3-pane master-detail split layout, status tabs (`Unresolved`/`Regressed`/`Resolved`/`Ignored`/`All`), filter toolbar (`project`, `environment`, `release`, `query`, `sort`), pagination, `1h`/`1d` occurrence histogram chart, `In-app only`/`All frames` stack trace code viewer, PII-scrubbed sample event payload viewer, and `Resolve`/`Ignore`/`Unresolve` triage with `#172B4D` undo toast
-- Created `web/src/modules/projects/ProjectsView.tsx` (project cards with copyable Sentry DSN, DSN rotation, retention/rate-limit metadata, and right-hand Create Project drawer with MaxiBoard icon picker + `sentry_sdk.init` quickstart snippet)
-- Updated `web/src/app/App.tsx` and `web/src/modules/health/HealthCard.tsx` with the 56px MaxiBoard topbar (`/` global search shortcut) and 240px sidebar
-
-**Verification run:**
-- `npm --prefix web run build` → PASS (`tsc --noEmit && vite build`)
-- `npm --prefix web audit` → PASS (0 vulnerabilities)
-- `cargo fmt --check` → PASS
-- `cargo clippy --workspace --all-targets -- -D warnings` → PASS (0 warnings)
-- `cargo test --workspace` → PASS (39/39 passed)
-- `cargo build --workspace` → PASS
-- Manual smoke check (live `maxi-loop serve` serving embedded MaxiBoard-styled SPA + login + project creation + envelope ingest + filtered issues list & detail with `[Filtered]` PII + clean SIGTERM) → PASS
-
-**Security notes:**
-- Self-review passed: all dynamic strings rendered via React JSX auto-escaping (0 `dangerouslySetInnerHTML` or `eval`); all mutating requests send `X-CSRF-Token` and `credentials: "same-origin"`; role permissions (`canTriage`, `canManageProjects`) respected in UI and enforced server-side
-- New dependency: `lucide-react` v1.21.0 in `web/package.json` (requested by user to match MaxiBoard icon set; `npm --prefix web audit` = 0 vulnerabilities)
-
-**Key decisions & why:**
-- Recorded `D007` in `.harness/decisions.md` (MaxiBoard light theme + `lucide-react` + Maxiflow Doodle project SVG icons)
-
-**Not finished / blockers:**
-- Ready to begin F009 (Envelope load-test generator and real Python Django/FastAPI Sentry SDK E2E verification)

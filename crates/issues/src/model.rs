@@ -3,6 +3,9 @@ use maxi_loop_platform::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::breadcrumbs::BreadcrumbView;
+use crate::merge_split::IssueFingerprintView;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueStatus {
@@ -147,6 +150,8 @@ pub struct IssueEventView {
     pub event_id: String,
     pub issue_id: i64,
     pub project_id: i64,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
     pub received_at: DateTime<Utc>,
     pub environment: String,
     pub release: Option<String>,
@@ -156,6 +161,8 @@ pub struct IssueEventView {
     pub exception_value: String,
     pub stack_frames: Value,
     pub tags: Value,
+    #[serde(default)]
+    pub breadcrumbs: Vec<BreadcrumbView>,
     pub payload: Value,
     pub is_sample: bool,
 }
@@ -179,6 +186,10 @@ pub struct IssueDetailView {
     pub issue: IssueSummaryView,
     pub stack_frames: Value,
     pub tags: Value,
+    #[serde(default)]
+    pub breadcrumbs: Vec<BreadcrumbView>,
+    #[serde(default)]
+    pub merged_fingerprints: Vec<IssueFingerprintView>,
     pub sample_event: Option<IssueEventView>,
     pub hourly_series: Vec<CounterBucketPoint>,
     pub daily_series: Vec<CounterBucketPoint>,

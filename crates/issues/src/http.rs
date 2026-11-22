@@ -1,12 +1,16 @@
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
 use maxi_loop_auth::model::AuthSession;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 
+use crate::merge_split::{
+    MergeIssuesInput, MergeIssuesResponse, SplitIssueInput, SplitIssueResponse, merge_issues,
+    split_issue,
+};
 use crate::model::{
     IssueDetailView, IssueEventView, IssueListFilter, IssueStatsResponse, IssueSummaryView,
     PaginatedIssuesResponse, UpdateIssueStatusInput,
@@ -31,6 +35,7 @@ where
     Router::new()
         // Single-tenant & default convenience routes
         .route("/issues", get(default_list_issues_handler))
+        .route("/issues/merge", post(default_merge_issues_handler))
         .route(
             "/projects/{project_slug}/issues",
             get(default_project_list_issues_handler),
@@ -38,6 +43,10 @@ where
         .route(
             "/issues/{issue_id}",
             get(default_get_issue_detail_handler).patch(default_update_issue_status_handler),
+        )
+        .route(
+            "/issues/{issue_id}/split",
+            post(default_split_issue_handler),
         )
         .route(
             "/issues/{issue_id}/status",
@@ -66,8 +75,16 @@ where
             get(project_list_issues_handler),
         )
         .route(
+            "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/merge",
+            post(project_merge_issues_handler),
+        )
+        .route(
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}",
             get(project_get_issue_detail_handler).patch(project_update_issue_status_handler),
+        )
+        .route(
+            "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/split",
+            post(project_split_issue_handler),
         )
         .route(
             "/t/{tenant_slug}/w/{workspace_slug}/p/{project_slug}/issues/{issue_id}/status",
@@ -688,4 +705,156 @@ async fn list_release_issues_handler(
         items.retain(|i| session.can_access_workspace(i.workspace_id));
     }
     Ok(Json(items))
+}
+
+async fn default_merge_issues_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Json(input): Json<MergeIssuesInput>,
+) -> Result<Json<MergeIssuesResponse>, AppError> {
+    session.enforce_api_token_write()?;
+    let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    let target = get_issue_detail(
+        &state.db,
+        session.tenant_ctx,
+        scope.clone(),
+        input.target_issue_id,
+        Some(1),
+    )
+    .await?;
+    session.enforce_project_write(target.issue.project_id, target.issue.workspace_id)?;
+
+    let res = merge_issues(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        scope,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: if session.is_api_token() { "api" } else { "ui" },
+        },
+        input,
+    )
+    .await?;
+    Ok(Json(res))
+}
+
+async fn project_merge_issues_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug)): Path<(String, String, String)>,
+    Json(input): Json<MergeIssuesInput>,
+) -> Result<Json<MergeIssuesResponse>, AppError> {
+    session.enforce_api_token_write()?;
+    let scope = token_scoped_issue_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    let target = get_issue_detail(
+        &state.db,
+        session.tenant_ctx,
+        scope.clone(),
+        input.target_issue_id,
+        Some(1),
+    )
+    .await?;
+    session.enforce_project_write(target.issue.project_id, target.issue.workspace_id)?;
+
+    let res = merge_issues(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        scope,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: if session.is_api_token() { "api" } else { "ui" },
+        },
+        input,
+    )
+    .await?;
+    Ok(Json(res))
+}
+
+async fn default_split_issue_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path(issue_id): Path<i64>,
+    Json(input): Json<SplitIssueInput>,
+) -> Result<(StatusCode, Json<SplitIssueResponse>), AppError> {
+    session.enforce_api_token_write()?;
+    let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    let detail = get_issue_detail(
+        &state.db,
+        session.tenant_ctx,
+        scope.clone(),
+        issue_id,
+        Some(1),
+    )
+    .await?;
+    session.enforce_project_write(detail.issue.project_id, detail.issue.workspace_id)?;
+
+    let res = split_issue(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        scope,
+        issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: if session.is_api_token() { "api" } else { "ui" },
+        },
+        input,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(res)))
+}
+
+async fn project_split_issue_handler(
+    State(state): State<AuthState>,
+    session: AuthSession,
+    Path((tenant_slug, workspace_slug, project_slug, issue_id)): Path<(
+        String,
+        String,
+        String,
+        i64,
+    )>,
+    Json(input): Json<SplitIssueInput>,
+) -> Result<(StatusCode, Json<SplitIssueResponse>), AppError> {
+    session.enforce_api_token_write()?;
+    let scope = token_scoped_issue_scope(
+        &session,
+        &tenant_slug,
+        Some(&workspace_slug),
+        Some(&project_slug),
+    )?;
+    let detail = get_issue_detail(
+        &state.db,
+        session.tenant_ctx,
+        scope.clone(),
+        issue_id,
+        Some(1),
+    )
+    .await?;
+    session.enforce_project_write(detail.issue.project_id, detail.issue.workspace_id)?;
+
+    let res = split_issue(
+        &state.db,
+        session.tenant_ctx,
+        session.role,
+        scope,
+        issue_id,
+        NoteActor {
+            user_id: session.user.id,
+            email: &session.user.email,
+            source: if session.is_api_token() { "api" } else { "ui" },
+        },
+        input,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(res)))
 }

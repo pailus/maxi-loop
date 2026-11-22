@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   EyeOff,
+  GitMerge,
   Maximize2,
   RotateCcw,
   ShieldCheck,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import type { IssueDetailView, IssueStatus } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
+import { BreadcrumbsView } from "./BreadcrumbsView";
 import { OccurrenceChart } from "./OccurrenceChart";
 import { StackTraceView } from "./StackTraceView";
 
@@ -109,6 +111,10 @@ export function IssueDetailDrawer({
 
   const { issue, sample_event } = detail;
   const tags = normalizeTagsList(detail.tags);
+  const breadcrumbs = detail.breadcrumbs ?? sample_event?.breadcrumbs ?? [];
+  const mergedFingerprints = (detail.merged_fingerprints ?? []).filter(
+    (fp) => !fp.is_primary,
+  );
   const issueKey = `${issue.project_slug.slice(0, 3).toUpperCase()}-${issue.id}`;
 
   function handleCopyEventId() {
@@ -173,6 +179,13 @@ export function IssueDetailDrawer({
           >
             {issue.status}
           </span>
+
+          {mergedFingerprints.length > 0 && (
+            <span className="pm-lozenge pm-lozenge-primary py-1 px-2 text-xs">
+              <GitMerge size={11} />
+              <span>+{mergedFingerprints.length} merged</span>
+            </span>
+          )}
 
           {canTriage && (
             <>
@@ -298,6 +311,25 @@ export function IssueDetailDrawer({
           </div>
           <StackTraceView rawFrames={detail.stack_frames} compact />
         </div>
+
+        {/* Recent Breadcrumbs Preview */}
+        {breadcrumbs.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-bold text-[var(--color-text-muted)]">
+                Recent breadcrumbs ({breadcrumbs.length})
+              </span>
+              <button
+                type="button"
+                onClick={onOpenFullView}
+                className="text-xs font-medium text-[var(--color-link)] hover:underline cursor-pointer"
+              >
+                View all
+              </button>
+            </div>
+            <BreadcrumbsView breadcrumbs={breadcrumbs} compact />
+          </div>
+        )}
 
         {/* Event Tags & PII Scrubbed Request Summary */}
         <div>

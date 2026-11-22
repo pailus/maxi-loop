@@ -169,10 +169,29 @@ export interface StackFrameItem {
   post_context?: string[];
 }
 
+export interface BreadcrumbView {
+  timestamp?: string;
+  type: string;
+  category: string;
+  level: string;
+  message?: string;
+  data?: Record<string, unknown> | unknown;
+}
+
+export interface IssueFingerprintView {
+  fingerprint: string;
+  original_title: string;
+  original_culprit: string;
+  is_primary: boolean;
+  merged_at: string;
+  stored_event_count: number;
+}
+
 export interface IssueEventView {
   event_id: string;
   issue_id: number;
   project_id: number;
+  fingerprint?: string | null;
   received_at: string;
   environment: string;
   release: string | null;
@@ -182,6 +201,7 @@ export interface IssueEventView {
   exception_value: string;
   stack_frames: StackFrameItem[] | unknown;
   tags: Record<string, string> | Array<[string, string]> | unknown;
+  breadcrumbs?: BreadcrumbView[];
   payload: Record<string, unknown> | unknown;
   is_sample: boolean;
 }
@@ -202,9 +222,32 @@ export interface IssueDetailView {
   issue: IssueSummaryView;
   stack_frames: StackFrameItem[] | unknown;
   tags: Record<string, string> | Array<[string, string]> | unknown;
+  breadcrumbs?: BreadcrumbView[];
+  merged_fingerprints?: IssueFingerprintView[];
   sample_event: IssueEventView | null;
   hourly_series: CounterBucketPoint[];
   daily_series: CounterBucketPoint[];
+}
+
+export interface MergeIssuesInput {
+  target_issue_id: number;
+  source_issue_ids: number[];
+}
+
+export interface MergeIssuesResponse {
+  target_issue: IssueSummaryView;
+  merged_issue_ids: number[];
+  merged_fingerprints: IssueFingerprintView[];
+}
+
+export interface SplitIssueInput {
+  fingerprints?: string[];
+  event_ids?: string[];
+}
+
+export interface SplitIssueResponse {
+  source_issue: IssueSummaryView;
+  created_issues: IssueSummaryView[];
 }
 
 export class ApiError extends Error {
@@ -384,6 +427,25 @@ export async function updateIssueStatus(
   return requestJson<IssueSummaryView>(`/api/v1/issues/${issueId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
+  });
+}
+
+export async function mergeIssues(
+  input: MergeIssuesInput,
+): Promise<MergeIssuesResponse> {
+  return requestJson<MergeIssuesResponse>("/api/v1/issues/merge", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function splitIssue(
+  issueId: number,
+  input: SplitIssueInput,
+): Promise<SplitIssueResponse> {
+  return requestJson<SplitIssueResponse>(`/api/v1/issues/${issueId}/split`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

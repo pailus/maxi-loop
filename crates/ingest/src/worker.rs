@@ -60,6 +60,7 @@ struct EventToInsert {
     project_id: i64,
     issue_id: i64,
     event_id: String,
+    fingerprint: String,
     received_at: DateTime<Utc>,
     environment: String,
     release: Option<String>,
@@ -358,7 +359,8 @@ pub async fn flush_processed_batch_with_signals(
             .copied()
             .unwrap_or(group_events[0]);
 
-        let existing: Option<ExistingIssueRow> = sqlx::query_as(
+        let mut routed_via_alias = false;
+        let mut existing: Option<ExistingIssueRow> = sqlx::query_as(
             "SELECT id, status, is_regressed, stored_full_events, sample_event_id \
              FROM issues \
              WHERE tenant_id = $1 AND project_id = $2 AND fingerprint = $3 \
@@ -370,6 +372,28 @@ pub async fn flush_processed_batch_with_signals(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("select issue for update: {err}")))?;
+
+        // If this fingerprint was previously merged into a target issue (`F-ISS-9`), route
+        // incoming events to that target issue without resurrecting a duplicate issue.
+        if existing.is_none() {
+            existing = sqlx::query_as(
+                "SELECT i.id, i.status, i.is_regressed, i.stored_full_events, i.sample_event_id \
+                 FROM issue_fingerprints f \
+                 JOIN issues i \
+                   ON i.tenant_id = f.tenant_id AND i.project_id = f.project_id AND i.id = f.issue_id \
+                 WHERE f.tenant_id = $1 AND f.project_id = $2 AND f.fingerprint = $3 \
+                 FOR UPDATE OF i",
+            )
+            .bind(*tenant_id)
+            .bind(*project_id)
+            .bind(fingerprint)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|err| {
+                AppError::DatabaseQuery(format!("select aliased issue for update: {err}"))
+            })?;
+            routed_via_alias = existing.is_some();
+        }
 
         let is_new_issue = existing.is_none();
         let (issue_id, prev_stored, was_resolved, mut sample_event_id) = match existing {
@@ -419,10 +443,10 @@ pub async fn flush_processed_batch_with_signals(
             Some((id, next_status, next_regressed)) => {
                 let updated_count: i64 = sqlx::query_scalar(
                     "UPDATE issues \
-                     SET title = $4, \
-                         exception_type = $5, \
-                         exception_value = $6, \
-                         culprit = CASE WHEN $7 <> '' THEN $7 ELSE culprit END, \
+                     SET title = CASE WHEN $19 THEN title ELSE $4 END, \
+                         exception_type = CASE WHEN $19 THEN exception_type ELSE $5 END, \
+                         exception_value = CASE WHEN $19 THEN exception_value ELSE $6 END, \
+                         culprit = CASE WHEN $19 THEN culprit WHEN $7 <> '' THEN $7 ELSE culprit END, \
                          level = $8, \
                          status = $9, \
                          is_regressed = $10, \
@@ -456,6 +480,7 @@ pub async fn flush_processed_batch_with_signals(
                 .bind(&first_release_in_batch)
                 .bind(&latest_ev.release)
                 .bind(&sample_event_id)
+                .bind(routed_via_alias)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|err| AppError::DatabaseQuery(format!("update issue {id}: {err}")))?;
@@ -527,6 +552,7 @@ pub async fn flush_processed_batch_with_signals(
                 project_id: *project_id,
                 issue_id: resolved_issue_id,
                 event_id: ev.event_id.clone(),
+                fingerprint: ev.fingerprint.clone(),
                 received_at: ev.received_at,
                 environment: ev.environment.clone(),
                 release: ev.release.clone(),
@@ -549,6 +575,7 @@ pub async fn flush_processed_batch_with_signals(
                 project_id: *project_id,
                 issue_id: resolved_issue_id,
                 event_id: latest_ev.event_id.clone(),
+                fingerprint: latest_ev.fingerprint.clone(),
                 received_at: latest_ev.received_at,
                 environment: latest_ev.environment.clone(),
                 release: latest_ev.release.clone(),
@@ -709,7 +736,7 @@ pub async fn flush_processed_batch_with_signals(
     if !events_to_insert.is_empty() {
         let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
             "INSERT INTO events ( \
-                tenant_id, project_id, issue_id, event_id, received_at, \
+                tenant_id, project_id, issue_id, event_id, fingerprint, received_at, \
                 environment, release, level, platform, exception_type, \
                 exception_value, stack_frames, tags, payload, is_sample \
              ) ",
@@ -719,6 +746,7 @@ pub async fn flush_processed_batch_with_signals(
                 .push_bind(ev.project_id)
                 .push_bind(ev.issue_id)
                 .push_bind(&ev.event_id)
+                .push_bind(&ev.fingerprint)
                 .push_bind(ev.received_at)
                 .push_bind(&ev.environment)
                 .push_bind(&ev.release)

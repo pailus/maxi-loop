@@ -4,9 +4,13 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   EyeOff,
+  GitMerge,
   MessageSquare,
   RotateCcw,
+  Scissors,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -17,8 +21,10 @@ import {
   createIssueNote,
   fetchIssueEvents,
   fetchIssueNotes,
+  splitIssue,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
+import { BreadcrumbsView } from "./BreadcrumbsView";
 import {
   formatRelativeAge,
   formatShortDate,
@@ -32,6 +38,9 @@ interface IssueDetailFullViewProps {
   canTriage: boolean;
   triageBusy: boolean;
   onUpdateStatus: (issueId: number, status: IssueStatus) => void;
+  onRefreshIssue?: () => Promise<void>;
+  onSelectIssue?: (issueId: number) => void;
+  onShowToast?: (message: string) => void;
   onBack: () => void;
 }
 
@@ -40,12 +49,18 @@ export function IssueDetailFullView({
   canTriage,
   triageBusy,
   onUpdateStatus,
+  onRefreshIssue,
+  onSelectIssue,
+  onShowToast,
   onBack,
 }: IssueDetailFullViewProps) {
   const [activeTab, setActiveTab] = useState<"overview" | "events" | "counters" | "notes">("overview");
   const [interval, setInterval] = useState<"1h" | "1d">("1h");
   const [events, setEvents] = useState<IssueEventView[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
+  const [splitBusy, setSplitBusy] = useState(false);
   const [notes, setNotes] = useState<IssueNoteView[]>([]);
   const [noteBody, setNoteBody] = useState("");
   const [noteCommitRef, setNoteCommitRef] = useState("");
@@ -53,6 +68,10 @@ export function IssueDetailFullView({
 
   const { issue, sample_event } = detail;
   const tags = normalizeTagsList(detail.tags);
+  const breadcrumbs = detail.breadcrumbs ?? sample_event?.breadcrumbs ?? [];
+  const mergedFingerprints = (detail.merged_fingerprints ?? []).filter(
+    (fp) => !fp.is_primary,
+  );
   const issueKey = `${issue.project_slug.slice(0, 3).toUpperCase()}-${issue.id}`;
 
   useEffect(() => {
@@ -87,6 +106,7 @@ export function IssueDetailFullView({
     if (activeTab !== "events") return;
     let active = true;
     setLoadingEvents(true);
+    setSelectedEventIds([]);
     fetchIssueEvents(issue.id, 50)
       .then((list) => {
         if (active) setEvents(list);
@@ -99,6 +119,70 @@ export function IssueDetailFullView({
       active = false;
     };
   }, [activeTab, issue.id]);
+
+  async function handleSplitFingerprint(fingerprint: string) {
+    setSplitBusy(true);
+    try {
+      const res = await splitIssue(issue.id, { fingerprints: [fingerprint] });
+      const created = res.created_issues[0];
+      onShowToast?.(
+        created
+          ? `Split fingerprint into new issue #${created.id}`
+          : "Split fingerprint into a new issue",
+      );
+      if (onRefreshIssue) {
+        await onRefreshIssue();
+      }
+      if (activeTab === "events") {
+        const refreshedEvents = await fetchIssueEvents(issue.id, 50);
+        setEvents(refreshedEvents);
+      }
+    } catch (err) {
+      onShowToast?.(
+        err instanceof Error ? err.message : "Failed to split fingerprint",
+      );
+    } finally {
+      setSplitBusy(false);
+    }
+  }
+
+  async function handleSplitSelectedEvents() {
+    if (selectedEventIds.length === 0) return;
+    setSplitBusy(true);
+    try {
+      const res = await splitIssue(issue.id, { event_ids: selectedEventIds });
+      const created = res.created_issues[0];
+      setSelectedEventIds([]);
+      onShowToast?.(
+        created
+          ? `Split ${selectedEventIds.length} event(s) into new issue #${created.id}`
+          : `Split ${selectedEventIds.length} event(s) into a new issue`,
+      );
+      if (onRefreshIssue) {
+        await onRefreshIssue();
+      }
+      if (created && onSelectIssue) {
+        onSelectIssue(created.id);
+      } else {
+        const refreshedEvents = await fetchIssueEvents(issue.id, 50);
+        setEvents(refreshedEvents);
+      }
+    } catch (err) {
+      onShowToast?.(
+        err instanceof Error ? err.message : "Failed to split selected events",
+      );
+    } finally {
+      setSplitBusy(false);
+    }
+  }
+
+  function toggleEventSelection(eventId: string) {
+    setSelectedEventIds((prev) =>
+      prev.includes(eventId)
+        ? prev.filter((id) => id !== eventId)
+        : [...prev, eventId],
+    );
+  }
 
   return (
     <div className="flex-1 min-w-0 bg-[var(--color-bg)] px-6 py-4 overflow-y-auto">
@@ -295,65 +379,145 @@ export function IssueDetailFullView({
       </div>
 
       {activeTab === "overview" && (
-        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4 pb-8">
-          {/* Left: Stack Trace & Tags */}
-          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 space-y-4">
-            <StackTraceView rawFrames={detail.stack_frames} />
+        <div className="mt-4 space-y-4 pb-8">
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4">
+            {/* Left: Stack Trace & Tags */}
+            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 space-y-4">
+              <StackTraceView rawFrames={detail.stack_frames} />
 
-            <div className="pt-2 border-t border-[var(--color-border-light)] flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-[var(--color-text-dim)]">
-                Tags:
-              </span>
-              {tags.length === 0 ? (
-                <span className="text-xs text-[var(--color-text-dim)]">
-                  No tags attached
+              <div className="pt-2 border-t border-[var(--color-border-light)] flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-[var(--color-text-dim)]">
+                  Tags:
                 </span>
-              ) : (
-                tags.map(([k, v]) => (
-                  <span key={`${k}:${v}`} className="pm-lozenge pm-mono lowercase">
-                    {k}: {v}
+                {tags.length === 0 ? (
+                  <span className="text-xs text-[var(--color-text-dim)]">
+                    No tags attached
                   </span>
-                ))
-              )}
-            </div>
+                ) : (
+                  tags.map(([k, v]) => (
+                    <span key={`${k}:${v}`} className="pm-lozenge pm-mono lowercase">
+                      {k}: {v}
+                    </span>
+                  ))
+                )}
+              </div>
+            </section>
+
+            {/* Right: Sample Event JSON Payload */}
+            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 flex flex-col">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-[var(--color-text)]">
+                  Sample event payload
+                </h3>
+                <span className="pm-lozenge pm-lozenge-success">
+                  <ShieldCheck size={11} />
+                  <span>PII SCRUBBED</span>
+                </span>
+              </div>
+              <p className="mt-1 pm-mono text-[11px] text-[var(--color-text-dim)]">
+                event_id: {sample_event?.event_id ?? "none"} · is_sample:{" "}
+                {String(sample_event?.is_sample ?? true)}
+              </p>
+
+              <div className="mt-3 flex-1 rounded-md bg-[var(--pm-col)] border border-[var(--color-border)] p-3 overflow-auto max-h-[440px]">
+                <pre className="pm-mono text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap break-all">
+                  {sample_event
+                    ? JSON.stringify(sample_event.payload, null, 2)
+                    : "No full event payload stored."}
+                </pre>
+              </div>
+            </section>
+          </div>
+
+          {/* Breadcrumbs Timeline (F-ISS-10) */}
+          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+            <BreadcrumbsView breadcrumbs={breadcrumbs} />
           </section>
 
-          {/* Right: Sample Event JSON Payload */}
-          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 flex flex-col">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-[var(--color-text)]">
-                Sample event payload
-              </h3>
-              <span className="pm-lozenge pm-lozenge-success">
-                <ShieldCheck size={11} />
-                <span>PII SCRUBBED</span>
-              </span>
-            </div>
-            <p className="mt-1 pm-mono text-[11px] text-[var(--color-text-dim)]">
-              event_id: {sample_event?.event_id ?? "none"} · is_sample:{" "}
-              {String(sample_event?.is_sample ?? true)}
-            </p>
+          {/* Merged Fingerprints & Split Controls (F-ISS-9) */}
+          {mergedFingerprints.length > 0 && (
+            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+              <div className="px-4 py-3 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <GitMerge size={14} className="text-[var(--color-primary)]" />
+                  <h3 className="text-xs font-semibold text-[var(--color-text)]">
+                    Merged fingerprints ({mergedFingerprints.length})
+                  </h3>
+                </div>
+                <span className="text-[11px] text-[var(--color-text-dim)]">
+                  Future events matching these fingerprints automatically route into {issueKey}
+                </span>
+              </div>
 
-            <div className="mt-3 flex-1 rounded-md bg-[var(--pm-col)] border border-[var(--color-border)] p-3 overflow-auto max-h-[440px]">
-              <pre className="pm-mono text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap break-all">
-                {sample_event
-                  ? JSON.stringify(sample_event.payload, null, 2)
-                  : "No full event payload stored."}
-              </pre>
-            </div>
-          </section>
+              <div className="divide-y divide-[var(--color-border-light)]">
+                {mergedFingerprints.map((fp) => (
+                  <div
+                    key={fp.fingerprint}
+                    className="px-4 py-3 flex items-center justify-between gap-4 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[var(--color-text)] truncate">
+                        {fp.original_title || "Merged issue"}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--color-text-dim)]">
+                        <span className="pm-mono">{fp.fingerprint.slice(0, 20)}</span>
+                        {fp.original_culprit && (
+                          <span className="pm-mono truncate">{fp.original_culprit}</span>
+                        )}
+                        <span className="pm-lozenge">
+                          {fp.stored_event_count} stored event(s)
+                        </span>
+                        <span>merged {formatRelativeAge(fp.merged_at)}</span>
+                      </div>
+                    </div>
+
+                    {canTriage && (
+                      <button
+                        type="button"
+                        disabled={splitBusy}
+                        onClick={() => void handleSplitFingerprint(fp.fingerprint)}
+                        className="h-7 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-xs font-semibold text-[var(--color-text-muted)] inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        <Scissors size={12} />
+                        <span>Split into new issue</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
 
       {activeTab === "events" && (
         <section className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden mb-8">
-          <div className="px-4 py-3 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] flex items-center justify-between">
+          <div className="px-4 py-3 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] flex items-center justify-between gap-2 flex-wrap">
             <span className="text-xs font-semibold text-[var(--color-text)]">
               Stored event payloads (capped at 50 per issue + regression sample)
             </span>
-            <span className="text-xs text-[var(--color-text-dim)]">
-              {events.length} events loaded
-            </span>
+            <div className="flex items-center gap-2">
+              {canTriage && selectedEventIds.length > 0 && (
+                <button
+                  type="button"
+                  disabled={
+                    splitBusy ||
+                    (selectedEventIds.length >= events.length &&
+                      issue.event_count <= selectedEventIds.length)
+                  }
+                  onClick={() => void handleSplitSelectedEvents()}
+                  className="h-7 px-2.5 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Scissors size={12} />
+                  <span>
+                    Split {selectedEventIds.length} selected into new issue
+                  </span>
+                </button>
+              )}
+              <span className="text-xs text-[var(--color-text-dim)]">
+                {events.length} events loaded
+              </span>
+            </div>
           </div>
 
           {loadingEvents ? (
@@ -366,33 +530,92 @@ export function IssueDetailFullView({
             </div>
           ) : (
             <div className="divide-y divide-[var(--color-border-light)]">
-              {events.map((ev) => (
-                <div
-                  key={ev.event_id}
-                  className="px-4 py-3 flex items-center justify-between gap-4 text-xs hover:bg-[var(--pm-card-hover)]"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="pm-mono font-semibold text-[var(--color-text)]">
-                        {ev.event_id}
+              {events.map((ev) => {
+                const isExpanded = expandedEventId === ev.event_id;
+                const isChecked = selectedEventIds.includes(ev.event_id);
+                const evBreadcrumbs = ev.breadcrumbs ?? [];
+
+                return (
+                  <div key={ev.event_id} className="text-xs">
+                    <div
+                      onClick={() =>
+                        setExpandedEventId(isExpanded ? null : ev.event_id)
+                      }
+                      className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-[var(--pm-card-hover)] cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {canTriage && events.length >= 2 && (
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleEventSelection(ev.event_id)}
+                            aria-label={`Select event ${ev.event_id} to split`}
+                            className="w-3.5 h-3.5 accent-[var(--color-primary)] cursor-pointer shrink-0"
+                          />
+                        )}
+                        {isExpanded ? (
+                          <ChevronDown
+                            size={14}
+                            className="text-[var(--color-text-dim)] shrink-0"
+                          />
+                        ) : (
+                          <ChevronRight
+                            size={14}
+                            className="text-[var(--color-text-dim)] shrink-0"
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="pm-mono font-semibold text-[var(--color-text)]">
+                              {ev.event_id}
+                            </span>
+                            {ev.is_sample && (
+                              <span className="pm-lozenge pm-lozenge-primary">
+                                SAMPLE
+                              </span>
+                            )}
+                            <span className="pm-lozenge">{ev.environment}</span>
+                            {ev.release && (
+                              <span className="pm-lozenge pm-mono">
+                                {ev.release}
+                              </span>
+                            )}
+                            {evBreadcrumbs.length > 0 && (
+                              <span className="pm-lozenge">
+                                {evBreadcrumbs.length} breadcrumbs
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1 text-[var(--color-text-muted)] truncate">
+                            {ev.exception_type}: {ev.exception_value}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[var(--color-text-dim)] shrink-0">
+                        {formatShortDate(ev.received_at)}
                       </span>
-                      {ev.is_sample && (
-                        <span className="pm-lozenge pm-lozenge-primary">SAMPLE</span>
-                      )}
-                      <span className="pm-lozenge">{ev.environment}</span>
-                      {ev.release && (
-                        <span className="pm-lozenge pm-mono">{ev.release}</span>
-                      )}
                     </div>
-                    <div className="mt-1 text-[var(--color-text-muted)] truncate">
-                      {ev.exception_type}: {ev.exception_value}
-                    </div>
+
+                    {isExpanded && (
+                      <div className="px-4 pb-4 pt-1 bg-[var(--color-bg)] border-t border-[var(--color-border-light)] space-y-3">
+                        <BreadcrumbsView breadcrumbs={evBreadcrumbs} />
+                        <div>
+                          <div className="text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">
+                            Scrubbed event payload
+                            {ev.fingerprint
+                              ? ` · fingerprint ${ev.fingerprint.slice(0, 16)}`
+                              : ""}
+                          </div>
+                          <pre className="pm-mono text-[11px] leading-relaxed rounded-md bg-[var(--pm-col)] border border-[var(--color-border)] p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-[var(--color-text)]">
+                            {JSON.stringify(ev.payload, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <span className="text-[var(--color-text-dim)] shrink-0">
-                    {formatShortDate(ev.received_at)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

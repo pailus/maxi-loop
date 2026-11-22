@@ -281,6 +281,48 @@
       ],
       "depends_on": ["F013"],
       "notes": "PRD F-ADM-4, F-ADM-5, F-ADM-8, F-ADM-9"
+    },
+    {
+      "id": "F015",
+      "title": "P2 Issues: Manual issue merge/split (with fingerprint alias routing) and event breadcrumbs viewer",
+      "status": "done",
+      "priority": "low",
+      "acceptance_criteria": [
+        "Manual merge combines source issues into a target issue within the same project (events, hourly counters, releases, notes, alert deliveries) and routes future events with merged fingerprints to the target issue",
+        "Manual split detaches merged fingerprints or selected stored events into standalone issues, updates counters/releases/sample events, and restores independent routing for split fingerprints",
+        "Event breadcrumbs (HTTP, navigation, UI, query, console, custom) are normalized and rendered in issue detail, stored events viewer, and API responses with PII scrubbed",
+        "RBAC, same-project validation, API token write/project scoping, and cross-tenant isolation are enforced and tested against PostgreSQL 16"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
+      ],
+      "depends_on": ["F014"],
+      "notes": "PRD F-ISS-9, F-ISS-10"
+    },
+    {
+      "id": "F016",
+      "title": "P2 Performance & MCP: Compare releases, slow DB queries/operations aggregation, MCP list_slow_queries/compare_releases & prompt templates",
+      "status": "todo",
+      "priority": "low",
+      "acceptance_criteria": [
+        "Aggregates slow DB queries and operations per normalized op and description (p50/p95/avg/count/total_ms) from ingested transaction spans",
+        "Compares two releases for a project across performance percentiles, throughput, error rate, and issue counts",
+        "Exposes `list_slow_queries` and `compare_releases` MCP tools and MCP prompt templates (`prompts/list`, `prompts/get`) for issue triage and fixing",
+        "Renders Compare Releases and Slow Queries UI in MaxiBoard Performance view and passes cross-tenant isolation tests"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace"
+      ],
+      "depends_on": ["F015"],
+      "notes": "PRD F-PRF-6, F-PRF-7, F-MCP-14, F-MCP-15"
     }
   ]
 }

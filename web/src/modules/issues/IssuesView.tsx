@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   EyeOff,
+  GitMerge,
   Inbox,
   RefreshCw,
   Search,
@@ -18,6 +19,7 @@ import {
   type ProjectView,
   fetchIssueDetail,
   fetchIssues,
+  mergeIssues,
   updateIssueStatus,
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
@@ -92,6 +94,9 @@ export function IssuesView({
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [fullViewOpen, setFullViewOpen] = useState(false);
   const [triageBusy, setTriageBusy] = useState(false);
+  const [checkedIssueIds, setCheckedIssueIds] = useState<number[]>([]);
+  const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
 
   useEffect(() => {
     setTabMode(initialTabMode);
@@ -222,6 +227,64 @@ export function IssuesView({
     }
   }
 
+  const refreshCurrentDetail = useCallback(async () => {
+    if (selectedIssueId === null) return;
+    try {
+      const detail = await fetchIssueDetail(selectedIssueId);
+      setIssueDetail(detail);
+    } catch {
+      // Ignore refresh error
+    }
+    await loadIssuesList();
+  }, [selectedIssueId, loadIssuesList]);
+
+  function toggleCheckedIssue(issueId: number) {
+    setCheckedIssueIds((prev) => {
+      const next = prev.includes(issueId)
+        ? prev.filter((id) => id !== issueId)
+        : [...prev, issueId];
+      setMergeTargetId((curr) => {
+        if (curr !== null && next.includes(curr)) return curr;
+        return next.length > 0 ? next[0] : null;
+      });
+      return next;
+    });
+  }
+
+  async function handleMergeChecked() {
+    if (checkedIssueIds.length < 2) return;
+    const targetId =
+      mergeTargetId !== null && checkedIssueIds.includes(mergeTargetId)
+        ? mergeTargetId
+        : checkedIssueIds[0];
+    const sourceIds = checkedIssueIds.filter((id) => id !== targetId);
+    if (sourceIds.length === 0) return;
+
+    setMergeBusy(true);
+    try {
+      const res = await mergeIssues({
+        target_issue_id: targetId,
+        source_issue_ids: sourceIds,
+      });
+      setCheckedIssueIds([]);
+      setMergeTargetId(null);
+      setSelectedIssueId(res.target_issue.id);
+      await loadIssuesList();
+      const refreshedDetail = await fetchIssueDetail(res.target_issue.id);
+      setIssueDetail(refreshedDetail);
+      const targetKey = `${res.target_issue.project_slug.slice(0, 3).toUpperCase()}-${res.target_issue.id}`;
+      onShowToast(
+        `Merged ${res.merged_issue_ids.length} issue(s) into ${targetKey}`,
+      );
+    } catch (err) {
+      onShowToast(
+        err instanceof Error ? err.message : "Failed to merge selected issues",
+      );
+    } finally {
+      setMergeBusy(false);
+    }
+  }
+
   if (fullViewOpen && issueDetail) {
     return (
       <IssueDetailFullView
@@ -229,6 +292,9 @@ export function IssuesView({
         canTriage={canTriage}
         triageBusy={triageBusy}
         onUpdateStatus={handleTriageStatus}
+        onRefreshIssue={refreshCurrentDetail}
+        onSelectIssue={(nextId) => setSelectedIssueId(nextId)}
+        onShowToast={(msg) => onShowToast(msg)}
         onBack={() => setFullViewOpen(false)}
       />
     );
@@ -238,6 +304,15 @@ export function IssuesView({
   const totalCount = issuesPage?.total ?? 0;
   const regressedInPage = items.filter((i) => i.is_regressed).length;
   const totalEventsInPage = items.reduce((acc, i) => acc + i.event_count, 0);
+
+  const checkedItems = items.filter((i) => checkedIssueIds.includes(i.id));
+  const distinctCheckedProjects = new Set(checkedItems.map((i) => i.project_id));
+  const canMergeChecked =
+    checkedItems.length >= 2 && distinctCheckedProjects.size === 1;
+  const effectiveMergeTargetId =
+    mergeTargetId !== null && checkedItems.some((i) => i.id === mergeTargetId)
+      ? mergeTargetId
+      : (checkedItems[0]?.id ?? null);
 
   // Discover distinct environments & releases from loaded items for quick dropdown selection
   const knownEnvs = Array.from(
@@ -413,6 +488,60 @@ export function IssuesView({
           </div>
         )}
 
+        {/* Multi-Select Manual Merge Bar (F-ISS-9) */}
+        {canTriage && checkedItems.length >= 2 && (
+          <div className="mt-3 px-3.5 py-2.5 rounded-lg border border-[#b3d4ff] bg-[var(--color-primary-light)] flex items-center gap-3 flex-wrap text-xs">
+            <div className="flex items-center gap-1.5 font-semibold text-[var(--color-primary-hover)]">
+              <GitMerge size={14} />
+              <span>{checkedItems.length} issues selected</span>
+            </div>
+
+            {distinctCheckedProjects.size > 1 ? (
+              <span className="text-[var(--color-danger-text)] font-medium">
+                Select issues from the same project to merge.
+              </span>
+            ) : (
+              <label className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
+                <span>Merge into:</span>
+                <select
+                  value={effectiveMergeTargetId ?? ""}
+                  onChange={(e) => setMergeTargetId(Number(e.target.value))}
+                  aria-label="Primary target issue for merge"
+                  className="h-7 px-2 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-xs font-medium text-[var(--color-text)] cursor-pointer max-w-[260px]"
+                >
+                  {checkedItems.map((ci) => (
+                    <option key={ci.id} value={ci.id}>
+                      #{ci.id} · {ci.title.slice(0, 48)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={!canMergeChecked || mergeBusy}
+                onClick={() => void handleMergeChecked()}
+                className="h-7 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <GitMerge size={12} />
+                <span>{mergeBusy ? "Merging..." : "Merge issues"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCheckedIssueIds([]);
+                  setMergeTargetId(null);
+                }}
+                className="h-7 px-2.5 rounded bg-[var(--color-bg)] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] cursor-pointer"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Issues Table Card */}
         <div className="mt-3.5 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-[var(--pm-shadow-card)] flex flex-col overflow-hidden">
           <div className="px-4 py-2.5 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] grid grid-cols-[1fr_92px_72px_76px] gap-3 text-xs font-semibold text-[var(--color-text-dim)]">
@@ -488,8 +617,18 @@ export function IssuesView({
                     )}
 
                     <div className="min-w-0">
-                      {/* Row Top Meta: ProjectIcon + Key + Lozenges */}
+                      {/* Row Top Meta: Merge Checkbox + ProjectIcon + Key + Lozenges */}
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        {canTriage && (
+                          <input
+                            type="checkbox"
+                            checked={checkedIssueIds.includes(item.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleCheckedIssue(item.id)}
+                            aria-label={`Select issue ${issueKey} for merge`}
+                            className="w-3.5 h-3.5 accent-[var(--color-primary)] cursor-pointer shrink-0 mr-0.5"
+                          />
+                        )}
                         <ProjectIcon slug={item.project_slug} size={15} />
                         <span className="text-xs font-semibold text-[var(--color-text-dim)]">
                           {issueKey} · {item.project_slug}

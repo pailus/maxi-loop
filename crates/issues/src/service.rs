@@ -6,6 +6,11 @@ use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
 
+use crate::breadcrumbs::extract_breadcrumbs;
+use crate::merge_split::{
+    MergeIssuesInput, MergeIssuesResponse, SplitIssueInput, SplitIssueResponse,
+    list_issue_fingerprints_in_tx, merge_issues, split_issue,
+};
 use crate::model::{
     CounterBucketPoint, IssueDetailView, IssueEventView, IssueListFilter, IssueSort,
     IssueStatsResponse, IssueStatus, IssueSummaryView, PaginatedIssuesResponse, StatsInterval,
@@ -112,6 +117,29 @@ impl IssuesService {
     ) -> Result<Option<String>, AppError> {
         resolve_release_commit_sha(&self.db, tenant_ctx, project_id, version).await
     }
+
+    pub async fn merge_issues(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        actor: NoteActor<'_>,
+        input: MergeIssuesInput,
+    ) -> Result<MergeIssuesResponse, AppError> {
+        merge_issues(&self.db, tenant_ctx, role, scope, actor, input).await
+    }
+
+    pub async fn split_issue(
+        &self,
+        tenant_ctx: TenantContext,
+        role: Role,
+        scope: IssueScope<'_>,
+        issue_id: i64,
+        actor: NoteActor<'_>,
+        input: SplitIssueInput,
+    ) -> Result<SplitIssueResponse, AppError> {
+        split_issue(&self.db, tenant_ctx, role, scope, issue_id, actor, input).await
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,6 +213,7 @@ struct IssueEventDbRow {
     event_id: String,
     issue_id: i64,
     project_id: i64,
+    fingerprint: Option<String>,
     received_at: DateTime<Utc>,
     environment: String,
     release: Option<String>,
@@ -200,10 +229,12 @@ struct IssueEventDbRow {
 
 impl From<IssueEventDbRow> for IssueEventView {
     fn from(row: IssueEventDbRow) -> Self {
+        let breadcrumbs = extract_breadcrumbs(&row.payload);
         Self {
             event_id: row.event_id,
             issue_id: row.issue_id,
             project_id: row.project_id,
+            fingerprint: row.fingerprint,
             received_at: row.received_at,
             environment: row.environment,
             release: row.release,
@@ -213,6 +244,7 @@ impl From<IssueEventDbRow> for IssueEventView {
             exception_value: row.exception_value,
             stack_frames: row.stack_frames,
             tags: row.tags,
+            breadcrumbs,
             payload: row.payload,
             is_sample: row.is_sample,
         }
@@ -336,6 +368,9 @@ pub async fn get_issue_detail(
     verify_tenant_slug_in_tx(&mut tx, tenant_ctx, scope.tenant_slug).await?;
 
     let issue = load_scoped_issue_in_tx(&mut tx, tenant_ctx, &scope, issue_id).await?;
+    let merged_fingerprints =
+        list_issue_fingerprints_in_tx(&mut tx, tenant_ctx.tenant_id(), issue.project_id, issue.id)
+            .await?;
     let sample_event = load_sample_event_in_tx(
         &mut tx,
         tenant_ctx.tenant_id(),
@@ -369,15 +404,21 @@ pub async fn get_issue_detail(
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit get_issue_detail: {err}")))?;
 
-    let (stack_frames, tags) = match &sample_event {
-        Some(ev) => (ev.stack_frames.clone(), ev.tags.clone()),
-        None => (json!([]), json!({})),
+    let (stack_frames, tags, breadcrumbs) = match &sample_event {
+        Some(ev) => (
+            ev.stack_frames.clone(),
+            ev.tags.clone(),
+            ev.breadcrumbs.clone(),
+        ),
+        None => (json!([]), json!({}), Vec::new()),
     };
 
     Ok(IssueDetailView {
         issue,
         stack_frames,
         tags,
+        breadcrumbs,
+        merged_fingerprints,
         sample_event,
         hourly_series,
         daily_series,
@@ -454,7 +495,7 @@ pub async fn list_issue_events(
     let issue = load_scoped_issue_in_tx(&mut tx, tenant_ctx, &scope, issue_id).await?;
 
     let rows: Vec<IssueEventDbRow> = sqlx::query_as(
-        "SELECT event_id, issue_id, project_id, received_at, environment, release, \
+        "SELECT event_id, issue_id, project_id, fingerprint, received_at, environment, release, \
                 level, platform, exception_type, exception_value, stack_frames, \
                 tags, payload, is_sample \
          FROM events \
@@ -499,7 +540,7 @@ pub async fn get_issue_event(
     let issue = load_scoped_issue_in_tx(&mut tx, tenant_ctx, &scope, issue_id).await?;
 
     let row: Option<IssueEventDbRow> = sqlx::query_as(
-        "SELECT event_id, issue_id, project_id, received_at, environment, release, \
+        "SELECT event_id, issue_id, project_id, fingerprint, received_at, environment, release, \
                 level, platform, exception_type, exception_value, stack_frames, \
                 tags, payload, is_sample \
          FROM events \
@@ -993,7 +1034,7 @@ async fn load_sample_event_in_tx(
 ) -> Result<Option<IssueEventView>, AppError> {
     if let Some(sample_id) = preferred_event_id.filter(|s| !s.is_empty()) {
         let exact: Option<IssueEventDbRow> = sqlx::query_as(
-            "SELECT event_id, issue_id, project_id, received_at, environment, release, \
+            "SELECT event_id, issue_id, project_id, fingerprint, received_at, environment, release, \
                     level, platform, exception_type, exception_value, stack_frames, \
                     tags, payload, is_sample \
              FROM events \
@@ -1015,7 +1056,7 @@ async fn load_sample_event_in_tx(
     }
 
     let fallback: Option<IssueEventDbRow> = sqlx::query_as(
-        "SELECT event_id, issue_id, project_id, received_at, environment, release, \
+        "SELECT event_id, issue_id, project_id, fingerprint, received_at, environment, release, \
                 level, platform, exception_type, exception_value, stack_frames, \
                 tags, payload, is_sample \
          FROM events \
