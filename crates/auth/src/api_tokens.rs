@@ -212,10 +212,10 @@ pub async fn list_api_tokens(
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("commit list_api_tokens: {err}")))?;
 
-    // Only return tokens belonging to workspaces the caller can access.
+    // Only return tokens of projects the caller can read.
     Ok(rows
         .into_iter()
-        .filter(|r| session.can_access_workspace(r.workspace_id))
+        .filter(|r| session.can_read_project(r.project_id, r.workspace_id))
         .map(ApiTokenView::from)
         .collect())
 }

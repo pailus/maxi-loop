@@ -448,7 +448,7 @@ async fn phase2_configurable_pii_releases_alerts_ssrf_and_tenant_isolation() {
     let webhook_chan = create_alert_channel(
         &pool,
         tenant_ctx_a,
-        Role::TenantOwner,
+        &Role::TenantOwner,
         CreateAlertChannelInput {
             name: "Ops Webhook".to_owned(),
             channel_type: "webhook".to_owned(),

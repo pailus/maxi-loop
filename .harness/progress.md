@@ -33,6 +33,30 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F025 workspace isolation hardening (B0)
+
+**Status at end of session:** done
+
+**Done:**
+- `platform/src/access.rs` (`ProjectAccess`, `push_access_sql`, `AccessGuard`); `AuthSession::{project_access, can_read_project, can_triage_project, can_read_whole_workspace}` + `AccessGuard` impls for `AuthSession` and `Role`; `enforce_project_read/write` now project-aware.
+- Issues: list filter in SQL (`IssueListFilter.access`, `#[serde(skip)]`), read checks on stats/events/event/notes, release/source-map/PII/alert services take `&dyn AccessGuard`; performance: `PerformanceScope.access` applied to all top-level queries + compare-releases project check; alerts: scope-based channel/rule management, filtered lists and deliveries; MCP: scoped token creation, `role_within_scope` at auth, tenant-wide listing/revoke for tenant admins only; API-token and project lists via `can_read_project`.
+- Tests calling `create_alert_channel` pass `&Role::TenantOwner` (signature change only).
+
+**Verification run:**
+- `cargo test -p maxi-loop --test b0_workspace_isolation` → PASS; the same test on the pre-fix commit (worktree) → FAIL, soft-run listed 26 failing checks (every hole reproduced).
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` → PASS; `cargo test --workspace --no-fail-fast` → 141 passed, 1 failed: `phase2_pii_releases_alerts.rs:777` (`sent_spikes` 2 vs 1) — fails identically on the pre-B0 commit today (shared-DB leftover spike rules, known flake), not a regression.
+
+**Security notes:**
+- Fixes privilege escalation via MCP tokens, cross-workspace reads (performance, issue stats/events/notes, list totals), cross-workspace writes (alerts, PII rules, releases, source maps incl. delete rolled back on denial). SQL stays parameterized; dynamic identifiers are compile-time constants.
+
+**Key decisions & why:**
+- D017.
+
+**Not finished / blockers:**
+- Stage B (per-project membership limits) next.
+
+---
+
 ### 2026-11-22 — Claude Code — F024 issue assignment (UI + MCP)
 
 **Status at end of session:** done (browser click-through pending by user)
@@ -264,15 +288,3 @@
 
 **Not finished / blockers:**
 - Ready for `F018` (users affected per issue) or `F019` (performance p95/error-rate alerts)
-
-### 2026-11-22 — Claude Code — Colours & fonts identical to MaxiBoard (D009)
-
-**Status at end of session:** done (fba02cc, merged to main)
-
-**Done:**
-- `web/src/index.css`: white sidebar, MaxiBoard font + mono stacks, lozenge 12px/radius 4/`#E9F2FF` primary, tab underline on the strip border (`bottom:-1px`), `(hover:none) and (pointer:coarse)` 16px input guard, skeleton tokens.
-- `web/src/lib/avatar.ts` (port of MaxiBoard `initials.js`); topbar avatar uses it; brand mark is an icon tile like MaxiBoard's; toast restyled to MaxiBoard's sonner light toast (bottom-center).
-- Off-palette colours replaced (`#974F0C`→`#A54800`, `#533F04`→`#7F5F01`, `#006644`→`#216E4E`, `#D97706`→`#D97008`, `#0E7490`→`#206A83`, chart bars → `--color-primary`).
-
-**Verification run:**
-- `npm --prefix web run build` → PASS; `cargo build --release -p maxi-loop` → PASS; dev service restarted; headless Chrome screenshots (desktop Issues, Projects + toast, mobile) OK

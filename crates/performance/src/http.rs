@@ -139,12 +139,14 @@ fn token_scoped_perf_scope<'a>(
             tenant_slug,
             workspace_slug: Some(&tok.workspace_slug),
             project_slug: Some(&tok.project_slug),
+            access: session.project_access(),
         });
     }
     Ok(PerformanceScope {
         tenant_slug,
         workspace_slug,
         project_slug,
+        access: session.project_access(),
     })
 }
 

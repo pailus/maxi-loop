@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use maxi_loop_auth::model::Role;
+use maxi_loop_platform::access::AccessGuard;
 use maxi_loop_platform::config::is_valid_slug;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
@@ -59,15 +59,11 @@ pub async fn upload_source_map(
     pool: &PgPool,
     resolver: &SourceMapResolver,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     user_id: i64,
     max_upload_bytes: usize,
     input: UploadSourceMapRawInput,
 ) -> Result<SourceMapView, AppError> {
-    if !role.can_triage_issues() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
-
     let proj_slug = input.project_slug.trim();
     if !is_valid_slug(proj_slug) {
         return Err(AppError::Validation("invalid project_slug".to_owned()));
@@ -100,14 +96,14 @@ pub async fn upload_source_map(
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
 
-    let project_id: i64 = match input
+    let (project_id, workspace_id): (i64, i64) = match input
         .workspace_slug
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        Some(ws_slug) => sqlx::query_scalar(
-            "SELECT p.id
+        Some(ws_slug) => sqlx::query_as(
+            "SELECT p.id, p.workspace_id
              FROM projects p
              JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
              WHERE p.tenant_id = $1 AND w.slug = $2 AND p.slug = $3",
@@ -118,8 +114,8 @@ pub async fn upload_source_map(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|err| AppError::DatabaseQuery(format!("lookup project for sourcemap: {err}")))?,
-        None => sqlx::query_scalar(
-            "SELECT p.id
+        None => sqlx::query_as(
+            "SELECT p.id, p.workspace_id
              FROM projects p
              JOIN workspaces w ON w.tenant_id = p.tenant_id AND w.id = p.workspace_id
              WHERE p.tenant_id = $1 AND p.slug = $2
@@ -133,6 +129,7 @@ pub async fn upload_source_map(
         .map_err(|err| AppError::DatabaseQuery(format!("lookup project for sourcemap: {err}")))?,
     }
     .ok_or(AppError::NotFound)?;
+    guard.check_triage(project_id, workspace_id)?;
 
     // Ensure the release record exists in `releases` so uploaded source maps link cleanly.
     let inferred_sha = infer_commit_sha(release_version);
@@ -273,21 +270,21 @@ pub async fn delete_source_map(
     pool: &PgPool,
     resolver: &SourceMapResolver,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     sourcemap_id: i64,
 ) -> Result<(), AppError> {
-    if !role.can_triage_issues() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if sourcemap_id <= 0 {
         return Err(AppError::Validation("invalid sourcemap_id".to_owned()));
     }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
-    let deleted_project_id: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM source_maps
-         WHERE tenant_id = $1 AND id = $2
-         RETURNING project_id",
+    // Delete and check in one transaction: a forbidden caller's delete is rolled back.
+    let deleted: Option<(i64, i64)> = sqlx::query_as(
+        "DELETE FROM source_maps s
+         USING projects p
+         WHERE s.tenant_id = $1 AND s.id = $2
+           AND p.tenant_id = s.tenant_id AND p.id = s.project_id
+         RETURNING s.project_id, p.workspace_id",
     )
     .bind(tenant_ctx.tenant_id())
     .bind(sourcemap_id)
@@ -295,9 +292,10 @@ pub async fn delete_source_map(
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("delete source_map: {err}")))?;
 
-    let Some(project_id) = deleted_project_id else {
+    let Some((project_id, workspace_id)) = deleted else {
         return Err(AppError::NotFound);
     };
+    guard.check_triage(project_id, workspace_id)?;
 
     tx.commit()
         .await

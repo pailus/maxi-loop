@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::http::HeaderMap;
+use maxi_loop_platform::access::{AccessGuard, ProjectAccess};
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::TenantContext;
 use serde::{Deserialize, Serialize};
@@ -209,6 +210,48 @@ impl AuthSession {
         }
     }
 
+    /// Projects this caller may read, for SQL list filters. `None` = every project in the
+    /// tenant (tenant-level role). Single-record endpoints use `enforce_project_read`.
+    pub fn project_access(&self) -> Option<ProjectAccess> {
+        if let Some(tok) = &self.api_token {
+            return Some(ProjectAccess {
+                workspace_ids: Vec::new(),
+                project_ids: if tok.can_read {
+                    vec![tok.project_id]
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        if self.tenant_role.is_some() {
+            return None;
+        }
+        Some(ProjectAccess {
+            workspace_ids: self.workspace_roles.keys().copied().collect(),
+            project_ids: Vec::new(),
+        })
+    }
+
+    /// Whether the caller may read this project's data (issues, events, performance, ...).
+    pub fn can_read_project(&self, project_id: i64, workspace_id: i64) -> bool {
+        self.project_access()
+            .is_none_or(|a| a.allows(project_id, workspace_id))
+    }
+
+    /// Whether the caller sees every project of the workspace (tenant-level role or a
+    /// workspace membership). Needed for workspace-wide grants such as workspace MCP tokens.
+    pub fn can_read_whole_workspace(&self, workspace_id: i64) -> bool {
+        !self.is_api_token()
+            && self
+                .project_access()
+                .is_none_or(|a| a.workspace_ids.contains(&workspace_id))
+    }
+
+    /// Whether the caller may triage (change status, assign, upload source maps) in this project.
+    pub fn can_triage_project(&self, project_id: i64, workspace_id: i64) -> bool {
+        self.can_read_project(project_id, workspace_id) && self.can_triage_workspace(workspace_id)
+    }
+
     pub fn can_access_workspace(&self, workspace_id: i64) -> bool {
         self.effective_role_for_workspace(workspace_id).is_some()
     }
@@ -248,7 +291,7 @@ impl AuthSession {
             }
             return Ok(());
         }
-        if !self.can_access_workspace(workspace_id) {
+        if !self.can_read_project(project_id, workspace_id) {
             return Err(AppError::Forbidden("insufficient workspace permissions"));
         }
         Ok(())
@@ -269,7 +312,7 @@ impl AuthSession {
             }
             return Ok(());
         }
-        if !self.can_triage_workspace(workspace_id) {
+        if !self.can_triage_project(project_id, workspace_id) {
             return Err(AppError::Forbidden("insufficient permissions"));
         }
         Ok(())
@@ -335,4 +378,86 @@ pub struct LoginRequest {
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
+}
+
+impl AccessGuard for AuthSession {
+    fn check_read(&self, project_id: i64, workspace_id: i64) -> Result<(), AppError> {
+        self.enforce_project_read(project_id, workspace_id)
+    }
+
+    fn check_triage(&self, project_id: i64, workspace_id: i64) -> Result<(), AppError> {
+        self.enforce_project_write(project_id, workspace_id)
+    }
+
+    fn check_manage_project(&self, project_id: i64, workspace_id: i64) -> Result<(), AppError> {
+        if self.can_read_project(project_id, workspace_id)
+            && self.can_manage_workspace(workspace_id)
+        {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden("insufficient permissions"))
+        }
+    }
+
+    fn check_manage_workspace(&self, workspace_id: i64) -> Result<(), AppError> {
+        if self.can_manage_workspace(workspace_id) {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden("insufficient permissions"))
+        }
+    }
+
+    fn check_manage_tenant(&self) -> Result<(), AppError> {
+        if self.can_manage_tenant() {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden(
+                "only tenant owners or tenant admins can manage tenant-wide settings",
+            ))
+        }
+    }
+
+    fn can_read_scope(&self, workspace_id: Option<i64>, project_id: Option<i64>) -> bool {
+        match (workspace_id, project_id) {
+            (None, None) => true,
+            (Some(ws), None) => self.can_access_workspace(ws),
+            (Some(ws), Some(p)) => self.can_read_project(p, ws),
+            (None, Some(_)) => false,
+        }
+    }
+}
+
+/// A bare role acts as a tenant-wide role (used by internal callers and tests).
+impl AccessGuard for Role {
+    fn check_read(&self, _project_id: i64, _workspace_id: i64) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn check_triage(&self, _project_id: i64, _workspace_id: i64) -> Result<(), AppError> {
+        role_check(self.can_triage_issues())
+    }
+
+    fn check_manage_project(&self, _project_id: i64, _workspace_id: i64) -> Result<(), AppError> {
+        role_check(self.can_manage_projects())
+    }
+
+    fn check_manage_workspace(&self, _workspace_id: i64) -> Result<(), AppError> {
+        role_check(self.can_manage_projects())
+    }
+
+    fn check_manage_tenant(&self) -> Result<(), AppError> {
+        role_check(self.can_manage_workspaces())
+    }
+
+    fn can_read_scope(&self, _workspace_id: Option<i64>, _project_id: Option<i64>) -> bool {
+        true
+    }
+}
+
+fn role_check(allowed: bool) -> Result<(), AppError> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden("insufficient permissions"))
+    }
 }

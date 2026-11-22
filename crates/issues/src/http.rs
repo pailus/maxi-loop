@@ -158,7 +158,8 @@ struct EventsListQuery {
 
 /// Narrow an `IssueScope` and `IssueListFilter` to the API token's single project when authenticated
 /// via `Authorization: Bearer mlapi_...`, rejecting requests that explicitly target another project.
-/// Also resolves `assigned_to=me` to the caller's user id (every list handler calls this).
+/// Also resolves `assigned_to=me` and sets the caller's project visibility (every list handler
+/// calls this).
 fn apply_token_to_issue_filter(
     session: &AuthSession,
     filter: &mut IssueListFilter,
@@ -170,6 +171,8 @@ fn apply_token_to_issue_filter(
     {
         filter.assigned_to = Some(session.user.id.to_string());
     }
+    // Restrict rows in SQL so totals and pagination only count visible projects.
+    filter.access = session.project_access();
     if let Some(tok) = &session.api_token {
         if let Some(pid) = filter.project_id
             && pid != tok.project_id
@@ -242,11 +245,7 @@ async fn default_list_issues_handler(
 ) -> Result<Json<PaginatedIssuesResponse>, AppError> {
     apply_token_to_issue_filter(&session, &mut filter)?;
     let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
-    let mut res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        res.items
-            .retain(|item| session.can_access_workspace(item.workspace_id));
-    }
+    let res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -263,11 +262,7 @@ async fn default_project_list_issues_handler(
         Some(&session.default_workspace.slug),
         Some(&project_slug),
     )?;
-    let mut res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        res.items
-            .retain(|item| session.can_access_workspace(item.workspace_id));
-    }
+    let res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -279,11 +274,7 @@ async fn tenant_list_issues_handler(
 ) -> Result<Json<PaginatedIssuesResponse>, AppError> {
     apply_token_to_issue_filter(&session, &mut filter)?;
     let scope = token_scoped_issue_scope(&session, &tenant_slug, None, None)?;
-    let mut res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        res.items
-            .retain(|item| session.can_access_workspace(item.workspace_id));
-    }
+    let res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -300,11 +291,7 @@ async fn project_list_issues_handler(
         Some(&workspace_slug),
         Some(&project_slug),
     )?;
-    let mut res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        res.items
-            .retain(|item| session.can_access_workspace(item.workspace_id));
-    }
+    let res = list_issues(&state.db, session.tenant_ctx, scope, filter).await?;
     Ok(Json(res))
 }
 
@@ -351,6 +338,7 @@ async fn default_get_issue_stats_handler(
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<IssueStatsResponse>, AppError> {
     let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let stats = get_issue_stats(
         &state.db,
         session.tenant_ctx,
@@ -380,6 +368,7 @@ async fn project_get_issue_stats_handler(
         Some(&workspace_slug),
         Some(&project_slug),
     )?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let stats = get_issue_stats(
         &state.db,
         session.tenant_ctx,
@@ -399,6 +388,7 @@ async fn default_list_issue_events_handler(
     Query(query): Query<EventsListQuery>,
 ) -> Result<Json<Vec<IssueEventView>>, AppError> {
     let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let events =
         list_issue_events(&state.db, session.tenant_ctx, scope, issue_id, query.limit).await?;
     Ok(Json(events))
@@ -421,6 +411,7 @@ async fn project_list_issue_events_handler(
         Some(&workspace_slug),
         Some(&project_slug),
     )?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let events =
         list_issue_events(&state.db, session.tenant_ctx, scope, issue_id, query.limit).await?;
     Ok(Json(events))
@@ -432,6 +423,7 @@ async fn default_get_issue_event_handler(
     Path((issue_id, event_id)): Path<(i64, String)>,
 ) -> Result<Json<IssueEventView>, AppError> {
     let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let ev = get_issue_event(&state.db, session.tenant_ctx, scope, issue_id, &event_id).await?;
     Ok(Json(ev))
 }
@@ -453,6 +445,7 @@ async fn project_get_issue_event_handler(
         Some(&workspace_slug),
         Some(&project_slug),
     )?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let ev = get_issue_event(&state.db, session.tenant_ctx, scope, issue_id, &event_id).await?;
     Ok(Json(ev))
 }
@@ -544,6 +537,7 @@ async fn default_list_issue_notes_handler(
     Query(query): Query<EventsListQuery>,
 ) -> Result<Json<Vec<IssueNoteView>>, AppError> {
     let scope = token_scoped_issue_scope(&session, &session.tenant.slug, None, None)?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let notes =
         list_issue_notes(&state.db, session.tenant_ctx, scope, issue_id, query.limit).await?;
     Ok(Json(notes))
@@ -566,6 +560,7 @@ async fn project_list_issue_notes_handler(
         Some(&workspace_slug),
         Some(&project_slug),
     )?;
+    authorize_issue_read(&state, &session, &scope, issue_id).await?;
     let notes =
         list_issue_notes(&state.db, session.tenant_ctx, scope, issue_id, query.limit).await?;
     Ok(Json(notes))
@@ -676,9 +671,7 @@ async fn list_releases_handler(
         filter.project_slug = Some(tok.project_slug.clone());
     }
     let mut items = list_releases(&state.db, session.tenant_ctx, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        items.retain(|r| session.can_access_workspace(r.workspace_id));
-    }
+    items.retain(|r| session.can_read_project(r.project_id, r.workspace_id));
     Ok(Json(items))
 }
 
@@ -694,9 +687,7 @@ async fn project_list_releases_handler(
         filter.project_id = Some(pid);
     }
     let mut items = list_releases(&state.db, session.tenant_ctx, filter).await?;
-    if session.tenant_role.is_none() && !session.is_api_token() {
-        items.retain(|r| session.can_access_workspace(r.workspace_id));
-    }
+    items.retain(|r| session.can_read_project(r.project_id, r.workspace_id));
     Ok(Json(items))
 }
 
@@ -714,7 +705,7 @@ async fn upsert_release_handler(
         }
         input.workspace_slug = Some(tok.workspace_slug.clone());
     }
-    let rel = upsert_release(&state.db, session.tenant_ctx, session.role, input).await?;
+    let rel = upsert_release(&state.db, session.tenant_ctx, &session, input).await?;
     Ok((StatusCode::CREATED, Json(rel)))
 }
 
@@ -726,11 +717,7 @@ async fn list_release_issues_handler(
 ) -> Result<Json<Vec<IssueSummaryView>>, AppError> {
     let mut items =
         list_release_issues(&state.db, session.tenant_ctx, release_id, query.limit).await?;
-    if let Some(scoped_pid) = session.scoped_project_id() {
-        items.retain(|i| i.project_id == scoped_pid);
-    } else if session.tenant_role.is_none() {
-        items.retain(|i| session.can_access_workspace(i.workspace_id));
-    }
+    items.retain(|i| session.can_read_project(i.project_id, i.workspace_id));
     Ok(Json(items))
 }
 
@@ -992,4 +979,15 @@ async fn project_assignable_members_handler(
     Ok(Json(
         assignable_members_in_scope(&state, &session, scope, issue_id).await?,
     ))
+}
+
+/// Single-issue read endpoints: the issue must belong to a project the caller can read.
+async fn authorize_issue_read(
+    state: &AuthState,
+    session: &AuthSession,
+    scope: &IssueScope<'_>,
+    issue_id: i64,
+) -> Result<(), AppError> {
+    let issue = get_issue_summary(&state.db, session.tenant_ctx, scope.clone(), issue_id).await?;
+    session.enforce_project_read(issue.project_id, issue.workspace_id)
 }

@@ -464,7 +464,7 @@ async fn f018_users_affected_sorting_merge_split_and_user_spike_alerts() {
     let channel = create_alert_channel(
         &pool,
         TenantContext::new(t).expect("tenant ctx"),
-        Role::TenantOwner,
+        &Role::TenantOwner,
         CreateAlertChannelInput {
             name: "F018 hook".to_owned(),
             channel_type: "webhook".to_owned(),

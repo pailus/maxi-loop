@@ -134,6 +134,11 @@ pub async fn compare_releases(
 
     // 1. Resolve target project inside tenant & optional workspace scope.
     let project = resolve_project(&mut tx, tenant_ctx, scope.workspace_slug, project_slug).await?;
+    if let Some(access) = &scope.access
+        && !access.allows(project.id, project.workspace_id)
+    {
+        return Err(AppError::NotFound);
+    }
 
     // 2. Load release metadata for both releases.
     let meta_rows: Vec<ReleaseMetaRow> = sqlx::query_as(

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use maxi_loop_auth::model::Role;
+use maxi_loop_platform::access::{ProjectAccess, push_access_sql};
 use maxi_loop_platform::config::{is_valid_email, is_valid_slug};
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
@@ -752,6 +753,7 @@ struct ValidatedIssueFilter {
     is_regressed: Option<bool>,
     issue_type: Option<IssueTypeFilter>,
     assigned_to: Option<AssigneeFilter>,
+    access: Option<ProjectAccess>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     query: Option<String>,
@@ -897,6 +899,7 @@ impl ValidatedIssueFilter {
             is_regressed: raw.is_regressed,
             issue_type: IssueTypeFilter::parse(raw.issue_type.as_deref())?,
             assigned_to: AssigneeFilter::parse(raw.assigned_to.as_deref())?,
+            access: raw.access,
             since: raw.since,
             until: raw.until,
             query,
@@ -908,6 +911,7 @@ impl ValidatedIssueFilter {
     }
 
     fn append_where_clauses(&self, qb: &mut QueryBuilder<'_, Postgres>) {
+        push_access_sql(self.access.as_ref(), qb, "p.workspace_id", "i.project_id");
         if let Some(ws_slug) = &self.workspace_slug {
             qb.push(" AND w.slug = ").push_bind(ws_slug.clone());
         }

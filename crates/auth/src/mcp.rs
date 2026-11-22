@@ -380,12 +380,6 @@ pub async fn create_mcp_token(
     }
 
     let can_triage = input.can_triage.unwrap_or(false);
-    // Prevent privilege escalation: a read-only viewer cannot mint a triage-capable MCP token.
-    if can_triage && !session.role.can_triage_issues() {
-        return Err(AppError::Forbidden(
-            "viewer role cannot create triage-scoped mcp tokens",
-        ));
-    }
 
     let rate_limit = input.rate_limit_per_minute.unwrap_or(60);
     if !(1..=6000).contains(&rate_limit) {
@@ -520,6 +514,31 @@ pub async fn create_mcp_token(
             ));
         }
     };
+    // Prevent privilege escalation: the token may never reach further than its creator.
+    let (can_read_scope, can_triage_scope) = match (workspace_id, project_id) {
+        (None, _) => (
+            session.tenant_role.is_some(),
+            session.tenant_role.is_some_and(Role::can_triage_issues),
+        ),
+        (Some(ws), None) => (
+            session.can_read_whole_workspace(ws),
+            session.can_read_whole_workspace(ws) && session.can_triage_workspace(ws),
+        ),
+        (Some(ws), Some(p)) => (
+            session.can_read_project(p, ws),
+            session.can_triage_project(p, ws),
+        ),
+    };
+    if !can_read_scope {
+        return Err(AppError::Forbidden(
+            "you cannot create an mcp token for a scope you cannot access",
+        ));
+    }
+    if can_triage && !can_triage_scope {
+        return Err(AppError::Forbidden(
+            "you cannot create a triage mcp token for a scope you cannot triage",
+        ));
+    }
 
     let (raw_token, token_prefix, token_hash) = generate_mcp_token();
     let inserted: (i64, DateTime<Utc>) = sqlx::query_as(
@@ -581,7 +600,7 @@ pub async fn list_mcp_tokens(
     let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
     let tenant_id = session.tenant_ctx.tenant_id();
 
-    let rows: Vec<McpTokenRow> = if session.role.can_manage_projects() {
+    let rows: Vec<McpTokenRow> = if session.can_manage_tenant() {
         sqlx::query_as(
             "SELECT t.id, t.tenant_id, t.user_id, u.email AS user_email,
                     t.name, t.token_prefix, t.access_scope,
@@ -643,7 +662,7 @@ pub async fn revoke_mcp_token(
     let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
     let tenant_id = session.tenant_ctx.tenant_id();
 
-    let res = if session.role.can_manage_projects() {
+    let res = if session.can_manage_tenant() {
         sqlx::query(
             "UPDATE mcp_tokens
              SET revoked_at = COALESCE(revoked_at, NOW())
@@ -757,25 +776,20 @@ pub async fn authenticate_mcp_bearer_token(
         return Err(AppError::Unauthorized("invalid or revoked mcp token"));
     };
 
-    // Verify user still holds an active membership in this tenant.
-    let roles: Vec<String> =
-        sqlx::query_scalar("SELECT role FROM memberships WHERE tenant_id = $1 AND user_id = $2")
-            .bind(tenant_id)
-            .bind(row.user_id)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|err| AppError::DatabaseQuery(format!("load mcp token memberships: {err}")))?;
-
-    let mut best_role: Option<Role> = None;
-    for r in roles {
-        let parsed = Role::parse(&r)?;
-        if best_role.is_none_or(|cur| parsed.privilege_rank() > cur.privilege_rank()) {
-            best_role = Some(parsed);
-        }
-    }
-    let Some(role) = best_role else {
-        return Err(AppError::Unauthorized("no active tenant membership"));
-    };
+    // The owner's current memberships decide the token's power on every request, so a token
+    // stops working (or loses triage) as soon as the owner loses access to its scope.
+    let raw_memberships: Vec<(Option<i64>, String)> = sqlx::query_as(
+        "SELECT workspace_id, role FROM memberships WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(row.user_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("load mcp token memberships: {err}")))?;
+    let memberships = raw_memberships
+        .into_iter()
+        .map(|(ws, r)| Role::parse(&r).map(|role| (ws, role)))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let access_scope = match row.access_scope.as_str() {
         "tenant" => McpAccessScope::Tenant,
@@ -805,6 +819,11 @@ pub async fn authenticate_mcp_bearer_token(
             }
         }
         _ => return Err(AppError::Unauthorized("invalid mcp token scope")),
+    };
+    let Some(role) = role_within_scope(&memberships, &access_scope) else {
+        return Err(AppError::Unauthorized(
+            "mcp token owner no longer has access to the token scope",
+        ));
     };
 
     // Effective triage permission requires BOTH token `can_triage` AND user role capability.
@@ -910,7 +929,7 @@ pub async fn list_mcp_audit_logs(
     let mut tx = begin_tenant_tx(pool, session.tenant_ctx).await?;
     let tenant_id = session.tenant_ctx.tenant_id();
 
-    let rows: Vec<McpAuditRow> = if session.role.can_manage_projects() {
+    let rows: Vec<McpAuditRow> = if session.can_manage_tenant() {
         sqlx::query_as(
             "SELECT id, tenant_id, token_id, user_id, user_email, token_name,
                     tool_name, arguments_json, status, error_code, duration_ms, created_at
@@ -962,5 +981,53 @@ mod tests {
         assert_eq!(hash_mcp_token(&raw).unwrap(), hash);
         assert!(hash_mcp_token("invalid_prefix_token").is_err());
         assert!(hash_mcp_token("mlmcp_short").is_err());
+    }
+}
+
+/// Effective role of a token owner inside the token's scope (`None` = no access any more).
+/// Tenant scope needs a tenant-level membership; workspace/project scopes accept tenant-level
+/// or same-workspace memberships, taking the highest.
+fn role_within_scope(memberships: &[(Option<i64>, Role)], scope: &McpAccessScope) -> Option<Role> {
+    let applies = |ws: Option<i64>| match scope {
+        McpAccessScope::Tenant => ws.is_none(),
+        McpAccessScope::Workspace { workspace_id, .. }
+        | McpAccessScope::Project { workspace_id, .. } => ws.is_none() || ws == Some(*workspace_id),
+    };
+    memberships
+        .iter()
+        .filter(|(ws, _)| applies(*ws))
+        .map(|(_, role)| *role)
+        .max_by_key(|role| role.privilege_rank())
+}
+
+#[cfg(test)]
+mod scope_role_tests {
+    use super::*;
+
+    fn ws(id: i64) -> McpAccessScope {
+        McpAccessScope::Workspace {
+            workspace_id: id,
+            workspace_slug: "w".to_owned(),
+        }
+    }
+
+    #[test]
+    fn workspace_member_has_no_role_in_tenant_or_other_workspace_scope() {
+        let m = vec![(Some(1), Role::Member)];
+        assert_eq!(role_within_scope(&m, &McpAccessScope::Tenant), None);
+        assert_eq!(role_within_scope(&m, &ws(2)), None);
+        assert_eq!(role_within_scope(&m, &ws(1)), Some(Role::Member));
+    }
+
+    #[test]
+    fn takes_highest_applicable_role() {
+        let m = vec![(None, Role::Viewer), (Some(1), Role::WorkspaceAdmin)];
+        assert_eq!(
+            role_within_scope(&m, &McpAccessScope::Tenant),
+            Some(Role::Viewer)
+        );
+        assert_eq!(role_within_scope(&m, &ws(1)), Some(Role::WorkspaceAdmin));
+        assert_eq!(role_within_scope(&m, &ws(9)), Some(Role::Viewer));
+        assert_eq!(role_within_scope(&[], &ws(1)), None);
     }
 }

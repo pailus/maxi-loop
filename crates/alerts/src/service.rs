@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use maxi_loop_auth::model::Role;
+use maxi_loop_platform::access::{AccessGuard, ProjectAccess};
 use maxi_loop_platform::config::is_valid_slug;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
@@ -170,14 +170,10 @@ pub async fn list_alert_channels(
 pub async fn create_alert_channel(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     input: CreateAlertChannelInput,
     allow_private_ips: bool,
 ) -> Result<AlertChannelView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
-
     let name = input.name.trim();
     if name.is_empty() || name.len() > 128 {
         return Err(AppError::Validation(
@@ -197,6 +193,7 @@ pub async fn create_alert_channel(
         input.project_slug.as_deref(),
     )
     .await?;
+    guard.check_manage_scope(workspace_id, project_id)?;
 
     let inserted: (i64, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
         "INSERT INTO alert_channels (
@@ -238,13 +235,10 @@ pub async fn create_alert_channel(
 pub async fn update_alert_channel(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     channel_id: i64,
     input: UpdateAlertChannelInput,
 ) -> Result<AlertChannelView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if channel_id <= 0 {
         return Err(AppError::Validation("invalid channel_id".to_owned()));
     }
@@ -263,6 +257,14 @@ pub async fn update_alert_channel(
     };
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_scope_in_tx(
+        &mut tx,
+        "alert_channels",
+        tenant_ctx.tenant_id(),
+        channel_id,
+        guard,
+    )
+    .await?;
     let updated: Option<i64> = sqlx::query_scalar(
         "UPDATE alert_channels
          SET name = COALESCE($3, name),
@@ -309,17 +311,22 @@ pub async fn update_alert_channel(
 pub async fn delete_alert_channel(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     channel_id: i64,
 ) -> Result<(), AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if channel_id <= 0 {
         return Err(AppError::Validation("invalid channel_id".to_owned()));
     }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_scope_in_tx(
+        &mut tx,
+        "alert_channels",
+        tenant_ctx.tenant_id(),
+        channel_id,
+        guard,
+    )
+    .await?;
     let res = sqlx::query("DELETE FROM alert_channels WHERE tenant_id = $1 AND id = $2")
         .bind(tenant_ctx.tenant_id())
         .bind(channel_id)
@@ -373,13 +380,9 @@ pub async fn list_alert_rules(
 pub async fn create_alert_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     input: CreateAlertRuleInput,
 ) -> Result<AlertRuleView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
-
     let name = input.name.trim();
     if name.is_empty() || name.len() > 128 {
         return Err(AppError::Validation(
@@ -482,6 +485,7 @@ pub async fn create_alert_rule(
         input.project_slug.as_deref(),
     )
     .await?;
+    guard.check_manage_scope(workspace_id, project_id)?;
 
     let inserted: (i64, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
         "INSERT INTO alert_rules (
@@ -545,13 +549,10 @@ pub async fn create_alert_rule(
 pub async fn update_alert_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     rule_id: i64,
     input: UpdateAlertRuleInput,
 ) -> Result<AlertRuleView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if rule_id <= 0 {
         return Err(AppError::Validation("invalid rule_id".to_owned()));
     }
@@ -615,6 +616,14 @@ pub async fn update_alert_rule(
     };
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_scope_in_tx(
+        &mut tx,
+        "alert_rules",
+        tenant_ctx.tenant_id(),
+        rule_id,
+        guard,
+    )
+    .await?;
 
     let perf_threshold = if touches_perf {
         let current: Option<String> = sqlx::query_scalar(
@@ -713,17 +722,22 @@ pub async fn update_alert_rule(
 pub async fn delete_alert_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     rule_id: i64,
 ) -> Result<(), AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if rule_id <= 0 {
         return Err(AppError::Validation("invalid rule_id".to_owned()));
     }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_scope_in_tx(
+        &mut tx,
+        "alert_rules",
+        tenant_ctx.tenant_id(),
+        rule_id,
+        guard,
+    )
+    .await?;
     let res = sqlx::query("DELETE FROM alert_rules WHERE tenant_id = $1 AND id = $2")
         .bind(tenant_ctx.tenant_id())
         .bind(rule_id)
@@ -741,9 +755,11 @@ pub async fn delete_alert_rule(
     Ok(())
 }
 
+/// `access` limits rows to the caller's visible projects (`None` = whole tenant).
 pub async fn list_alert_deliveries(
     pool: &PgPool,
     tenant_ctx: TenantContext,
+    access: Option<&ProjectAccess>,
     limit: Option<u32>,
 ) -> Result<Vec<AlertDeliveryView>, AppError> {
     let limit = i64::from(limit.unwrap_or(50).clamp(1, 200));
@@ -761,11 +777,15 @@ pub async fn list_alert_deliveries(
          JOIN alert_channels c ON c.tenant_id = d.tenant_id AND c.id = d.channel_id
          LEFT JOIN issues i ON i.tenant_id = d.tenant_id AND i.project_id = d.project_id AND i.id = d.issue_id
          WHERE d.tenant_id = $1
+           AND ($3 OR p.workspace_id = ANY($4) OR d.project_id = ANY($5))
          ORDER BY d.created_at DESC, d.id DESC
          LIMIT $2",
     )
     .bind(tenant_ctx.tenant_id())
     .bind(limit)
+    .bind(access.is_none())
+    .bind(access.map(|a| a.workspace_ids.clone()).unwrap_or_default())
+    .bind(access.map(|a| a.project_ids.clone()).unwrap_or_default())
     .fetch_all(&mut *tx)
     .await
     .map_err(|err| AppError::DatabaseQuery(format!("list alert_deliveries: {err}")))?;
@@ -901,4 +921,25 @@ fn validate_transaction_name(raw: Option<&str>) -> Result<Option<String>, AppErr
             "transaction_name must be at most 512 printable characters".to_owned(),
         )),
     }
+}
+
+/// Load an existing channel's or rule's scope and require manage rights over it.
+/// `table` is a compile-time constant (`alert_channels` / `alert_rules`), never input.
+async fn check_scope_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &'static str,
+    tenant_id: i64,
+    id: i64,
+    guard: &dyn AccessGuard,
+) -> Result<(), AppError> {
+    let sql =
+        format!("SELECT workspace_id, project_id FROM {table} WHERE tenant_id = $1 AND id = $2");
+    let scope: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(&sql)
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|err| AppError::DatabaseQuery(format!("lookup {table} scope: {err}")))?;
+    let (workspace_id, project_id) = scope.ok_or(AppError::NotFound)?;
+    guard.check_manage_scope(workspace_id, project_id)
 }

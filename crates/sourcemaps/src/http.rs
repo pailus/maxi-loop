@@ -86,11 +86,7 @@ async fn list_sourcemaps_handler(
         filter.project_slug = Some(tok.project_slug.clone());
     }
     let mut items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
-    if let Some(scoped_pid) = session.scoped_project_id() {
-        items.retain(|m| m.project_id == scoped_pid);
-    } else if session.tenant_role.is_none() {
-        items.retain(|m| session.can_access_workspace(m.workspace_id));
-    }
+    items.retain(|m| session.can_read_project(m.project_id, m.workspace_id));
     Ok(Json(items))
 }
 
@@ -106,11 +102,7 @@ async fn scoped_list_sourcemaps_handler(
     session.enforce_api_token_project_slug(&project_slug)?;
     filter.project_slug = Some(project_slug);
     let mut items = list_source_maps(&state.db, session.tenant_ctx, filter).await?;
-    if let Some(scoped_pid) = session.scoped_project_id() {
-        items.retain(|m| m.project_id == scoped_pid);
-    } else if session.tenant_role.is_none() {
-        items.retain(|m| session.can_access_workspace(m.workspace_id));
-    }
+    items.retain(|m| session.can_read_project(m.project_id, m.workspace_id));
     Ok(Json(items))
 }
 
@@ -132,7 +124,7 @@ async fn upload_sourcemap_json_handler(
         &state.db,
         &state.resolver,
         session.tenant_ctx,
-        session.role,
+        &session,
         session.user.id,
         state.config.sourcemap_max_upload_bytes,
         UploadSourceMapRawInput {
@@ -168,7 +160,7 @@ async fn upload_sourcemap_raw_handler(
         &state.db,
         &state.resolver,
         session.tenant_ctx,
-        session.role,
+        &session,
         session.user.id,
         state.config.sourcemap_max_upload_bytes,
         UploadSourceMapRawInput {
@@ -214,7 +206,7 @@ async fn delete_sourcemap_handler(
         &state.db,
         &state.resolver,
         session.tenant_ctx,
-        session.role,
+        &session,
         sourcemap_id,
     )
     .await?;

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use maxi_loop_auth::model::Role;
+use maxi_loop_platform::access::AccessGuard;
 use maxi_loop_platform::config::is_valid_slug;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::tenant::{TenantContext, begin_tenant_tx};
@@ -210,13 +210,9 @@ pub async fn list_releases(
 pub async fn upsert_release(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     input: UpsertReleaseInput,
 ) -> Result<ReleaseView, AppError> {
-    if !role.can_triage_issues() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
-
     let proj_slug = input.project_slug.trim();
     if !is_valid_slug(proj_slug) {
         return Err(AppError::Validation("invalid project_slug".to_owned()));
@@ -314,9 +310,10 @@ pub async fn upsert_release(
         .map_err(|err| AppError::DatabaseQuery(format!("lookup project for release: {err}")))?,
     };
 
-    let Some((project_id, _workspace_id, _workspace_slug)) = proj_row else {
+    let Some((project_id, workspace_id, _workspace_slug)) = proj_row else {
         return Err(AppError::NotFound);
     };
+    guard.check_triage(project_id, workspace_id)?;
 
     let deployed_at = input.deployed_at.or_else(|| Some(Utc::now()));
     let release_id: i64 = sqlx::query_scalar(

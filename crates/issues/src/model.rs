@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use maxi_loop_platform::access::ProjectAccess;
 use maxi_loop_platform::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,6 +114,9 @@ pub struct IssueListFilter {
     pub query: Option<String>,
     /// `none` (unassigned), a user id, or an email. Callers resolve `me` to the user id first.
     pub assigned_to: Option<String>,
+    /// Caller's project visibility, set by the HTTP layer (never from the query string).
+    #[serde(skip)]
+    pub access: Option<ProjectAccess>,
     pub sort: Option<String>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,

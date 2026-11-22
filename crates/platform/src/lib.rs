@@ -1,3 +1,4 @@
+pub mod access;
 pub mod alert_notify;
 pub mod bootstrap;
 pub mod config;

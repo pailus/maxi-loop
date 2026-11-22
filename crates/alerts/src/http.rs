@@ -4,6 +4,7 @@ use axum::routing::{get, patch};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
 use maxi_loop_auth::model::AuthSession;
+use maxi_loop_platform::access::AccessGuard;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
 
@@ -52,7 +53,8 @@ async fn list_channels_handler(
     session: AuthSession,
 ) -> Result<Json<Vec<AlertChannelView>>, AppError> {
     session.require_user_session()?;
-    let items = list_alert_channels(&state.db, session.tenant_ctx).await?;
+    let mut items = list_alert_channels(&state.db, session.tenant_ctx).await?;
+    items.retain(|c| session.can_read_scope(c.workspace_id, c.project_id));
     Ok(Json(items))
 }
 
@@ -64,7 +66,7 @@ async fn create_channel_handler(
     session.require_user_session()?;
     // Production HTTP API ALWAYS enforces strict SSRF protection (allow_private_ips = false).
     let created =
-        create_alert_channel(&state.db, session.tenant_ctx, session.role, input, false).await?;
+        create_alert_channel(&state.db, session.tenant_ctx, &session, input, false).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -75,14 +77,8 @@ async fn update_channel_handler(
     Json(input): Json<UpdateAlertChannelInput>,
 ) -> Result<Json<AlertChannelView>, AppError> {
     session.require_user_session()?;
-    let updated = update_alert_channel(
-        &state.db,
-        session.tenant_ctx,
-        session.role,
-        channel_id,
-        input,
-    )
-    .await?;
+    let updated =
+        update_alert_channel(&state.db, session.tenant_ctx, &session, channel_id, input).await?;
     Ok(Json(updated))
 }
 
@@ -92,7 +88,7 @@ async fn delete_channel_handler(
     Path(channel_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
     session.require_user_session()?;
-    delete_alert_channel(&state.db, session.tenant_ctx, session.role, channel_id).await?;
+    delete_alert_channel(&state.db, session.tenant_ctx, &session, channel_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -101,7 +97,8 @@ async fn list_rules_handler(
     session: AuthSession,
 ) -> Result<Json<Vec<AlertRuleView>>, AppError> {
     session.require_user_session()?;
-    let items = list_alert_rules(&state.db, session.tenant_ctx).await?;
+    let mut items = list_alert_rules(&state.db, session.tenant_ctx).await?;
+    items.retain(|r| session.can_read_scope(r.workspace_id, r.project_id));
     Ok(Json(items))
 }
 
@@ -111,7 +108,7 @@ async fn create_rule_handler(
     Json(input): Json<CreateAlertRuleInput>,
 ) -> Result<(StatusCode, Json<AlertRuleView>), AppError> {
     session.require_user_session()?;
-    let created = create_alert_rule(&state.db, session.tenant_ctx, session.role, input).await?;
+    let created = create_alert_rule(&state.db, session.tenant_ctx, &session, input).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -123,7 +120,7 @@ async fn update_rule_handler(
 ) -> Result<Json<AlertRuleView>, AppError> {
     session.require_user_session()?;
     let updated =
-        update_alert_rule(&state.db, session.tenant_ctx, session.role, rule_id, input).await?;
+        update_alert_rule(&state.db, session.tenant_ctx, &session, rule_id, input).await?;
     Ok(Json(updated))
 }
 
@@ -133,7 +130,7 @@ async fn delete_rule_handler(
     Path(rule_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
     session.require_user_session()?;
-    delete_alert_rule(&state.db, session.tenant_ctx, session.role, rule_id).await?;
+    delete_alert_rule(&state.db, session.tenant_ctx, &session, rule_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -143,6 +140,8 @@ async fn list_deliveries_handler(
     Query(query): Query<DeliveriesQuery>,
 ) -> Result<Json<Vec<AlertDeliveryView>>, AppError> {
     session.require_user_session()?;
-    let items = list_alert_deliveries(&state.db, session.tenant_ctx, query.limit).await?;
+    let access = session.project_access();
+    let items =
+        list_alert_deliveries(&state.db, session.tenant_ctx, access.as_ref(), query.limit).await?;
     Ok(Json(items))
 }

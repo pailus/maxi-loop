@@ -5,6 +5,20 @@
 
 ---
 
+### 2026-11-22 — Claude Code — Colours & fonts identical to MaxiBoard (D009)
+
+**Status at end of session:** done (fba02cc, merged to main)
+
+**Done:**
+- `web/src/index.css`: white sidebar, MaxiBoard font + mono stacks, lozenge 12px/radius 4/`#E9F2FF` primary, tab underline on the strip border (`bottom:-1px`), `(hover:none) and (pointer:coarse)` 16px input guard, skeleton tokens.
+- `web/src/lib/avatar.ts` (port of MaxiBoard `initials.js`); topbar avatar uses it; brand mark is an icon tile like MaxiBoard's; toast restyled to MaxiBoard's sonner light toast (bottom-center).
+- Off-palette colours replaced (`#974F0C`→`#A54800`, `#533F04`→`#7F5F01`, `#006644`→`#216E4E`, `#D97706`→`#D97008`, `#0E7490`→`#206A83`, chart bars → `--color-primary`).
+
+**Verification run:**
+- `npm --prefix web run build` → PASS; `cargo build --release -p maxi-loop` → PASS; dev service restarted; headless Chrome screenshots (desktop Issues, Projects + toast, mobile) OK
+
+---
+
 ### 2026-11-22 — Claude Code — UI polish: MaxiBoard menu typography + responsive shell
 
 **Status at end of session:** done (fba02cc, merged to main)

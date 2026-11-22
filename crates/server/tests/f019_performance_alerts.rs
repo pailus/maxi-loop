@@ -224,7 +224,7 @@ async fn f019_p95_and_error_rate_alerts_with_cooldown_audit_and_validation() {
     let channel = create_alert_channel(
         &pool,
         TenantContext::new(t).expect("tenant ctx"),
-        Role::TenantOwner,
+        &Role::TenantOwner,
         CreateAlertChannelInput {
             name: "F019 hook".to_owned(),
             channel_type: "webhook".to_owned(),

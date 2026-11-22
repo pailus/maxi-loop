@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use maxi_loop_auth::model::Role;
+use maxi_loop_platform::access::AccessGuard;
 use maxi_loop_platform::config::is_valid_slug;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::scrub_notify::{PiiScrubRuleEntry, PiiScrubRuleType};
@@ -134,13 +134,9 @@ pub async fn list_pii_scrub_rules(
 pub async fn create_pii_scrub_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     input: CreatePiiScrubRuleInput,
 ) -> Result<PiiScrubRuleView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
-
     let name = input.name.trim();
     if name.is_empty() || name.len() > 128 {
         return Err(AppError::Validation(
@@ -253,6 +249,7 @@ pub async fn create_pii_scrub_rule(
             (Some(ws_id), Some(ws_s), Some(p_id), Some(p_s))
         }
     };
+    guard.check_manage_scope(workspace_id, project_id)?;
 
     let inserted: (i64, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
         "INSERT INTO pii_scrub_rules (
@@ -296,13 +293,10 @@ pub async fn create_pii_scrub_rule(
 pub async fn update_pii_scrub_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     rule_id: i64,
     input: UpdatePiiScrubRuleInput,
 ) -> Result<PiiScrubRuleView, AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if rule_id <= 0 {
         return Err(AppError::Validation("invalid rule_id".to_owned()));
     }
@@ -334,6 +328,7 @@ pub async fn update_pii_scrub_rule(
     };
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_rule_scope_in_tx(&mut tx, tenant_ctx.tenant_id(), rule_id, guard).await?;
     let updated: Option<i64> = sqlx::query_scalar(
         "UPDATE pii_scrub_rules
          SET name = COALESCE($3, name),
@@ -382,17 +377,15 @@ pub async fn update_pii_scrub_rule(
 pub async fn delete_pii_scrub_rule(
     pool: &PgPool,
     tenant_ctx: TenantContext,
-    role: Role,
+    guard: &dyn AccessGuard,
     rule_id: i64,
 ) -> Result<(), AppError> {
-    if !role.can_manage_projects() {
-        return Err(AppError::Forbidden("insufficient permissions"));
-    }
     if rule_id <= 0 {
         return Err(AppError::Validation("invalid rule_id".to_owned()));
     }
 
     let mut tx = begin_tenant_tx(pool, tenant_ctx).await?;
+    check_rule_scope_in_tx(&mut tx, tenant_ctx.tenant_id(), rule_id, guard).await?;
     let res = sqlx::query("DELETE FROM pii_scrub_rules WHERE tenant_id = $1 AND id = $2")
         .bind(tenant_ctx.tenant_id())
         .bind(rule_id)
@@ -409,4 +402,23 @@ pub async fn delete_pii_scrub_rule(
         .map_err(|err| AppError::DatabaseQuery(format!("commit delete pii_scrub_rule: {err}")))?;
 
     Ok(())
+}
+
+/// Load an existing rule's scope and require manage rights over it.
+async fn check_rule_scope_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: i64,
+    rule_id: i64,
+    guard: &dyn AccessGuard,
+) -> Result<(), AppError> {
+    let scope: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT workspace_id, project_id FROM pii_scrub_rules WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(rule_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|err| AppError::DatabaseQuery(format!("lookup pii rule scope: {err}")))?;
+    let (workspace_id, project_id) = scope.ok_or(AppError::NotFound)?;
+    guard.check_manage_scope(workspace_id, project_id)
 }

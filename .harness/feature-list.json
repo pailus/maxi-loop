@@ -543,6 +543,28 @@
         "F011"
       ],
       "notes": "Done 2026-11-22 (D016). Stage B (per-member project access, invite project picker) agreed as next step: tighten `user_can_triage_project`. Auto-unassign by trigger does not write a timeline note. No assignee notification yet."
+    },
+    {
+      "id": "F025",
+      "title": "Workspace isolation hardening (B0)",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Users with workspace-scoped access cannot read or change other workspaces' data via issues (lists, stats, events, notes), performance, releases, source maps, alert channels/rules/deliveries, PII rules or MCP",
+        "List endpoints filter visible projects in SQL (correct totals/pagination)",
+        "MCP tokens can only be created for scopes the creator can access/triage; role is recomputed inside the token scope on every request; tenant-wide MCP token/audit listing only for tenant owners/admins",
+        "Negative test for every hole, verified failing on the pre-fix code"
+      ],
+      "verification_commands": [
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "depends_on": [
+        "F003",
+        "F011"
+      ],
+      "notes": "Done 2026-11-22 (D017). Test crates/server/tests/b0_workspace_isolation.rs. Prepares Stage B (per-project access): all checks go through AuthSession::project_access / can_read_project / AccessGuard."
     }
   ]
 }

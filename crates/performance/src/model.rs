@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use maxi_loop_platform::access::ProjectAccess;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -180,6 +181,9 @@ pub struct PerformanceScope<'a> {
     pub tenant_slug: &'a str,
     pub workspace_slug: Option<&'a str>,
     pub project_slug: Option<&'a str>,
+    /// Caller's project visibility (`None` = whole tenant). MCP tokens are bounded by their
+    /// token scope instead and pass `None`.
+    pub access: Option<ProjectAccess>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

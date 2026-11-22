@@ -571,6 +571,7 @@ async fn tool_list_issues(
         until: args.until,
         query: args.query,
         // `me` = the token owner; `none` and emails pass through to the service validator.
+        access: None,
         assigned_to: args.assigned_to.map(|v| {
             if v.trim().eq_ignore_ascii_case("me") {
                 auth.user_id.to_string()
@@ -1041,11 +1042,13 @@ fn build_performance_scope<'a>(
     match &auth.access_scope {
         McpAccessScope::Tenant => Ok(PerformanceScope {
             tenant_slug: &auth.tenant_slug,
+            access: None,
             workspace_slug: None,
             project_slug: requested_project_slug,
         }),
         McpAccessScope::Workspace { workspace_slug, .. } => Ok(PerformanceScope {
             tenant_slug: &auth.tenant_slug,
+            access: None,
             workspace_slug: Some(workspace_slug.as_str()),
             project_slug: requested_project_slug,
         }),
@@ -1063,6 +1066,7 @@ fn build_performance_scope<'a>(
             }
             Ok(PerformanceScope {
                 tenant_slug: &auth.tenant_slug,
+                access: None,
                 workspace_slug: Some(workspace_slug.as_str()),
                 project_slug: Some(project_slug.as_str()),
             })

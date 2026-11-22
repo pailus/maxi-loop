@@ -4,6 +4,7 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maxi_loop_auth::http::AuthState;
 use maxi_loop_auth::model::AuthSession;
+use maxi_loop_platform::access::AccessGuard;
 use maxi_loop_platform::dsn_notify::ProjectDsnInfo;
 use maxi_loop_platform::error::AppError;
 use serde::Deserialize;
@@ -346,12 +347,9 @@ async fn list_workspace_projects_handler(
 }
 
 fn filter_visible_projects(session: &AuthSession, items: Vec<ProjectView>) -> Vec<ProjectView> {
-    if let Some(scoped_pid) = session.scoped_project_id() {
-        return items.into_iter().filter(|p| p.id == scoped_pid).collect();
-    }
     items
         .into_iter()
-        .filter(|p| session.can_access_workspace(p.workspace_id))
+        .filter(|p| session.can_read_project(p.id, p.workspace_id))
         .collect()
 }
 
@@ -580,7 +578,8 @@ async fn list_pii_rules_handler(
     session: AuthSession,
 ) -> Result<Json<Vec<PiiScrubRuleView>>, AppError> {
     session.require_user_session()?;
-    let rules = list_pii_scrub_rules(&state.db, session.tenant_ctx).await?;
+    let mut rules = list_pii_scrub_rules(&state.db, session.tenant_ctx).await?;
+    rules.retain(|r| session.can_read_scope(r.workspace_id, r.project_id));
     Ok(Json(rules))
 }
 
@@ -590,7 +589,7 @@ async fn create_pii_rule_handler(
     Json(input): Json<CreatePiiScrubRuleInput>,
 ) -> Result<(StatusCode, Json<PiiScrubRuleView>), AppError> {
     session.require_user_session()?;
-    let created = create_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, input).await?;
+    let created = create_pii_scrub_rule(&state.db, session.tenant_ctx, &session, input).await?;
     if let Some(entry) = created.to_cache_entry() {
         state.notify_pii_rule_upserted(entry);
     }
@@ -605,7 +604,7 @@ async fn update_pii_rule_handler(
 ) -> Result<Json<PiiScrubRuleView>, AppError> {
     session.require_user_session()?;
     let updated =
-        update_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, rule_id, input).await?;
+        update_pii_scrub_rule(&state.db, session.tenant_ctx, &session, rule_id, input).await?;
     if let Some(entry) = updated.to_cache_entry() {
         state.notify_pii_rule_upserted(entry);
     }
@@ -618,7 +617,7 @@ async fn delete_pii_rule_handler(
     Path(rule_id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
     session.require_user_session()?;
-    delete_pii_scrub_rule(&state.db, session.tenant_ctx, session.role, rule_id).await?;
+    delete_pii_scrub_rule(&state.db, session.tenant_ctx, &session, rule_id).await?;
     state.notify_pii_rule_deleted(session.tenant_ctx.tenant_id(), rule_id);
     Ok(StatusCode::NO_CONTENT)
 }

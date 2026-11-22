@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
+use maxi_loop_platform::access::push_access_sql;
 use maxi_loop_platform::config::is_valid_slug;
 use maxi_loop_platform::error::AppError;
 use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
@@ -265,6 +266,7 @@ pub async fn list_transactions(
          WHERE m.tenant_id = ",
     );
     qb.push_bind(tenant_ctx.tenant_id());
+    push_access_sql(scope.access.as_ref(), &mut qb, "p.workspace_id", "p.id");
     qb.push(" AND m.minute_bucket >= ").push_bind(since);
     qb.push(" AND m.minute_bucket <= ").push_bind(until);
 
@@ -432,6 +434,7 @@ pub async fn get_transaction_detail(
          WHERE m.tenant_id = ",
     );
     sum_qb.push_bind(tenant_ctx.tenant_id());
+    push_access_sql(scope.access.as_ref(), &mut sum_qb, "p.workspace_id", "p.id");
     sum_qb
         .push(" AND p.slug = ")
         .push_bind(proj_slug.to_owned());
@@ -651,6 +654,7 @@ pub async fn list_traces(
          WHERE t.tenant_id = ",
     );
     qb.push_bind(tenant_ctx.tenant_id());
+    push_access_sql(scope.access.as_ref(), &mut qb, "p.workspace_id", "p.id");
     qb.push(" AND t.received_at >= ").push_bind(since);
     qb.push(" AND t.received_at <= ").push_bind(until);
 
@@ -744,6 +748,7 @@ pub async fn get_trace(
          WHERE t.tenant_id = ",
     );
     qb.push_bind(tenant_ctx.tenant_id());
+    push_access_sql(scope.access.as_ref(), &mut qb, "p.workspace_id", "p.id");
     qb.push(" AND t.trace_id = ")
         .push_bind(normalized_trace_id.clone());
 
@@ -919,6 +924,7 @@ pub async fn list_slow_operations(
          WHERE m.tenant_id = ",
     );
     qb.push_bind(tenant_ctx.tenant_id());
+    push_access_sql(scope.access.as_ref(), &mut qb, "p.workspace_id", "p.id");
     qb.push(" AND m.minute_bucket >= ").push_bind(since);
     qb.push(" AND m.minute_bucket <= ").push_bind(until);
 
