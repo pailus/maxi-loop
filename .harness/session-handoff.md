@@ -8,7 +8,7 @@
 ## Last session
 - Date: 2026-11-22
 - Assistant: Claude Code
-- Feature worked on: UI polish — MaxiBoard menu typography (14px nav) + full responsive/mobile shell (drawer, bottom tab bar, overlay inspectors) + colours/fonts 1:1 with MaxiBoard (D009) — done, committed on branch `ui/maxiboard-alignment` (not merged to main yet)
+- Feature worked on: UI polish — MaxiBoard menu typography (14px nav) + full responsive/mobile shell (drawer, bottom tab bar, overlay inspectors) + colours/fonts 1:1 with MaxiBoard (D009) — done, committed (fba02cc), merged to main and pushed
 
 ## Current state
 - What works and is verified:

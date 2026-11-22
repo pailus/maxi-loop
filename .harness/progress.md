@@ -35,7 +35,7 @@
 
 ### 2026-11-22 — Claude Code — Colours & fonts identical to MaxiBoard (D009)
 
-**Status at end of session:** done (committed on branch `ui/maxiboard-alignment`)
+**Status at end of session:** done (fba02cc, merged to main)
 
 **Done:**
 - `web/src/index.css`: white sidebar, MaxiBoard font + mono stacks, lozenge 12px/radius 4/`#E9F2FF` primary, tab underline on the strip border (`bottom:-1px`), `(hover:none) and (pointer:coarse)` 16px input guard, skeleton tokens.
@@ -47,7 +47,7 @@
 
 ### 2026-11-22 — Claude Code — UI polish: MaxiBoard menu typography + responsive shell
 
-**Status at end of session:** done (committed on branch `ui/maxiboard-alignment`)
+**Status at end of session:** done (fba02cc, merged to main)
 
 **Done:**
 - Compared against MaxiBoard source (`maxi-code/static/src/pm/shell/BoardShell.jsx`, `maxiboard.css`): sidebar nav was 12px/16px icons vs MaxiBoard 14px/18px; no mobile layout at all (sidebar always visible, topbar overflowing at 390px).
