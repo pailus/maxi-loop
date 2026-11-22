@@ -1,0 +1,68 @@
+# Production stack: PostgreSQL 16 + maxi-loop, app published on loopback only
+# (put a TLS reverse proxy in front, see deploy/README.md).
+#
+# Needs a .env next to this file (mode 0600, never committed) with at least:
+#   POSTGRES_USER, POSTGRES_PASSWORD (URL-safe), POSTGRES_DB, PUBLIC_BASE_URL
+# Do NOT put BOOTSTRAP_ADMIN_* in it: startup would reset that admin's password
+# on every restart. Run `maxi-loop bootstrap` once instead (README).
+name: maxi-loop
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: maxi-loop-db
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  app:
+    image: ${MAXI_LOOP_IMAGE:-maxi-loop:latest}
+    container_name: maxi-loop-app
+    restart: unless-stopped
+    logging: *default-logging
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8080"
+      COOKIE_SECURE: "true"
+      INGEST_SPOOL_DIR: /var/lib/maxi-loop/spool
+    ports:
+      - "127.0.0.1:${MAXI_LOOP_HOST_PORT:-8110}:8080"
+    volumes:
+      - spool:/var/lib/maxi-loop/spool
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+volumes:
+  pgdata:
+  spool:
+
+networks:
+  internal:
+    driver: bridge

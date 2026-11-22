@@ -590,6 +590,28 @@
         "F025"
       ],
       "notes": "Done 2026-11-22 (D018). Test crates/server/tests/f026_project_access.rs."
+    },
+    {
+      "id": "F027",
+      "title": "Production packaging and deploy (loop.maxiflow.id)",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Multi-stage Dockerfile (npm build -> cargo release -> Debian slim), non-root runtime user, 0700 spool dir",
+        "docker-compose.prod.yml: PostgreSQL 16 (not published) + app on 127.0.0.1 only, read-only rootfs, cap_drop ALL, no-new-privileges, capped logs, spool volume",
+        "nginx vhost with TLS (certbot) behind Cloudflare Full, real client IP only from Cloudflare ranges",
+        "deploy/deploy.sh ships the image over SSH with rollback tag and /healthz wait; deploy/README.md covers one-time setup, admin bootstrap, rollback, backup",
+        "Live at https://loop.maxiflow.id: /healthz 200, admin login works, anonymous API 401"
+      ],
+      "verification_commands": [
+        "docker build -t maxi-loop:latest .",
+        "DEPLOY_HOST=user@host deploy/deploy.sh --skip-build",
+        "curl -fsS https://loop.maxiflow.id/healthz"
+      ],
+      "depends_on": [
+        "F026"
+      ],
+      "notes": "Done 2026-11-23 (D019). Secrets (.env, ADMIN_CREDENTIALS) exist only on the server in ~/maxi-loop (0700/0600)."
     }
   ]
 }

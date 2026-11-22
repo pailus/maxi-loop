@@ -1,0 +1,14 @@
+# Keep the build context small and free of secrets.
+.git
+.env
+.env.*
+!.env.example
+target
+**/target
+web/node_modules
+web/dist
+tests
+docs
+.harness
+deploy
+*.log

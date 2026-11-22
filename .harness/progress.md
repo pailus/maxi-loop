@@ -33,6 +33,30 @@
 
 ---
 
+### 2026-11-23 — Claude Code — F027 production packaging + deploy to loop.maxiflow.id
+
+**Status at end of session:** done
+
+**Done:**
+- `Dockerfile`, `.dockerignore`, `docker-compose.prod.yml`, `deploy/deploy.sh`, `deploy/nginx/loop.maxiflow.id.conf`, `deploy/README.md`.
+- Server (shared VPS, user `maxiflow`): `~/maxi-loop/.env` generated there (random hex DB password), certbot cert `loop.maxiflow.id` (exp. 2027-02-20, auto-renew), vhost in `/etc/nginx/conf.d/`, stack up, admin `admin@maxiflow.id` bootstrapped once; its random password is only in `~/maxi-loop/ADMIN_CREDENTIALS` (0600).
+
+**Verification run:**
+- `docker build` (podman locally) → PASS, 112 MB, runs as uid 10001
+- `deploy/deploy.sh --skip-build` → healthy; `https://loop.maxiflow.id/healthz` → 200; SPA served with CSP/X-Frame-Options; anon `/api/v1/auth/me` → 401; admin login via public URL → 200 + `/me` OK; wrong password → 401 without cookie
+- Container: read-only rootfs, cap_drop ALL, no-new-privileges, `COOKIE_SECURE=true`, spool dir 0700, DB port not published; `code.maxiflow.id` still 200
+
+**Security notes:**
+- No secrets in git or chat; `.env`/credentials only on the server. Real client IP trusted only from Cloudflare ranges. Bootstrap env kept out of `.env` (would reset the admin password on restart).
+
+**Key decisions & why:**
+- D019.
+
+**Not finished / blockers:**
+- User must log in, change the admin password and delete `~/maxi-loop/ADMIN_CREDENTIALS`. No SMTP configured on prod (email alerts/invites off). No automated DB backup yet.
+
+---
+
 ### 2026-11-23 — Claude Code — test fix: phase2 spike-alert flake
 
 **Status at end of session:** done
@@ -234,30 +258,3 @@
 
 **Not finished / blockers:**
 - none for F020; pre-existing flaky `phase2_pii_releases_alerts` not fixed (out of scope, reported to user)
-
-### 2026-11-22 — Claude Code — F019: Performance alerts (p95 latency / error rate)
-
-**Status at end of session:** done
-
-**Done:**
-- `migrations/0013_performance_alerts.sql`: `alert_rules` trigger types `perf_p95` / `perf_error_rate` + `transaction_name`, `perf_threshold`, `perf_window_minutes`, `perf_min_count` (CHECKs per type); `alert_deliveries.issue_id` nullable + `transaction_name`, `metric_value`, `subject`, perf cooldown index
-- `crates/alerts`: `evaluate_performance_rules` on the 60s engine tick (p95 from merged log histograms via `maxi_loop_performance::histogram::estimate_percentile`, error rate from counts), cooldown per (rule, project, transaction), audit log rows; validation for create/update (per-type threshold ranges, window, min count, transaction name); payload `performance` context, `issue_id` omitted for perf alerts
-- UI (Alerts): p95 / error-rate triggers with transaction, threshold, window, min transactions; rule summary; delivery log handles issue-less rows
-- Tests: `crates/server/tests/f019_performance_alerts.rs` (fire / no-fire / min traffic / cooldown / audit log / 9 validation negatives), engine unit tests, E2E `tests/e2e/python/verify_performance_alerts.py` (official sentry-sdk, cleans up its rules)
-
-**Verification run:**
-- `npm --prefix web run build` → PASS
-- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
-- `cargo test --workspace` → PASS (115 passed, 0 failed)
-- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; dev service restarted (migration 0013 applied); `cargo tree --depth 1 -p maxi-loop-mcp` → 0 direct `sqlx`
-- `verify_performance_alerts.py` → PASS (delivery `failed` = no SMTP on dev host, by design no off-host traffic)
-- Headless Chrome screenshots (Alerts rules + perf form, delivery log) → OK
-
-**Security notes:**
-- New rule inputs allow-listed / range-checked server-side and by DB CHECKs (negatives tested); queries parameterized; same role checks + RLS as existing alert endpoints; delivery path (SSRF guard, header sanitizing) unchanged; only internal crate dependency added (`alerts` → `performance`).
-
-**Key decisions & why:**
-- D011 (reuse `alert_rules`/`alert_deliveries`, nullable `issue_id`)
-
-**Not finished / blockers:**
-- None.

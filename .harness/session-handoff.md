@@ -6,9 +6,13 @@
 > recorded in progress.md).
 
 ## Last session
-- Date: 2026-11-22
+- Date: 2026-11-23
 - Assistant: Claude Code
-- Work: Team & settings full width; `F022` invite-by-link onboarding; `F023` self-service password change (D015); `F024` issue assignment UI + MCP (D016); `F025` workspace isolation hardening (D017); `F026` per-member project access (D018).
+- Work: Team & settings full width; `F022` invite-by-link onboarding; `F023` self-service password change (D015); `F024` issue assignment UI + MCP (D016); `F025` workspace isolation hardening (D017); `F026` per-member project access (D018); phase2 spike-test fix; `F027` production deploy to loop.maxiflow.id (D019).
+
+## Production (F027, D019)
+- Live at https://loop.maxiflow.id on the shared VPS (`ssh maxiflow@217.15.161.239`), `~/maxi-loop` (compose project `maxi-loop`, containers `maxi-loop-app` / `maxi-loop-db`, app on 127.0.0.1:8110, nginx `/etc/nginx/conf.d/loop.maxiflow.id.conf`). Redeploy: `DEPLOY_HOST=maxiflow@217.15.161.239 deploy/deploy.sh`. The host also runs maxi-code, jagaweb, tirta-staging, connect — never touch their containers or vhosts.
+- Pending for the user: change admin password, delete `~/maxi-loop/ADMIN_CREDENTIALS`. No prod SMTP, no automated backup yet.
 
 ## Current state
 - What works and is verified: `F001`–`F026` `done`. New tests `f022_invitations_password.rs`, `f024_issue_assignment.rs` PASS; `cargo test --workspace --no-fail-fast` → 145 passed, 0 failed (after the phase2 spike-test fix); fmt/clippy/web build PASS; release binary running as `maxi-loop-dev` on :8080 with migrations 0014–0016 applied.
@@ -32,4 +36,4 @@
 
 ## Suggested next steps
 0. Optional follow-ups: e-mail delivery for invites + forgot-password + assignee notifications (needs an e-mail sender outside `alerts`).
-1. **Production packaging (LAST item in user-agreed order):** `Dockerfile` (multi-stage build: React `web/dist` + Rust release binary, non-root user, `0700` spool dir support), `docker-compose.prod.yml` (with PostgreSQL + `INGEST_SPOOL_DIR` volume), and reverse-proxy TLS deployment guide (Nginx/Caddy).
+1. Production follow-ups: automated `pg_dump` backup (cron/systemd timer), optional SMTP for invites/alerts.

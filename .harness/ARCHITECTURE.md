@@ -38,6 +38,9 @@ web/                     — React + TypeScript + Vite + Tailwind CSS v4 fronten
   src/lib/               — Shared HTTP client (`api.ts` with cookie auth & automatic `X-CSRF-Token`); `urlState.ts` = query-string UI state (`view`, `tab`, `status`, `issue`, `full`, `detail`, `trace`, `project`, `workspace`; D014)
   src/modules/<feature>/ — Vertical-slice UI modules (`auth/`, `workspaces/`, `issues/`, `performance/`, `releases/`, `alerts/`, `mcp/`, `projects/`, `admin/`, `health/`)
 docker-compose.yml       — Isolated PostgreSQL 16 service for local dev & integration tests
+Dockerfile               — Production image (npm build → cargo release → Debian slim, non-root uid 10001)
+docker-compose.prod.yml  — Production stack: PostgreSQL 16 (unpublished) + app on 127.0.0.1:8110, hardened (read-only, cap_drop ALL)
+deploy/                  — `deploy.sh` (build → ship over SSH → compose up → /healthz), nginx vhost for loop.maxiflow.id, `README.md` (setup, bootstrap, rollback, backup; D019)
 .harness/                — AI working rules, feature list, progress log, decisions, handoff
 ```
 

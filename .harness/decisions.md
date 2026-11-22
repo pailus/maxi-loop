@@ -8,6 +8,12 @@
 
 ---
 
+### D019 — 2026-11-23 — Production: Docker Compose behind host nginx, image built locally and shipped over SSH (F027)
+**Decision:** Run production as `docker-compose.prod.yml` (PostgreSQL 16 unpublished + app on `127.0.0.1:8110`) behind the host's nginx (certbot TLS, Cloudflare Full). The image is built on the dev machine and transferred with `docker save | ssh docker load` (`deploy/deploy.sh`); the server never builds Rust. The first admin is created once with `maxi-loop bootstrap`; `BOOTSTRAP_ADMIN_*` is never put in the production `.env`.
+**Why:** The VPS is shared with other services (4 vCPU / 8 GB) and already uses the nginx + loopback-container pattern; building there would compete for CPU/RAM. Startup bootstrap upserts the admin and would reset a changed password on every restart.
+**Rejected:** Caddy/Traefik in the stack (host nginx already owns 80/443); building on the server; a registry (not needed for one host yet).
+**Decided by:** assistant (deploy requested by user)
+
 ### D018 — 2026-11-22 — Project-limited workspace memberships (Stage B, F026)
 **Decision:** `memberships.project_limited` + `membership_projects` (and `invitations.project_limited` + `invitation_projects`, migration 0016). Only workspace-scoped `member`/`viewer` grants can be limited; admins and tenant-level roles always cover their whole scope, and promotion clears limits. The explicit flag, not "has rows", marks a limited grant, so a deleted project (FK cascade) can only shrink access. Limits are read once per request into `AuthSession.workspace_project_limits` and applied through `project_access()` (D017), so every endpoint follows them; MCP `role_within_scope` and SQL `user_can_triage_project` apply the same rule (no workspace-wide MCP token for limited members). `replace_membership_limits_in_tx` widens before it narrows so the per-statement unassign triggers never see a transient narrower state. API: `project_ids` on member create and invitation create, `PUT /members/{id}/projects` (workspace managers only), `projects` + `project_limited` on member/invitation views and invite preview.
 **Why:** User wants invites/members limited to chosen projects; issue assignment must follow the same access.

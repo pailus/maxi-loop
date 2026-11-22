@@ -5,6 +5,35 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F019: Performance alerts (p95 latency / error rate)
+
+**Status at end of session:** done
+
+**Done:**
+- `migrations/0013_performance_alerts.sql`: `alert_rules` trigger types `perf_p95` / `perf_error_rate` + `transaction_name`, `perf_threshold`, `perf_window_minutes`, `perf_min_count` (CHECKs per type); `alert_deliveries.issue_id` nullable + `transaction_name`, `metric_value`, `subject`, perf cooldown index
+- `crates/alerts`: `evaluate_performance_rules` on the 60s engine tick (p95 from merged log histograms via `maxi_loop_performance::histogram::estimate_percentile`, error rate from counts), cooldown per (rule, project, transaction), audit log rows; validation for create/update (per-type threshold ranges, window, min count, transaction name); payload `performance` context, `issue_id` omitted for perf alerts
+- UI (Alerts): p95 / error-rate triggers with transaction, threshold, window, min transactions; rule summary; delivery log handles issue-less rows
+- Tests: `crates/server/tests/f019_performance_alerts.rs` (fire / no-fire / min traffic / cooldown / audit log / 9 validation negatives), engine unit tests, E2E `tests/e2e/python/verify_performance_alerts.py` (official sentry-sdk, cleans up its rules)
+
+**Verification run:**
+- `npm --prefix web run build` → PASS
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace` → PASS (115 passed, 0 failed)
+- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; dev service restarted (migration 0013 applied); `cargo tree --depth 1 -p maxi-loop-mcp` → 0 direct `sqlx`
+- `verify_performance_alerts.py` → PASS (delivery `failed` = no SMTP on dev host, by design no off-host traffic)
+- Headless Chrome screenshots (Alerts rules + perf form, delivery log) → OK
+
+**Security notes:**
+- New rule inputs allow-listed / range-checked server-side and by DB CHECKs (negatives tested); queries parameterized; same role checks + RLS as existing alert endpoints; delivery path (SSRF guard, header sanitizing) unchanged; only internal crate dependency added (`alerts` → `performance`).
+
+**Key decisions & why:**
+- D011 (reuse `alert_rules`/`alert_deliveries`, nullable `issue_id`)
+
+**Not finished / blockers:**
+- None.
+
+---
+
 ### 2026-11-22 — Claude Code — F018: Users affected per issue + impact sorting
 
 **Status at end of session:** done
