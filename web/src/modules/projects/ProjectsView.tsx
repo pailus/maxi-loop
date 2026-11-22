@@ -16,7 +16,9 @@ import {
   rotateProjectDsn,
   updateProjectSettings,
 } from "../../lib/api";
-import { PlatformChip } from "./PlatformLogo";
+import { ONBOARDING_PLATFORMS, buildSdkSteps } from "./onboardingPlatforms";
+import { PlatformChip, PlatformLogo } from "./PlatformLogo";
+import { SdkSetupSteps } from "./SdkSetupSteps";
 import { ProjectIcon } from "./ProjectIcon";
 
 interface ProjectsViewProps {
@@ -57,7 +59,8 @@ export function ProjectsView({
   onOpenProjectIssues,
   onShowToast,
 }: ProjectsViewProps) {
-  const [sdkLang, setSdkLang] = useState<"python" | "go" | "rust">("python");
+  const [quickstartSlug, setQuickstartSlug] = useState<string>("");
+  const [quickstartPlatform, setQuickstartPlatform] = useState<string | null>(null);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [editTags, setEditTags] = useState("");
   const [editRetention, setEditRetention] = useState("");
@@ -211,8 +214,15 @@ export function ProjectsView({
     });
   }
 
-  const sampleDsn =
-    projects[0]?.dsn ?? "http://<public_key>@localhost:8080/1";
+  const quickstartProject =
+    projects.find((p) => p.slug === quickstartSlug) ?? projects[0] ?? null;
+  const sampleDsn = quickstartProject?.dsn ?? "http://<public_key>@localhost:8080/1";
+  // Default the quickstart tab to the selected project's own platform.
+  const activeQuickstartPlatform =
+    quickstartPlatform ??
+    (quickstartProject && ONBOARDING_PLATFORMS.some((o) => o.id === quickstartProject.platform)
+      ? quickstartProject.platform
+      : "python");
 
   const renderProjectCard = (p: ProjectView, keyPrefix: string) => {
     const isCopied = copiedId === p.id;
@@ -624,63 +634,73 @@ export function ProjectsView({
 
       {/* Right Docked Drawer: SDK Quickstart (project creation lives in the CreateProjectDialog wizard) */}
       <aside className="w-full lg:w-[440px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel p-5 overflow-y-auto max-h-[calc(100vh-56px)]">
-        <div>
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-bold text-[var(--color-text)]">
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">
               Sentry SDK quickstart
             </h3>
-            <div className="flex items-center gap-1">
-              {(["python", "go", "rust"] as const).map((lang) => (
+            <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
+              Any official Sentry SDK works without custom wrappers. Pick a project and platform:
+            </p>
+          </div>
+
+          {projects.length > 0 && (
+            <div>
+              <label
+                htmlFor="quickstart-project"
+                className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1"
+              >
+                Project DSN
+              </label>
+              <select
+                id="quickstart-project"
+                value={quickstartProject?.slug ?? ""}
+                onChange={(e) => {
+                  setQuickstartSlug(e.target.value);
+                  setQuickstartPlatform(null);
+                }}
+                className="pm-input"
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.slug}>
+                    {p.name} ({p.slug})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-5 gap-1.5" role="tablist" aria-label="SDK platform">
+            {ONBOARDING_PLATFORMS.filter((o) => o.id !== "other").map((o) => {
+              const active = activeQuickstartPlatform === o.id;
+              return (
                 <button
-                  key={lang}
+                  key={o.id}
                   type="button"
-                  onClick={() => setSdkLang(lang)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer ${
-                    sdkLang === lang
-                      ? "bg-[var(--color-primary-light)] text-[var(--color-primary)]"
-                      : "text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)]"
+                  role="tab"
+                  aria-selected={active}
+                  title={o.label}
+                  onClick={() => setQuickstartPlatform(o.id)}
+                  className={`flex flex-col items-center gap-1 p-1.5 rounded-md border cursor-pointer transition ${
+                    active
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]"
+                      : "border-transparent hover:bg-[var(--color-bg-hover)]"
                   }`}
                 >
-                  {lang.toUpperCase()}
+                  <PlatformLogo platform={o.id} size={28} />
+                  <span
+                    className={`text-[10px] font-semibold truncate max-w-full ${
+                      active ? "text-[var(--color-primary)]" : "text-[var(--color-text-dim)]"
+                    }`}
+                  >
+                    {o.label.replace("Browser JavaScript", "Browser JS")}
+                  </span>
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
-          <p className="mt-0.5 text-xs text-[var(--color-text-dim)]">
-            Official Python, Go, Rust, and React SDKs work without custom wrappers:
-          </p>
 
-          <pre className="mt-2.5 p-3 rounded-md bg-[var(--pm-col)] border border-[var(--color-border)] pm-mono text-xs leading-relaxed text-[var(--color-text)] overflow-x-auto">
-{sdkLang === "python"
-  ? `# pip install sentry-sdk[fastapi]
-import sentry_sdk
-
-sentry_sdk.init(
-    dsn="${sampleDsn}",
-    environment="production",
-    release="9f3c2a1",
-    traces_sample_rate=1.0,
-)`
-  : sdkLang === "go"
-    ? `// go get github.com/getsentry/sentry-go
-sentry.Init(sentry.ClientOptions{
-    Dsn:              "${sampleDsn}",
-    Environment:      "production",
-    Release:          "9f3c2a1",
-    EnableTracing:    true,
-    TracesSampleRate: 1.0,
-})`
-    : `// Cargo.toml: sentry = "0.34"
-let _guard = sentry::init((
-    "${sampleDsn}",
-    sentry::ClientOptions {
-        release: Some("9f3c2a1".into()),
-        environment: Some("production".into()),
-        traces_sample_rate: 1.0,
-        ..Default::default()
-    },
-));`}
-          </pre>
+          <SdkSetupSteps steps={buildSdkSteps(activeQuickstartPlatform, sampleDsn)} />
         </div>
       </aside>
     </div>
