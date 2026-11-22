@@ -357,7 +357,7 @@ export function App() {
                 onClick={() => setActiveNav("issues")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "issues"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -370,7 +370,7 @@ export function App() {
                 onClick={() => setActiveNav("regressed")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "regressed"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -383,7 +383,7 @@ export function App() {
                 onClick={() => setActiveNav("performance")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "performance"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -396,7 +396,7 @@ export function App() {
                 onClick={() => setActiveNav("releases")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "releases"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -409,7 +409,7 @@ export function App() {
                 onClick={() => setActiveNav("alerts")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "alerts"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -422,7 +422,7 @@ export function App() {
                 onClick={() => setActiveNav("mcp")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "mcp"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -435,7 +435,7 @@ export function App() {
                 onClick={() => setActiveNav("projects")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "projects"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -451,7 +451,7 @@ export function App() {
                 onClick={() => setActiveNav("team")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "team"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
@@ -464,7 +464,7 @@ export function App() {
                 onClick={() => setActiveNav("health")}
                 className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
                   activeNav === "health"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold shadow-[inset_3px_0_0_var(--color-primary)]"
+                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                 }`}
               >
