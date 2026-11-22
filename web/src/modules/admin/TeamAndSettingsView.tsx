@@ -420,7 +420,7 @@ export function TeamAndSettingsView({
       {/* Tab Body */}
       <div className="flex-1 min-h-0 overflow-y-auto p-6">
         {tab === "members" && (
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 max-w-6xl">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
             <div>
               <h2 className="text-sm font-bold text-[var(--color-text)]">
                 Tenant &amp; Workspace Memberships
@@ -664,7 +664,7 @@ export function TeamAndSettingsView({
         )}
 
         {tab === "settings" && (
-          <div className="space-y-6 max-w-5xl">
+          <div className="space-y-6">
             {settingsError && (
               <div className="p-2.5 rounded bg-[var(--color-danger-light)] border border-[#f87168] text-[var(--color-danger-text)] text-xs font-medium flex items-center gap-2">
                 <AlertCircle size={14} className="shrink-0" />
@@ -949,7 +949,7 @@ export function TeamAndSettingsView({
         )}
 
         {tab === "api_tokens" && (
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 max-w-6xl">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
             <div>
               <h2 className="text-sm font-bold text-[var(--color-text)]">
                 Per-Project API Tokens (`mlapi_...`)
