@@ -1,33 +1,24 @@
 import { type FormEvent, useState } from "react";
-import {
-  AlertCircle,
-  Building2,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  EyeOff,
-  Lock,
-  Mail,
-  Terminal,
-} from "lucide-react";
-import {
-  type AuthSessionView,
-  type HealthPayload,
-  loginWithPassword,
-} from "../../lib/api";
+import { AlertCircle, Eye, EyeOff, Lock, Mail } from "lucide-react";
+import { type AuthSessionView, loginWithPassword } from "../../lib/api";
 
 interface LoginViewProps {
-  health: HealthPayload | null;
   onAuthenticated: (session: AuthSessionView) => void;
 }
 
-export function LoginView({ health, onAuthenticated }: LoginViewProps) {
+const TENANT_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** Optional `?tenant=<slug>` deep link for users who belong to several organizations. */
+function tenantSlugFromUrl(): string | undefined {
+  const raw = new URLSearchParams(window.location.search).get("tenant")?.trim().toLowerCase();
+  return raw && TENANT_SLUG_PATTERN.test(raw) ? raw : undefined;
+}
+
+export function LoginView({ onAuthenticated }: LoginViewProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [tenantSlug, setTenantSlug] = useState("");
-  const [showTenantInput, setShowTenantInput] = useState(false);
+  const [tenantSlug] = useState(tenantSlugFromUrl);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,7 +35,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
       const session = await loginWithPassword({
         email,
         password,
-        tenant_slug: showTenantInput && tenantSlug.trim() ? tenantSlug.trim() : undefined,
+        tenant_slug: tenantSlug,
       });
       onAuthenticated(session);
     } catch (err) {
@@ -53,8 +44,6 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
       setSubmitting(false);
     }
   }
-
-  const dbHealthy = health?.database === "ok" && health?.status === "ok";
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--color-bg-muted)] text-[var(--color-text)]">
@@ -71,17 +60,6 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
             Error tracking &amp; performance monitoring
           </span>
         </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <span
-            className={`pm-lozenge ${
-              dbHealthy ? "pm-lozenge-success" : "pm-lozenge-warning"
-            }`}
-          >
-            {dbHealthy ? "POSTGRES 16 OK" : "CHECKING DB"}
-          </span>
-          <span className="pm-lozenge">v{health?.version ?? "0.1.0"}</span>
-        </div>
       </header>
 
       {/* Centered MaxiBoard Sign-In Card */}
@@ -97,21 +75,6 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
             Enter your workspace credentials to continue.
           </p>
-
-          {/* Single-tenant workspace notice */}
-          <div className="mt-4 p-2.5 rounded-md bg-[var(--color-bg-muted)] border border-[var(--color-border)] flex items-center gap-2.5">
-            <span className="w-5 h-5 rounded bg-[var(--color-success)] text-white font-bold text-[11px] inline-flex items-center justify-center shrink-0">
-              D
-            </span>
-            <div className="min-w-0">
-              <div className="text-xs font-semibold text-[var(--color-text)]">
-                Default Workspace
-              </div>
-              <div className="text-[11px] text-[var(--color-text-dim)] truncate">
-                Single-tenant default · tenant/workspace chrome hidden
-              </div>
-            </div>
-          </div>
 
           {error && (
             <div
@@ -143,7 +106,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@example.com"
+                  placeholder="you@company.com"
                   className="pm-input pl-10 h-10 text-sm"
                 />
               </div>
@@ -168,7 +131,6 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
                   className="pm-input pl-10 pr-10 h-10 text-sm"
                 />
                 <button
@@ -184,34 +146,6 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
               </div>
             </div>
 
-            {/* Optional multi-tenant organization slug disclosure */}
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowTenantInput((prev) => !prev)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-text-dim)] hover:text-[var(--color-text)] cursor-pointer"
-              >
-                {showTenantInput ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                <span>Specific tenant slug (optional)</span>
-              </button>
-              {showTenantInput && (
-                <div className="mt-2 relative">
-                  <Building2
-                    size={15}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none"
-                  />
-                  <input
-                    id="login-tenant"
-                    type="text"
-                    value={tenantSlug}
-                    onChange={(e) => setTenantSlug(e.target.value)}
-                    placeholder="default"
-                    className="pm-input pm-mono pl-10 h-9 text-sm"
-                  />
-                </div>
-              )}
-            </div>
-
             <button
               type="submit"
               disabled={submitting}
@@ -221,21 +155,9 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
             </button>
           </form>
 
-          <hr className="my-5 border-[var(--color-border)]" />
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-muted)]">
-              <Terminal size={13} />
-              <span>First-boot or password reset</span>
-            </div>
-            <div className="px-3 py-2 rounded bg-[var(--pm-col)] text-xs pm-mono text-[var(--color-text)]">
-              $ maxi-loop bootstrap
-            </div>
-            <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-dim)] pt-1">
-              <CheckCircle2 size={12} className="text-[var(--color-success)] shrink-0" />
-              <span>HttpOnly session cookie · Argon2id · CSRF token enforced</span>
-            </div>
-          </div>
+          <p className="mt-5 text-xs text-[var(--color-text-dim)]">
+            Forgot your password or need an account? Ask your workspace administrator.
+          </p>
         </section>
       </main>
     </div>

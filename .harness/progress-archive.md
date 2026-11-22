@@ -5,6 +5,35 @@
 
 ---
 
+### 2026-11-22 — Claude Code — F020: Optional ingest write-ahead spool
+
+**Status at end of session:** done
+
+**Done:**
+- Security tooling check first (no code change): `cargo-audit` installed; `cargo audit` → 2 advisories (`libsqlite3-sys` RUSTSEC-2026-0459, `rsa` RUSTSEC-2023-0071) only in `Cargo.lock` as unused optional `sqlx` drivers (`cargo tree --target all -e all` empty = not compiled), `chrono` unmaintained warning; `npm audit` 0 vulnerabilities. `gitleaks` install was denied by the sandbox → replaced by an `rg` secret-pattern scan of tracked files + history (only test placeholders found)
+- `crates/ingest/src/spool/` (`mod.rs`, `codec.rs`, `tests.rs`): CRC-framed binary segments, writer lock doing write + `try_send`, checkpoint (tmp + rename), startup replay, rotation at 64 MiB / 30 s, 1 s `fdatasync` + checkpointed-segment deletion, `0700`/`0600`, `flock`
+- `INGEST_SPOOL_DIR` config (absolute path), `IngestState::with_spool` (503 on spool write error), worker `SpoolAck` commit after each batch, `AppState::with_spool`, replay in `main.rs` after PII cache load / before listen
+- Workspace `rust-version` 1.85 → 1.89 (`File::try_lock`; let-chains already needed 1.88)
+- Tests: 13 spool unit tests, `crates/server/tests/f020_ingest_spool.rs` (crash → replay once → no duplicates), E2E `tests/e2e/python/verify_ingest_spool.py` (real binary, SIGKILL mid-burst)
+
+**Verification run:**
+- `npm --prefix web run build` / `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
+- `cargo test --workspace --no-fail-fast` → 129 passed, 1 failed: `phase2_pii_releases_alerts` (pre-existing: also fails on clean `main` via `git stash`, global `evaluate_spike_rules` counts old test tenants — see handoff)
+- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; `maxi-loop-mcp` 0 direct `sqlx`; dev service restarted
+- `verify_ingest_spool.py` → PASS twice (1208 accepted / 79 replayed / 1208 stored; 1200 / 210 / 1200; 0 lost, 0 duplicates)
+- Regression E2E on new binary: `verify_sentry_sdk.py`, `verify_users_affected.py` → PASS
+
+**Security notes:**
+- Spool holds raw pre-scrub payloads: dir must be `0700` (startup refuses group/other bits, never chmods), files `0600`, segments deleted ≤ ~30 s after checkpoint; exclusive lock; frames CRC- and bounds-checked on replay (no allocation from on-disk lengths); no payloads in logs; 503 body generic. No new endpoint/auth change (spool runs after DSN auth + rate limit). `crc32fast` was already in the lockfile.
+
+**Key decisions & why:**
+- D012 (spool design, at-least-once, MSRV 1.89)
+
+**Not finished / blockers:**
+- none for F020; pre-existing flaky `phase2_pii_releases_alerts` not fixed (out of scope, reported to user)
+
+---
+
 ### 2026-11-22 — Claude Code — F019: Performance alerts (p95 latency / error rate)
 
 **Status at end of session:** done

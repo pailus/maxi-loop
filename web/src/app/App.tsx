@@ -428,7 +428,6 @@ export function App() {
   if (!session) {
     return (
       <LoginView
-        health={health}
         onAuthenticated={(newSession) => {
           setSession(newSession);
           setActiveWorkspaceSlug(resolveInitialWorkspaceSlug(newSession));
@@ -551,19 +550,15 @@ export function App() {
         </button>
 
         <div className="ml-auto flex items-center gap-1 md:gap-2 shrink-0">
-          <span
-            className={`max-lg:hidden pm-lozenge ${
-              dbHealthy ? "pm-lozenge-success" : "pm-lozenge-warning"
-            }`}
-          >
-            {dbHealthy ? "POSTGRES 16 OK" : "DB DEGRADED"}
-          </span>
+          {health && !dbHealthy && (
+            <span className="max-lg:hidden pm-lozenge pm-lozenge-warning">DB DEGRADED</span>
+          )}
 
-          <span className="max-xl:hidden pm-lozenge">
-            {session.single_tenant_mode
-              ? "SINGLE-TENANT"
-              : session.tenant.slug.toUpperCase()}
-          </span>
+          {!session.single_tenant_mode && (
+            <span className="max-xl:hidden pm-lozenge">
+              {session.tenant.slug.toUpperCase()}
+            </span>
+          )}
 
           <button
             type="button"
