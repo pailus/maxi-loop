@@ -14,7 +14,7 @@ use maxi_loop_platform::error::AppError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::cache::DsnCache;
 use crate::decompress::decompress_envelope_body;
@@ -22,6 +22,7 @@ use crate::envelope::{
     EnvelopeTarget, extract_dsn_public_key, parse_envelope_header_line, parse_envelope_items,
 };
 use crate::model::{EnvelopeIngestResponse, QueuedEnvelope};
+use crate::spool::{EnqueueError, Spool};
 
 pub const X_SENTRY_RATE_LIMITS: &str = "x-sentry-rate-limits";
 
@@ -30,6 +31,8 @@ pub struct IngestState {
     pub config: Arc<Config>,
     pub dsn_cache: DsnCache,
     pub queue_tx: mpsc::Sender<QueuedEnvelope>,
+    /// When set, envelopes are written ahead to disk before being queued (`F020`).
+    pub spool: Option<Spool>,
 }
 
 impl IngestState {
@@ -42,6 +45,22 @@ impl IngestState {
             config,
             dsn_cache,
             queue_tx,
+            spool: None,
+        }
+    }
+
+    pub fn with_spool(mut self, spool: Option<Spool>) -> Self {
+        self.spool = spool;
+        self
+    }
+
+    fn enqueue(&self, envelope: QueuedEnvelope) -> Result<(), EnqueueError> {
+        match &self.spool {
+            Some(spool) => spool.enqueue(envelope, &self.queue_tx),
+            None => self.queue_tx.try_send(envelope).map_err(|err| match err {
+                TrySendError::Full(_) => EnqueueError::Full,
+                TrySendError::Closed(_) => EnqueueError::Closed,
+            }),
         }
     }
 }
@@ -208,8 +227,9 @@ async fn ingest_envelope_handler(
         ));
     }
 
-    // Push into bounded tokio::mpsc worker channel with non-blocking backpressure.
-    match state.queue_tx.try_send(parsed.envelope) {
+    // Push into bounded tokio::mpsc worker channel with non-blocking backpressure
+    // (written ahead to the optional spool first).
+    match state.enqueue(parsed.envelope) {
         Ok(()) => Ok((
             StatusCode::OK,
             Json(EnvelopeIngestResponse {
@@ -219,7 +239,7 @@ async fn ingest_envelope_handler(
             }),
         )
             .into_response()),
-        Err(TrySendError::Full(_)) => {
+        Err(EnqueueError::Full) => {
             warn!(
                 project_id,
                 tenant_id = cached_project.tenant_id,
@@ -227,10 +247,29 @@ async fn ingest_envelope_handler(
             );
             Ok(rate_limit_response(5, limit_category, "organization"))
         }
-        Err(TrySendError::Closed(_)) => Err(AppError::DatabaseConnect(
+        Err(EnqueueError::Closed) => Err(AppError::DatabaseConnect(
             "ingest worker channel closed".to_owned(),
         )),
+        Err(EnqueueError::Io(err)) => {
+            error!(
+                project_id,
+                tenant_id = cached_project.tenant_id,
+                error = %err,
+                "failed to write envelope to ingest spool; rejecting with 503"
+            );
+            Ok(spool_unavailable_response())
+        }
     }
+}
+
+/// The envelope was not persisted or queued; SDKs retry on 5xx.
+fn spool_unavailable_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::RETRY_AFTER.as_str(), "5".to_owned())],
+        Json(serde_json::json!({ "error": "ingest temporarily unavailable" })),
+    )
+        .into_response()
 }
 
 fn rate_limit_response(retry_after_secs: u64, category: &str, scope: &str) -> Response {

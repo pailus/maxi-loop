@@ -322,6 +322,7 @@ pub fn parse_envelope_items(
             received_at: target.received_at,
             events,
             transactions,
+            spool_seq: None,
         },
         dropped_items,
     })

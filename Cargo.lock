@@ -1183,6 +1183,7 @@ dependencies = [
  "axum",
  "brotli",
  "chrono",
+ "crc32fast",
  "flate2",
  "governor",
  "hex",

@@ -8,27 +8,26 @@
 ## Last session
 - Date: 2026-11-22
 - Assistant: Claude Code
-- Features worked on (one commit each):
-  - `F018` — Users affected per issue + impact sorting (migration 0012, keyed tenant-scoped user hash D010, `sort=users`, `spike_metric=users`, UI Users column) — done.
-  - `F019` — Performance alerts `perf_p95` / `perf_error_rate` (migration 0013, D011, evaluated every 60s from `transaction_minute_metrics`, issue-less `alert_deliveries`, Alerts UI) — done.
+- Work (user-agreed order: security checks → spool → load test → production packaging LAST):
+  - Security tooling check (no commit of code): `cargo-audit` installed and run (no compiled vulnerable crate; see progress), `npm audit` clean; `gitleaks` install denied by sandbox → `rg` secret-pattern scan instead (clean).
+  - `F020` — Optional ingest write-ahead spool (`INGEST_SPOOL_DIR`, D012) — done.
 
 ## Current state
-- What works and is verified:
-  - `F001`–`F019` are all `done` and verified (after F019: 115/115 cargo tests; `verify_users_affected.py`, `verify_performance_alerts.py`, F017 E2E regression PASS; screenshots OK).
-  - `F017` checks all passed: `npm --prefix web run build`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (107/107 passed), `cargo build --workspace`, `cargo build --release -p maxi-loop`, `cargo tree --depth 1 -p maxi-loop-mcp` (0 direct `sqlx`), `tests/e2e/python/verify_performance_issues.py`, Sentry SDK & MCP E2E regressions, and desktop/trace/mobile UI screenshots on `maxi-loop-dev.service` (port `8080`).
+- What works and is verified: `F001`–`F020` done. After F020: 129 cargo tests pass; `verify_ingest_spool.py` (SIGKILL mid-burst, 0 lost), `verify_sentry_sdk.py`, `verify_users_affected.py` PASS on the new release binary; `maxi-loop-dev.service` (port 8080) restarted on it (spool NOT enabled on the dev service).
 - What is in progress but unfinished: none
-- Files left "dirty" / half-done (if any): none (only gitignored `.env`, `.env.local`, and E2E build/venv caches)
+- Files left "dirty" / half-done (if any): none (only gitignored `.env`, `.env.local`, E2E caches)
 
 ## What the next session MUST watch out for
-- Visual tokens are 1:1 with MaxiBoard (D009): don't reintroduce `#F7F8F9` sidebar, navy toast, Noto Sans, or ad-hoc hex colours — use `--color-*` tokens / the Atlassian label palette.
-- Responsive conventions (D008): `md` = phone breakpoint (drawer + bottom tab bar in `App.tsx`), `lg` = inspector docking breakpoint (below it, `aside` inspectors use `max-lg:fixed ... top-14 z-40` overlays). Keep new views on `px-4 md:px-6`, controls `text-sm`, tables inside `overflow-x-auto`.
-- `instance_secrets.user_hash_key` (migration 0012) must stay readable only by `maxi_loop_worker`; rotating it would split every user into a new hash (counts would double) — don't rotate without a recount plan.
-- `alert_deliveries.issue_id` is nullable since 0013 (performance alerts); any new code listing deliveries must `LEFT JOIN issues`. Cooldown only counts `status = 'sent'`, so a failing channel retries every tick while the condition holds (same as issue alerts).
-- The dev host has no SMTP: email deliveries are recorded as `failed` — expected in E2E.
-- Migration `0011_performance_issues.sql` is applied on the running dev DB (`maxi-loop-dev.service` on `127.0.0.1:8080` runs the latest release binary built with F019; migrations 0012 + 0013 applied).
-- `issues.issue_type` allow-list lives in both `migrations/0011_performance_issues.sql` (`issues_issue_type_chk`) and `crates/issues/src/service.rs` (`ISSUE_TYPES`); keep them in sync if new performance detectors are added.
-- Test hygiene note: `crates/server/tests/phase2_pii_releases_alerts.rs` calls global `evaluate_spike_rules(&pool, ...)` across all tenants in the shared dev DB; if older test tenants' 15-minute cooldown expires within their 60-minute spike window, the first run can count those older rules until cooldown resets (rerun passes).
-- Tests skipped on purpose (and why): `cargo audit` and `gitleaks` are not installed on this host.
+- **Pre-existing failing test:** `crates/server/tests/phase2_pii_releases_alerts.rs:777` fails on clean `main` too (`evaluate_spike_rules` is global and counts spike rules of older test tenants in the shared dev DB: got 5–8, expected 1). Not caused by F020; user informed. Fix needs scoping the assertion/evaluator call per tenant or cleaning old test tenants — ask before changing the test.
+- Spool (D012): only `Spool::enqueue` may send on `ingest_tx` while the spool is on; replay must run after the PII rule cache loads and before the listener binds; worker checkpoints even after a failed flush (by design). MSRV is now 1.89.
+- `gitleaks` is still not installed (sandbox denied the binary download) — user can install it manually if wanted.
+- `cargo audit` reports `libsqlite3-sys`/`rsa` from unused optional `sqlx` drivers (not compiled) and `chrono` unmaintained — no action taken, no ignore file added.
+- Visual tokens are 1:1 with MaxiBoard (D009); responsive conventions (D008).
+- `instance_secrets.user_hash_key` must stay worker-only; don't rotate without a recount plan.
+- `alert_deliveries.issue_id` is nullable (0013): `LEFT JOIN issues` when listing deliveries.
+- Dev host has no SMTP: email deliveries are `failed` in E2E (expected).
+- `issues.issue_type` allow-list lives in migration 0011 and `crates/issues/src/service.rs` (`ISSUE_TYPES`).
 
 ## Suggested next steps
-1. Production packaging & documentation (`Dockerfile`, `docker-compose.prod.yml`, reverse-proxy TLS guide).
+1. Load test (user-agreed next): rerun `maxi-loop-loadgen` against the current release (errors + transactions/spans, with and without `INGEST_SPOOL_DIR`), measure RSS idle/under load, throughput, ingest latency, 429 behaviour; write `docs/benchmarks-phase2.md`.
+2. Production packaging LAST (user decision): `Dockerfile`, `docker-compose.prod.yml` (spool volume with 0700), reverse-proxy TLS guide.

@@ -425,6 +425,33 @@
         "F017"
       ],
       "notes": "Agreed with user 2026-11-22 as high-value follow-up. Done 2026-11-22: migration 0013, D011. Deliveries with status 'failed' do not start a cooldown (same as issue alerts), so a failing channel is retried every tick while the condition holds."
+    },
+    {
+      "id": "F020",
+      "title": "Optional ingest spool file: crash-safe on-disk write-ahead log for accepted envelopes",
+      "status": "done",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "`INGEST_SPOOL_DIR` unset = unchanged behaviour; set = every accepted envelope is appended to a CRC-checked segment file before it is queued",
+        "Worker persists a checkpoint after each flushed batch; fully checkpointed segments are deleted; active segment fdatasync'd every second",
+        "On startup, records after the checkpoint are replayed to the worker before HTTP is served; torn/corrupt tails are skipped",
+        "Channel full still returns 429 without writing; spool write failure returns 503",
+        "Spool dir 0700 / files 0600 (raw unscrubbed payloads), refuses group/other-accessible dir, exclusive lock file, bounded record size",
+        "Unit + integration tests and a kill -9 smoke test with the real binary show no accepted event is lost"
+      ],
+      "verification_commands": [
+        "npm --prefix web run build",
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo build --workspace",
+        "tests/e2e/python/.venv/bin/python tests/e2e/python/verify_ingest_spool.py"
+      ],
+      "depends_on": [
+        "F004",
+        "F005"
+      ],
+      "notes": "Agreed with user 2026-11-22 (production packaging moved to the end). PRD §8 / design §5.2 spool file. Done 2026-11-22: D012 (segments rotate at 64 MiB or 30 s, checkpoint after each batch, at-least-once). MSRV raised to 1.89 for File::try_lock. E2E SIGKILL test: 1200 accepted, 210 replayed, 0 lost, 0 duplicates."
     }
   ]
 }

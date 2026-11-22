@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
 use crate::error::ConfigError;
 
@@ -51,6 +52,8 @@ pub struct Config {
     pub max_envelope_decompressed_bytes: usize,
     pub max_event_payload_bytes: usize,
     pub ingest_channel_capacity: usize,
+    /// Optional on-disk write-ahead spool for accepted envelopes (`F020`); `None` = disabled.
+    pub ingest_spool_dir: Option<PathBuf>,
     pub log_format: LogFormat,
     pub single_tenant_mode: bool,
     pub cookie_secure: bool,
@@ -98,6 +101,7 @@ impl fmt::Debug for Config {
             )
             .field("max_event_payload_bytes", &self.max_event_payload_bytes)
             .field("ingest_channel_capacity", &self.ingest_channel_capacity)
+            .field("ingest_spool_dir", &self.ingest_spool_dir)
             .field("log_format", &self.log_format)
             .field("single_tenant_mode", &self.single_tenant_mode)
             .field("cookie_secure", &self.cookie_secure)
@@ -244,6 +248,8 @@ impl Config {
             "INGEST_CHANNEL_CAPACITY",
         )? as usize;
 
+        let ingest_spool_dir = parse_spool_dir(lookup("INGEST_SPOOL_DIR").as_deref())?;
+
         let log_format = match lookup("LOG_FORMAT")
             .unwrap_or_else(|| "pretty".to_owned())
             .to_ascii_lowercase()
@@ -362,6 +368,7 @@ impl Config {
             max_envelope_decompressed_bytes,
             max_event_payload_bytes,
             ingest_channel_capacity,
+            ingest_spool_dir,
             log_format,
             single_tenant_mode,
             cookie_secure,
@@ -518,6 +525,21 @@ fn parse_slug(raw: Option<&str>, default: &str, name: &'static str) -> Result<St
     Ok(val.to_owned())
 }
 
+/// An absolute path is required so the spool location never depends on the working directory.
+fn parse_spool_dir(raw: Option<&str>) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(val);
+    if !path.is_absolute() || val.len() > 4096 {
+        return Err(ConfigError::InvalidValue(
+            "INGEST_SPOOL_DIR",
+            "must be an absolute directory path",
+        ));
+    }
+    Ok(Some(path))
+}
+
 fn parse_display_name(
     raw: Option<&str>,
     default: &str,
@@ -634,6 +656,31 @@ mod tests {
         assert_eq!(cfg.default_workspace_slug, "default");
         assert_eq!(cfg.bootstrap_admin_email, None);
         assert_eq!(cfg.bootstrap_admin_password, None);
+    }
+
+    #[test]
+    fn ingest_spool_dir_is_optional_and_must_be_absolute() {
+        let db = ("DATABASE_URL", "postgres://user:pass@127.0.0.1/db");
+        let cfg = Config::from_lookup(map_lookup(&[db, ("INGEST_SPOOL_DIR", "  ")]))
+            .expect("blank spool dir disables the spool");
+        assert_eq!(cfg.ingest_spool_dir, None);
+
+        let cfg = Config::from_lookup(map_lookup(&[
+            db,
+            ("INGEST_SPOOL_DIR", "/var/lib/maxi-loop/spool"),
+        ]))
+        .expect("absolute spool dir accepted");
+        assert_eq!(
+            cfg.ingest_spool_dir,
+            Some(PathBuf::from("/var/lib/maxi-loop/spool"))
+        );
+
+        let err =
+            Config::from_lookup(map_lookup(&[db, ("INGEST_SPOOL_DIR", "spool")])).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue("INGEST_SPOOL_DIR", _)
+        ));
     }
 
     #[test]

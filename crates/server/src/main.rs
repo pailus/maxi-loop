@@ -4,6 +4,7 @@ use chrono::Utc;
 use maxi_loop::AppState;
 use maxi_loop::cli::{Command, parse_args};
 use maxi_loop::http::build_router;
+use maxi_loop_ingest::spool::Spool;
 use maxi_loop_platform::bootstrap::{BootstrapSpec, bootstrap_defaults};
 use maxi_loop_platform::config::{Config, LogFormat};
 use maxi_loop_platform::db::{
@@ -148,7 +149,24 @@ async fn main() {
         }
     };
 
-    let state = AppState::new(config, db);
+    let spool = match config.ingest_spool_dir.as_deref() {
+        Some(dir) => match Spool::open(dir) {
+            Ok(spool) => {
+                info!(dir = %dir.display(), "ingest write-ahead spool enabled");
+                Some(spool)
+            }
+            Err(err) => {
+                error!(dir = %dir.display(), error = %err, "failed to open ingest spool");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
+    let state = match spool {
+        Some(spool) => AppState::with_spool(config, db, spool),
+        None => AppState::new(config, db),
+    };
     match state.dsn_cache.reload_from_db(&state.db).await {
         Ok(loaded_projects) => {
             info!(loaded_projects, "preloaded project DSN cache into memory");
@@ -169,6 +187,22 @@ async fn main() {
             error!(error = %err, "failed to preload PII scrub rules cache");
             std::process::exit(1);
         }
+    }
+    // Replay after the PII rule cache is loaded (replayed events are scrubbed with the
+    // current rules) and before listening (sequence order must precede new envelopes).
+    if let Some(spool) = &state.ingest_spool {
+        match spool.replay(&state.ingest_tx).await {
+            Ok(stats) => info!(
+                replayed = stats.replayed,
+                undecodable = stats.undecodable,
+                "replayed unflushed envelopes from ingest spool"
+            ),
+            Err(err) => {
+                error!(error = %err, "failed to replay ingest spool");
+                std::process::exit(1);
+            }
+        }
+        spool.spawn_maintenance();
     }
     let retention_cfg = RetentionConfig::from_config(&state.config);
     spawn_retention_scheduler(state.db.clone(), retention_cfg);

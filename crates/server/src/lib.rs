@@ -14,6 +14,7 @@ use maxi_loop_ingest::cache::DsnCache;
 use maxi_loop_ingest::http::IngestState;
 use maxi_loop_ingest::model::QueuedEnvelope;
 use maxi_loop_ingest::scrub_cache::ScrubRulesCache;
+use maxi_loop_ingest::spool::Spool;
 use maxi_loop_ingest::worker::{IngestWorkerConfig, spawn_ingest_worker_with_hooks};
 use maxi_loop_issues::service::IssuesService;
 use maxi_loop_mcp::http::McpState;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub scrub_cache: ScrubRulesCache,
     pub sourcemap_resolver: SourceMapResolver,
     pub ingest_tx: mpsc::Sender<QueuedEnvelope>,
+    /// Optional ingest write-ahead spool (`F020`, `INGEST_SPOOL_DIR`).
+    pub ingest_spool: Option<Spool>,
 }
 
 impl AppState {
@@ -46,11 +49,32 @@ impl AppState {
             LoginRateLimiter::default(),
             None,
             Duration::from_secs(60),
+            None,
+        )
+    }
+
+    /// Like [`AppState::new`], with envelopes written ahead to `spool` before queueing.
+    /// The caller must run [`Spool::replay`] on `ingest_tx` before serving HTTP.
+    pub fn with_spool(config: Config, db: PgPool, spool: Spool) -> Self {
+        Self::with_options(
+            config,
+            db,
+            LoginRateLimiter::default(),
+            None,
+            Duration::from_secs(60),
+            Some(spool),
         )
     }
 
     pub fn with_login_limiter(config: Config, db: PgPool, login_limiter: LoginRateLimiter) -> Self {
-        Self::with_options(config, db, login_limiter, None, Duration::from_secs(60))
+        Self::with_options(
+            config,
+            db,
+            login_limiter,
+            None,
+            Duration::from_secs(60),
+            None,
+        )
     }
 
     pub fn with_alert_policy(
@@ -66,6 +90,7 @@ impl AppState {
             login_limiter,
             Some(delivery_policy),
             spike_interval,
+            None,
         )
     }
 
@@ -75,8 +100,11 @@ impl AppState {
         login_limiter: LoginRateLimiter,
         custom_policy: Option<DeliveryPolicy>,
         spike_interval: Duration,
+        spool: Option<Spool>,
     ) -> Self {
-        let (state, rx) = Self::with_channel(config, db, login_limiter);
+        let (mut state, rx) = Self::with_channel(config, db, login_limiter);
+        let spool_ack = spool.as_ref().map(Spool::ack);
+        state.ingest_spool = spool;
         let worker_cfg = IngestWorkerConfig::from_config(&state.config);
         let (alert_sender, alert_rx) = AlertSignalSender::new(1024);
         let policy =
@@ -95,6 +123,7 @@ impl AppState {
             Some(state.scrub_cache.clone()),
             Some(Arc::new(alert_sender)),
             Some(state.sourcemap_resolver.clone()),
+            spool_ack,
         );
         state
     }
@@ -121,6 +150,7 @@ impl AppState {
             scrub_cache: ScrubRulesCache::new(),
             sourcemap_resolver,
             ingest_tx,
+            ingest_spool: None,
         };
         (state, ingest_rx)
     }
@@ -155,6 +185,7 @@ impl FromRef<AppState> for IngestState {
             state.dsn_cache.clone(),
             state.ingest_tx.clone(),
         )
+        .with_spool(state.ingest_spool.clone())
     }
 }
 

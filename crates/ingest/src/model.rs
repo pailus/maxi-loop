@@ -25,6 +25,8 @@ pub struct QueuedEnvelope {
     pub received_at: DateTime<Utc>,
     pub events: Vec<QueuedEvent>,
     pub transactions: Vec<QueuedTransaction>,
+    /// Write-ahead spool sequence number (`F020`); `None` when the spool is disabled.
+    pub spool_seq: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

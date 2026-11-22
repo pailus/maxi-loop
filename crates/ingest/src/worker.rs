@@ -23,6 +23,7 @@ use crate::fingerprint::{
 use crate::model::{QueuedEnvelope, QueuedEvent};
 use crate::perf_issue::performance_problem_events;
 use crate::scrub_cache::ScrubRulesCache;
+use crate::spool::SpoolAck;
 use crate::user_identity::{load_user_hash_key, tenant_user_hash, user_digest_from_raw};
 
 #[derive(Clone, Copy, Debug)]
@@ -102,11 +103,12 @@ pub fn spawn_ingest_worker(
     rx: mpsc::Receiver<QueuedEnvelope>,
     worker_config: IngestWorkerConfig,
 ) -> JoinHandle<()> {
-    spawn_ingest_worker_with_hooks(pool, rx, worker_config, None, None, None)
+    spawn_ingest_worker_with_hooks(pool, rx, worker_config, None, None, None, None)
 }
 
 /// Spawn the asynchronous ingest batch worker with inherited configurable PII scrubbing (`ScrubRulesCache`),
-/// real-time alert signal emission (`AlertSignalObserver`), and bounded-LRU JS source map resolution.
+/// real-time alert signal emission (`AlertSignalObserver`), bounded-LRU JS source map resolution,
+/// and write-ahead spool checkpointing (`SpoolAck`, `F020`).
 pub fn spawn_ingest_worker_with_hooks(
     pool: PgPool,
     mut rx: mpsc::Receiver<QueuedEnvelope>,
@@ -114,6 +116,7 @@ pub fn spawn_ingest_worker_with_hooks(
     scrub_cache: Option<ScrubRulesCache>,
     alert_observer: Option<Arc<dyn AlertSignalObserver>>,
     sourcemap_resolver: Option<SourceMapResolver>,
+    spool_ack: Option<SpoolAck>,
 ) -> JoinHandle<()> {
     let flush_interval = worker_config
         .flush_interval
@@ -131,6 +134,8 @@ pub fn spawn_ingest_worker_with_hooks(
                 Some(envelope) => envelope,
                 None => break,
             };
+            // Envelopes arrive in spool sequence order, so the last one bounds the batch.
+            let mut batch_spool_seq = first.spool_seq;
 
             append_envelope_items(
                 first,
@@ -146,6 +151,7 @@ pub fn spawn_ingest_worker_with_hooks(
             while pending.len() + pending_txs.len() < max_batch_events {
                 match tokio::time::timeout_at(deadline, rx.recv()).await {
                     Ok(Some(envelope)) => {
+                        batch_spool_seq = envelope.spool_seq.or(batch_spool_seq);
                         append_envelope_items(
                             envelope,
                             scrub_cache.as_ref(),
@@ -191,6 +197,12 @@ pub fn spawn_ingest_worker_with_hooks(
                     );
                 }
                 pending_txs.clear();
+            }
+
+            // Checkpoint even when a flush failed: failed batches were never retried before
+            // the spool existed either; the spool only protects against crashes (`F020`).
+            if let (Some(ack), Some(seq)) = (&spool_ack, batch_spool_seq) {
+                ack.commit(seq).await;
             }
         }
     })

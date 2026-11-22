@@ -81,6 +81,7 @@ mod tests {
             max_envelope_decompressed_bytes: 2_097_152,
             max_event_payload_bytes: 524_288,
             ingest_channel_capacity: 1024,
+            ingest_spool_dir: None,
             log_format: LogFormat::Pretty,
             single_tenant_mode: true,
             cookie_secure: false,
