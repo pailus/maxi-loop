@@ -365,7 +365,7 @@ export function IssuesView({
         <nav
           role="tablist"
           aria-label="Issue status filter"
-          className="mt-3 flex items-center gap-1 border-b-2 border-[var(--color-border)] overflow-x-auto"
+          className="mt-3 flex items-center gap-1 border-b border-[var(--color-border)] overflow-x-auto pm-no-scrollbar"
         >
           {(
             [
