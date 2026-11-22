@@ -17,7 +17,7 @@ use maxi_loop_auth::rate_limit::LoginRateLimiter;
 use maxi_loop_platform::bootstrap::{AdminUserSpec, BootstrapSpec, bootstrap_defaults};
 use maxi_loop_platform::config::{Config, SmtpConfig};
 use maxi_loop_platform::db::{connect_db, ensure_upcoming_events_partitions, run_migrations};
-use maxi_loop_platform::tenant::TenantContext;
+use maxi_loop_platform::tenant::{TenantContext, begin_worker_tx};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -770,7 +770,26 @@ async fn phase2_configurable_pii_releases_alerts_ssrf_and_tenant_isolation() {
     assert_eq!(annotated["commit_sha"], "deadbeef1234");
     assert_eq!(annotated["notes"], "Hotfix checkout rollout");
 
-    // 8. Run spike evaluator -> dispatches Email alert over SMTP, then cooldown suppresses repeat
+    // 8. Run spike evaluator -> dispatches Email alert over SMTP, then cooldown suppresses repeat.
+    // `evaluate_spike_rules` is instance-wide, so first disable the spike rules that earlier
+    // runs of this test left behind in the shared dev DB (their 60-minute window can still be
+    // over threshold once the 15-minute cooldown expires, which would make the count below 2).
+    {
+        let mut tx = begin_worker_tx(&pool).await.expect("worker tx");
+        sqlx::query(
+            "UPDATE alert_rules r SET is_enabled = FALSE
+             FROM tenants t
+             WHERE t.id = r.tenant_id
+               AND r.trigger_type = 'spike'
+               AND t.slug LIKE 'p2-alpha-%'
+               AND t.slug <> $1",
+        )
+        .bind(&tenant_a_slug)
+        .execute(&mut *tx)
+        .await
+        .expect("disable stale spike rules from earlier test runs");
+        tx.commit().await.expect("commit stale rule cleanup");
+    }
     let sent_spikes = evaluate_spike_rules(&pool, &config.public_base_url, &test_policy)
         .await
         .expect("spike eval 1");

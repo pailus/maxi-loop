@@ -33,6 +33,18 @@
 
 ---
 
+### 2026-11-23 — Claude Code — test fix: phase2 spike-alert flake
+
+**Status at end of session:** done
+
+**Done:**
+- `crates/server/tests/phase2_pii_releases_alerts.rs`: before running the instance-wide `evaluate_spike_rules`, disable spike rules left by earlier `p2-alpha-*` test tenants (worker tx). Assertion `sent_spikes == 1` unchanged. Handoff test-count line corrected.
+
+**Verification run:**
+- test run twice back to back → PASS both; `cargo fmt --check`, clippy → PASS; `cargo test --workspace --no-fail-fast` → 145 passed, 0 failed
+
+---
+
 ### 2026-11-22 — Claude Code — F026 per-member project access (Stage B)
 
 **Status at end of session:** done (browser click-through pending by user)
@@ -249,33 +261,3 @@
 
 **Not finished / blockers:**
 - None.
-
-### 2026-11-22 — Claude Code — F018: Users affected per issue + impact sorting
-
-**Status at end of session:** done
-
-**Done:**
-- `migrations/0012_issue_users.sql`: `instance_secrets` (worker-only `user_hash_key`), `issues.user_count` + impact index, `events.user_hash`, RLS-enforced `issue_users`, `alert_rules.spike_metric` (`events`/`users`)
-- `crates/ingest/src/user_identity.rs`: pre-scrub user digest (`id` > `email` > `username` > `ip_address`), tenant-scoped HMAC hash; worker upserts `issue_users` and bumps `user_count`; performance issues count the transaction user too
-- `crates/issues`: `user_count` in views, `sort=users`; merge unions users, split carries users of moved events
-- `crates/alerts`: spike rules with `spike_metric = users` (distinct users seen in window), allow-listed on create/update
-- MCP `list_issues`/`get_issue`: `user_count` + `sort=users`
-- UI: Users column + "Sort: Most users" in Issues, "Users affected" in drawer & full view, metric picker for spike rules
-- Tests: `crates/server/tests/f018_users_affected.rs`, unit tests in `user_identity.rs`, E2E `tests/e2e/python/verify_users_affected.py` (official sentry-sdk)
-
-**Verification run:**
-- `npm --prefix web run build` → PASS
-- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` → PASS
-- `cargo test --workspace` → PASS (112 passed, 0 failed)
-- `cargo build --workspace` + `cargo build --release -p maxi-loop` → PASS; dev service restarted (migration 0012 applied)
-- `verify_users_affected.py` → PASS; `verify_performance_issues.py` regression → PASS
-- Headless Chrome screenshots (Issues list + drawer desktop, mobile) → OK
-
-**Security notes:**
-- Raw user identity never persisted for counting (keyed HMAC, 16 bytes, tenant-scoped); key readable only by `maxi_loop_worker` (test asserts `maxi_loop_app` is denied); `sort`/`spike_metric` allow-listed (+ DB CHECK), negative tests for both; no new dependencies (`hmac` already in workspace). Stored event payloads still contain the SDK-sent `user` object as before (unchanged behaviour; scrub via PII rules).
-
-**Key decisions & why:**
-- D010 (keyed tenant-scoped user hash, exact distinct counts in `issue_users`)
-
-**Not finished / blockers:**
-- None. Python SDK drops `user.ip_address` unless `send_default_pii=True`, so IP-only users count only when sent.
