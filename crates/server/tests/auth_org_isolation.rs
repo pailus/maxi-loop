@@ -424,6 +424,7 @@ async fn auth_csrf_rate_limit_org_dsn_and_cross_tenant_isolation() {
             "slug": "checkout-api",
             "name": "Checkout FastAPI",
             "platform": "python-fastapi",
+            "tags": ["Backend", "payments", "backend"],
             "retention_days_override": 7,
             "rate_limit_per_minute": 600
         })),
@@ -434,7 +435,33 @@ async fn auth_csrf_rate_limit_org_dsn_and_cross_tenant_isolation() {
     assert_eq!(proj_a1.tenant_slug, "f003-tenant-a");
     assert_eq!(proj_a1.workspace_slug, "payments-a");
     assert_eq!(proj_a1.slug, "checkout-api");
+    assert_eq!(proj_a1.tags, vec!["backend", "payments"]);
     assert_eq!(proj_a1.effective_retention_days, 7);
+
+    // Update project tags via settings PATCH & verify invalid tag rejection (400).
+    let (status_bad_tag, _, _) = send_json(
+        &app,
+        Method::PATCH,
+        "/api/v1/t/f003-tenant-a/w/payments-a/p/checkout-api/settings",
+        Some(&cookie_a),
+        Some(&session_a.csrf_token),
+        Some(json!({ "tags": ["invalid tag!"] })),
+    )
+    .await;
+    assert_eq!(status_bad_tag, StatusCode::BAD_REQUEST);
+
+    let (status_upd_tags, _, body_upd_tags) = send_json(
+        &app,
+        Method::PATCH,
+        "/api/v1/t/f003-tenant-a/w/payments-a/p/checkout-api/settings",
+        Some(&cookie_a),
+        Some(&session_a.csrf_token),
+        Some(json!({ "tags": ["core", "payments"] })),
+    )
+    .await;
+    assert_eq!(status_upd_tags, StatusCode::OK);
+    let updated_tags_a1: ProjectView = parse_json(&body_upd_tags);
+    assert_eq!(updated_tags_a1.tags, vec!["core", "payments"]);
     assert_eq!(proj_a1.dsn_public_key.len(), 32);
     assert_eq!(
         proj_a1.dsn,

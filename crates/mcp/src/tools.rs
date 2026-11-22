@@ -453,6 +453,7 @@ async fn tool_list_projects(
                 "name": p.name,
                 "workspace_slug": p.workspace_slug,
                 "platform": p.platform,
+                "tags": p.tags,
                 "effective_retention_days": p.effective_retention_days,
                 "rate_limit_per_minute": p.rate_limit_per_minute,
                 "ui_url": project_ui_url(services.public_base_url, &p.slug),

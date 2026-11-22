@@ -85,6 +85,7 @@ export interface ProjectView {
   slug: string;
   name: string;
   platform: string;
+  tags: string[];
   dsn_public_key: string;
   dsn: string;
   ingest_endpoint: string;
@@ -101,6 +102,7 @@ export interface CreateProjectInput {
   slug: string;
   name: string;
   platform?: string;
+  tags?: string[];
   retention_days_override?: number | null;
   rate_limit_per_minute?: number | null;
   workspace_slug?: string;
@@ -1387,6 +1389,7 @@ export interface UpdateWorkspaceSettingsInput {
 export interface UpdateProjectSettingsInput {
   name?: string;
   platform?: string;
+  tags?: string[];
   retention_days_override?: number | null;
   rate_limit_per_minute_override?: number | null;
 }

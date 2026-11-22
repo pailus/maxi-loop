@@ -40,7 +40,7 @@ import {
   type PerfTab,
   PerformanceView,
 } from "../modules/performance/PerformanceView";
-import { ProjectIcon } from "../modules/projects/ProjectIcon";
+import { ProjectTree } from "../modules/projects/ProjectTree";
 import { ProjectsView } from "../modules/projects/ProjectsView";
 import { ReleasesView } from "../modules/releases/ReleasesView";
 import { CreateWorkspaceDialog } from "../modules/workspaces/CreateWorkspaceDialog";
@@ -563,45 +563,25 @@ export function App() {
                   No projects yet
                 </div>
               ) : (
-                <ul className="space-y-0.5">
-                  {projects.map((p) => {
-                    const isActiveProj =
-                      (activeNav === "issues" || activeNav === "regressed") &&
-                      selectedProjectSlug === p.slug;
-                    return (
-                      <li key={p.id}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedProjectSlug((cur) =>
-                              cur === p.slug ? "" : p.slug,
-                            );
-                            if (
-                              activeNav !== "issues" &&
-                              activeNav !== "regressed"
-                            ) {
-                              setActiveNav("issues");
-                            }
-                          }}
-                          className={`w-full h-8 px-2.5 rounded flex items-center gap-2 text-xs cursor-pointer transition ${
-                            isActiveProj
-                              ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                              : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                          }`}
-                        >
-                          <ProjectIcon
-                            slug={p.slug}
-                            platform={p.platform}
-                            size={18}
-                          />
-                          <span className="truncate flex-1 text-left">
-                            {p.slug}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <ProjectTree
+                  projects={projects}
+                  selectedProjectSlug={selectedProjectSlug}
+                  highlightSelection={
+                    activeNav === "issues" ||
+                    activeNav === "regressed" ||
+                    activeNav === "performance"
+                  }
+                  onSelectProject={(slug) => {
+                    setSelectedProjectSlug((cur) => (cur === slug ? "" : slug));
+                    if (
+                      activeNav !== "issues" &&
+                      activeNav !== "regressed" &&
+                      activeNav !== "performance"
+                    ) {
+                      setActiveNav("issues");
+                    }
+                  }}
+                />
               )}
             </div>
           </div>

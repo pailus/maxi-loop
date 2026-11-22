@@ -43,6 +43,7 @@ pub struct ProjectView {
     pub slug: String,
     pub name: String,
     pub platform: String,
+    pub tags: Vec<String>,
     pub dsn_public_key: String,
     pub dsn: String,
     pub ingest_endpoint: String,
@@ -61,6 +62,8 @@ pub struct CreateProjectInput {
     pub slug: String,
     pub name: String,
     pub platform: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
     pub retention_days_override: Option<u16>,
     pub rate_limit_per_minute: Option<i32>,
     pub workspace_slug: Option<String>,
@@ -97,6 +100,7 @@ pub struct UpdateWorkspaceSettingsInput {
 pub struct UpdateProjectSettingsInput {
     pub name: Option<String>,
     pub platform: Option<String>,
+    pub tags: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub retention_days_override: Option<Option<u16>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]

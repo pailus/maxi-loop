@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -96,6 +97,7 @@ struct ProjectJoinedDbRow {
     slug: String,
     name: String,
     platform: String,
+    tags: Vec<String>,
     dsn_public_key: String,
     retention_days_override: Option<i16>,
     rate_limit_per_minute_override: Option<i32>,
@@ -110,6 +112,7 @@ struct ProjectMutatedDbRow {
     slug: String,
     name: String,
     platform: String,
+    tags: Vec<String>,
     dsn_public_key: String,
     retention_days_override: Option<i16>,
     rate_limit_per_minute_override: Option<i32>,
@@ -514,7 +517,7 @@ pub async fn list_projects(
                         w.slug AS workspace_slug,
                         w.retention_days_override AS ws_retention_days_override,
                         w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
-                        p.slug, p.name, p.platform, p.dsn_public_key,
+                        p.slug, p.name, p.platform, p.tags, p.dsn_public_key,
                         p.retention_days_override, p.rate_limit_per_minute_override,
                         p.created_at, p.updated_at
                  FROM projects p
@@ -534,7 +537,7 @@ pub async fn list_projects(
                     w.slug AS workspace_slug,
                     w.retention_days_override AS ws_retention_days_override,
                     w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
-                    p.slug, p.name, p.platform, p.dsn_public_key,
+                    p.slug, p.name, p.platform, p.tags, p.dsn_public_key,
                     p.retention_days_override, p.rate_limit_per_minute_override,
                     p.created_at, p.updated_at
              FROM projects p
@@ -581,7 +584,7 @@ pub async fn get_project(
                 w.slug AS workspace_slug,
                 w.retention_days_override AS ws_retention_days_override,
                 w.default_rate_limit_per_minute_override AS ws_rate_limit_override,
-                p.slug, p.name, p.platform, p.dsn_public_key,
+                p.slug, p.name, p.platform, p.tags, p.dsn_public_key,
                 p.retention_days_override, p.rate_limit_per_minute_override,
                 p.created_at, p.updated_at
          FROM projects p
@@ -633,6 +636,7 @@ pub async fn create_project(
         ));
     }
     let platform = parse_platform(input.platform.as_deref())?;
+    let tags = normalize_project_tags(input.tags.as_deref())?;
 
     if let Some(rpm) = input.rate_limit_per_minute
         && !(1..=MAX_PROJECT_RPM).contains(&rpm)
@@ -667,12 +671,12 @@ pub async fn create_project(
 
     let insert_res: Result<ProjectMutatedDbRow, sqlx::Error> = sqlx::query_as(
         "INSERT INTO projects (
-             tenant_id, workspace_id, slug, name, platform,
+             tenant_id, workspace_id, slug, name, platform, tags,
              dsn_public_key, retention_days_override,
              rate_limit_per_minute, rate_limit_per_minute_override
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, workspace_id, slug, name, platform,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, workspace_id, slug, name, platform, tags,
                    dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                    created_at, updated_at",
     )
@@ -681,6 +685,7 @@ pub async fn create_project(
     .bind(slug)
     .bind(name)
     .bind(&platform)
+    .bind(&tags)
     .bind(&dsn_public_key)
     .bind(retention_override_i16)
     .bind(effective_rpm)
@@ -712,6 +717,7 @@ pub async fn create_project(
             slug: inserted.slug,
             name: inserted.name,
             platform: inserted.platform,
+            tags: inserted.tags,
             dsn_public_key: inserted.dsn_public_key,
             retention_days_override: inserted.retention_days_override,
             rate_limit_per_minute_override: inserted.rate_limit_per_minute_override,
@@ -741,7 +747,7 @@ pub async fn update_project_settings(
     let ws = load_workspace_by_slug_in_tx(&mut tx, &tenant, workspace_slug).await?;
 
     let existing: Option<ProjectMutatedDbRow> = sqlx::query_as(
-        "SELECT id, workspace_id, slug, name, platform,
+        "SELECT id, workspace_id, slug, name, platform, tags,
                 dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                 created_at, updated_at
          FROM projects
@@ -776,6 +782,11 @@ pub async fn update_project_settings(
         None => existing.platform.clone(),
     };
 
+    let new_tags = match input.tags {
+        Some(raw_tags) => normalize_project_tags(Some(&raw_tags))?,
+        None => existing.tags.clone(),
+    };
+
     let max_retention = config
         .retention_default_days
         .min(tenant.retention_days)
@@ -806,17 +817,19 @@ pub async fn update_project_settings(
         "UPDATE projects
          SET name = $1,
              platform = $2,
-             retention_days_override = $3,
-             rate_limit_per_minute_override = $4,
-             rate_limit_per_minute = $5,
+             tags = $3,
+             retention_days_override = $4,
+             rate_limit_per_minute_override = $5,
+             rate_limit_per_minute = $6,
              updated_at = NOW()
-         WHERE tenant_id = $6 AND id = $7
-         RETURNING id, workspace_id, slug, name, platform,
+         WHERE tenant_id = $7 AND id = $8
+         RETURNING id, workspace_id, slug, name, platform, tags,
                    dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                    created_at, updated_at",
     )
     .bind(&new_name)
     .bind(&new_platform)
+    .bind(&new_tags)
     .bind(new_retention_override)
     .bind(new_rate_override)
     .bind(effective_rpm)
@@ -846,6 +859,7 @@ pub async fn update_project_settings(
             slug: updated.slug,
             name: updated.name,
             platform: updated.platform,
+            tags: updated.tags,
             dsn_public_key: updated.dsn_public_key,
             retention_days_override: updated.retention_days_override,
             rate_limit_per_minute_override: updated.rate_limit_per_minute_override,
@@ -883,7 +897,7 @@ pub async fn rotate_project_dsn(
          SET dsn_public_key = $1,
              updated_at = NOW()
          WHERE tenant_id = $2 AND workspace_id = $3 AND slug = $4
-         RETURNING id, workspace_id, slug, name, platform,
+         RETURNING id, workspace_id, slug, name, platform, tags,
                    dsn_public_key, retention_days_override, rate_limit_per_minute_override,
                    created_at, updated_at",
     )
@@ -919,6 +933,7 @@ pub async fn rotate_project_dsn(
             slug: updated.slug,
             name: updated.name,
             platform: updated.platform,
+            tags: updated.tags,
             dsn_public_key: updated.dsn_public_key,
             retention_days_override: updated.retention_days_override,
             rate_limit_per_minute_override: updated.rate_limit_per_minute_override,
@@ -944,6 +959,43 @@ fn parse_platform(raw: Option<&str>) -> Result<String, AppError> {
         }
         None => Ok("other".to_owned()),
     }
+}
+
+/// Validate and normalize project grouping tags (max 10 tags, each 1..=32 lowercase chars
+/// from `[a-z0-9-_/.]`, deduplicated and sorted).
+pub fn normalize_project_tags(raw: Option<&[String]>) -> Result<Vec<String>, AppError> {
+    let Some(items) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut set = BTreeSet::new();
+    for item in items {
+        let trimmed = item.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.len() > 32
+            || trimmed.starts_with('/')
+            || trimmed.ends_with('/')
+            || trimmed.contains("..")
+            || !trimmed.bytes().all(|b| {
+                b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || matches!(b, b'-' | b'_' | b'/' | b'.')
+            })
+        {
+            return Err(AppError::Validation(
+                "each project tag must be 1..=32 lowercase alphanumeric chars (plus '-', '_', '.', '/')"
+                    .to_owned(),
+            ));
+        }
+        set.insert(trimmed);
+        if set.len() > 10 {
+            return Err(AppError::Validation(
+                "a project may have at most 10 tags".to_owned(),
+            ));
+        }
+    }
+    Ok(set.into_iter().collect())
 }
 
 #[derive(FromRow)]
@@ -1172,6 +1224,7 @@ fn map_project_row(
         slug: row.slug,
         name: row.name,
         platform: row.platform,
+        tags: row.tags,
         dsn_public_key: row.dsn_public_key,
         dsn,
         ingest_endpoint,
@@ -1183,4 +1236,27 @@ fn map_project_row(
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_dedupes_and_validates_project_tags() {
+        let tags = normalize_project_tags(Some(&[
+            " Backend ".to_owned(),
+            "e2e".to_owned(),
+            "backend".to_owned(),
+            "team/core".to_owned(),
+            "".to_owned(),
+        ]))
+        .expect("valid tags");
+        assert_eq!(tags, vec!["backend", "e2e", "team/core"]);
+
+        assert!(normalize_project_tags(Some(&["bad tag!".to_owned()])).is_err());
+        assert!(normalize_project_tags(Some(&["../escape".to_owned()])).is_err());
+        let too_many: Vec<String> = (0..11).map(|i| format!("tag-{i}")).collect();
+        assert!(normalize_project_tags(Some(&too_many)).is_err());
+    }
 }
