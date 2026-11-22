@@ -306,12 +306,12 @@ export function ProjectsView({
               readOnly
               value={p.dsn}
               onFocus={(e) => e.currentTarget.select()}
-              className="pm-input pm-mono flex-1 h-9 text-xs"
+              className="pm-input pm-mono flex-1 h-9 text-sm"
             />
             <button
               type="button"
               onClick={() => handleCopyDsn(p)}
-              className="h-9 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+              className="h-9 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
             >
               {isCopied ? <Check size={13} /> : <Copy size={13} />}
               <span>{isCopied ? "Copied!" : "Copy DSN"}</span>
@@ -362,7 +362,7 @@ export function ProjectsView({
                 value={editTags}
                 onChange={(e) => setEditTags(e.target.value)}
                 placeholder="e.g. backend, core-api"
-                className="pm-input pm-mono h-8 text-xs"
+                className="pm-input pm-mono h-8 text-sm"
               />
               {existingTags.length > 0 && (
                 <div className="mt-1.5 flex items-center gap-1 flex-wrap">
@@ -402,7 +402,7 @@ export function ProjectsView({
                   value={editRetention}
                   onChange={(e) => setEditRetention(e.target.value)}
                   placeholder="Inherit"
-                  className="pm-input pm-mono h-8 text-xs"
+                  className="pm-input pm-mono h-8 text-sm"
                 />
               </div>
               <div>
@@ -416,7 +416,7 @@ export function ProjectsView({
                   value={editRateLimit}
                   onChange={(e) => setEditRateLimit(e.target.value)}
                   placeholder="Inherit"
-                  className="pm-input pm-mono h-8 text-xs"
+                  className="pm-input pm-mono h-8 text-sm"
                 />
               </div>
               <div className="flex items-center gap-1.5">
@@ -424,14 +424,14 @@ export function ProjectsView({
                   type="button"
                   disabled={savingEdit}
                   onClick={() => void handleSaveProjectEdit(p)}
-                  className="h-8 px-3 rounded bg-[var(--color-primary)] text-white text-xs font-semibold cursor-pointer"
+                  className="h-8 px-3 rounded bg-[var(--color-primary)] text-white text-sm font-semibold cursor-pointer"
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditingSlug(null)}
-                  className="h-8 px-2.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs cursor-pointer"
+                  className="h-8 px-2.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-sm cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -456,9 +456,9 @@ export function ProjectsView({
   };
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden max-lg:overflow-y-auto bg-[var(--color-bg)]">
       {/* Left/Center Projects List Pane */}
-      <section className="flex-1 min-w-0 px-6 py-4 overflow-y-auto">
+      <section className="flex-1 min-w-0 px-4 md:px-6 py-4 overflow-y-auto max-lg:flex-none max-lg:overflow-visible">
         <div className="text-xs text-[var(--color-text-dim)] flex items-center gap-1.5">
           <span>{workspaceName}</span>
           <span>›</span>
@@ -469,7 +469,7 @@ export function ProjectsView({
 
         <div className="mt-1.5 flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-2xl font-semibold text-[var(--color-text)] tracking-tight">
+            <h1 className="text-xl md:text-2xl font-semibold text-[var(--color-text)] tracking-tight">
               Projects &amp; Sentry DSNs
             </h1>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">
@@ -493,7 +493,7 @@ export function ProjectsView({
               <button
                 type="button"
                 onClick={onOpenCreateProject}
-                className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus size={14} />
                 <span>Create project</span>
@@ -574,7 +574,7 @@ export function ProjectsView({
                 <button
                   type="button"
                   onClick={onOpenCreateProject}
-                  className="mt-4 h-9 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                  className="mt-4 h-9 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Plus size={14} />
                   <span>Create project</span>
@@ -633,7 +633,7 @@ export function ProjectsView({
       </section>
 
       {/* Right Docked Drawer: SDK Quickstart (project creation lives in the CreateProjectDialog wizard) */}
-      <aside className="w-full lg:w-[440px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel p-5 overflow-y-auto max-h-[calc(100vh-56px)]">
+      <aside className="w-full lg:w-[440px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel max-lg:border-l-0 max-lg:border-t max-lg:shadow-none p-4 md:p-5 lg:overflow-y-auto lg:max-h-[calc(100dvh-56px)]">
         <div className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--color-text)]">

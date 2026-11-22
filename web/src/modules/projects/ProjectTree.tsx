@@ -90,14 +90,14 @@ export function ProjectTree({
           type="button"
           onClick={() => onSelectProject(p.slug)}
           style={indented ? { paddingLeft: 28 } : undefined}
-          className={`w-full h-8 ${indented ? "pr-2" : "px-2.5"} rounded-md flex items-center gap-2 text-xs cursor-pointer transition ${
+          className={`w-full min-h-11 md:min-h-8 ${indented ? "pr-2" : "px-2.5"} rounded-md flex items-center gap-2.5 text-sm cursor-pointer transition ${
             isActive
               ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-              : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+              : "text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
           }`}
           title={p.tags.length > 0 ? `${p.name} (${p.tags.join(", ")})` : p.name}
         >
-          <ProjectIcon slug={p.slug} platform={p.platform} size={18} />
+          <ProjectIcon slug={p.slug} platform={p.platform} size={20} />
           <span className="truncate flex-1 text-left">{p.slug}</span>
         </button>
       </li>
@@ -117,7 +117,7 @@ export function ProjectTree({
               type="button"
               onClick={() => toggle(tag)}
               aria-expanded={isOpen}
-              className={`w-full h-8 px-2 rounded-md flex items-center gap-1.5 text-xs font-semibold cursor-pointer transition hover:bg-[var(--color-bg-hover)] ${
+              className={`w-full min-h-11 md:min-h-8 px-2 rounded-md flex items-center gap-1.5 text-sm font-semibold cursor-pointer transition hover:bg-[var(--color-bg-hover)] ${
                 containsActive && !isOpen
                   ? "text-[var(--color-primary)] bg-[var(--color-primary-light)]"
                   : "text-[var(--color-text)]"
@@ -130,12 +130,12 @@ export function ProjectTree({
                 }`}
               />
               <Folder
-                size={14}
+                size={15}
                 strokeWidth={1.75}
                 className="shrink-0 text-[var(--color-text-muted)]"
               />
               <span className="truncate flex-1 text-left">{tag}</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-[var(--color-bg-hover)] text-[var(--color-text-dim)] text-[10px] font-bold">
+              <span className="min-w-5 h-5 px-1.5 rounded-full bg-[var(--pm-col)] text-[var(--color-text-muted)] text-[11px] font-semibold leading-5 text-center">
                 {items.length}
               </span>
             </button>

@@ -23,13 +23,13 @@ function breadcrumbIcon(type: string, category: string) {
     return <Globe size={13} className="text-[var(--color-primary)] shrink-0" />;
   }
   if (key.includes("nav") || key.includes("route")) {
-    return <Compass size={13} className="text-[#006644] shrink-0" />;
+    return <Compass size={13} className="text-[#216e4e] shrink-0" />;
   }
   if (key.includes("db") || key.includes("query") || key.includes("sql")) {
     return <Database size={13} className="text-[#5E4DB2] shrink-0" />;
   }
   if (key.includes("ui") || key.includes("click") || key.includes("dom")) {
-    return <MousePointerClick size={13} className="text-[#974F0C] shrink-0" />;
+    return <MousePointerClick size={13} className="text-[#a54800] shrink-0" />;
   }
   if (key.includes("console") || key.includes("log")) {
     return <Terminal size={13} className="text-[var(--color-text-muted)] shrink-0" />;
@@ -140,7 +140,7 @@ export function BreadcrumbsView({
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Filter breadcrumbs..."
                 aria-label="Filter breadcrumbs"
-                className="w-full h-7 pl-6 pr-2 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+                className="w-full h-7 pl-4 md:pl-6 pr-2 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
               />
             </div>
 

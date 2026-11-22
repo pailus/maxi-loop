@@ -84,7 +84,7 @@ export function IssueDetailDrawer({
 
   if (loading && !detail) {
     return (
-      <aside className="w-full lg:w-[460px] xl:w-[480px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel flex flex-col">
+      <aside className="w-full lg:w-[460px] xl:w-[480px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel flex flex-col max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-14 max-lg:z-40 max-lg:overflow-y-auto">
         <div className="h-12 px-4 border-b border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-dim)]">
           <span>Loading issue inspector...</span>
           <button
@@ -125,7 +125,7 @@ export function IssueDetailDrawer({
   }
 
   return (
-    <aside className="w-full lg:w-[460px] xl:w-[480px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel flex flex-col max-h-[calc(100vh-56px)] overflow-y-auto">
+    <aside className="w-full lg:w-[460px] xl:w-[480px] shrink-0 bg-[var(--color-bg-card)] pm-card-panel flex flex-col lg:max-h-[calc(100dvh-56px)] overflow-y-auto max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-14 max-lg:z-40 max-lg:overflow-y-auto">
       {/* Drawer Header (.ph) */}
       <div className="h-12 px-4 border-b border-[var(--color-border)] flex items-center justify-between gap-2 shrink-0 sticky top-0 bg-[var(--color-bg-card)] z-10">
         <div className="flex items-center gap-2 min-w-0">

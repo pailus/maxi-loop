@@ -9,11 +9,16 @@ import {
   Grid,
   Inbox,
   LogOut,
+  type LucideIcon,
+  Menu,
+  MoreHorizontal,
   Plus,
+  Radar,
   RotateCcw,
   Search,
   Tag,
   Users,
+  X,
 } from "lucide-react";
 import {
   type AuthSessionView,
@@ -27,6 +32,7 @@ import {
   fetchWorkspaces,
   logoutSession,
 } from "../lib/api";
+import { colorFor, initials } from "../lib/avatar";
 import {
   type AdminTab,
   TeamAndSettingsView,
@@ -67,13 +73,59 @@ interface ToastState {
   undoAction?: () => void;
 }
 
-function getInitials(name: string, email: string): string {
-  const src = name.trim() || email.trim() || "AD";
-  const parts = src.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  }
-  return src.slice(0, 2).toUpperCase();
+const NAV_ITEMS: { id: ActiveNav; label: string; icon: LucideIcon }[] = [
+  { id: "issues", label: "Issues", icon: Inbox },
+  { id: "regressed", label: "Regressions", icon: AlertTriangle },
+  { id: "performance", label: "Performance", icon: Gauge },
+  { id: "releases", label: "Releases", icon: Tag },
+  { id: "alerts", label: "Alerts & PII", icon: Bell },
+  { id: "mcp", label: "MCP & AI", icon: Bot },
+  { id: "projects", label: "Projects & DSN", icon: FolderKanban },
+  { id: "team", label: "Team & settings", icon: Users },
+  { id: "health", label: "Retention & health", icon: Activity },
+];
+
+/** Mobile bottom tab bar (MaxiBoard TabBar): 4 primary destinations + "More" opens the drawer. */
+const TAB_ITEMS: { id: ActiveNav; label: string; icon: LucideIcon }[] = [
+  { id: "issues", label: "Issues", icon: Inbox },
+  { id: "performance", label: "Performance", icon: Gauge },
+  { id: "releases", label: "Releases", icon: Tag },
+  { id: "alerts", label: "Alerts", icon: Bell },
+];
+
+function NavItem({
+  icon: Icon,
+  label,
+  active,
+  count,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  active: boolean;
+  count?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={`w-full flex items-center gap-3 px-2.5 min-h-11 md:min-h-9 rounded-md text-sm text-left cursor-pointer transition ${
+        active
+          ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
+          : "text-[var(--color-text-muted)] font-medium hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+      }`}
+    >
+      <Icon size={18} strokeWidth={1.85} className="shrink-0" />
+      <span className="flex-1 truncate">{label}</span>
+      {count !== undefined && count > 0 && (
+        <span className="min-w-5 h-5 px-1.5 rounded-full bg-[var(--pm-col)] text-[var(--color-text-muted)] text-[11px] font-semibold leading-5 text-center">
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+    </button>
+  );
 }
 
 const ROLE_RANK: Record<Role, number> = {
@@ -155,7 +207,32 @@ export function App() {
     tab: AdminTab;
     nonce: number;
   }>({ tab: "members", nonce: 0 });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const goTo = useCallback((nav: ActiveNav) => {
+    setActiveNav(nav);
+    setDrawerOpen(false);
+  }, []);
+
+  // Close the mobile drawer on Escape and when the viewport grows to desktop.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    const onMq = () => {
+      if (mq.matches) setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    mq.addEventListener("change", onMq);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      mq.removeEventListener("change", onMq);
+    };
+  }, [drawerOpen]);
 
   const showToast = useCallback((message: string, undoAction?: () => void) => {
     setToast({ message, undoAction });
@@ -255,6 +332,7 @@ export function App() {
   const openTeamTab = useCallback((tab: AdminTab) => {
     setTeamTabRequest((prev) => ({ tab, nonce: prev.nonce + 1 }));
     setActiveNav("team");
+    setDrawerOpen(false);
   }, []);
 
   async function handleLogout() {
@@ -311,17 +389,27 @@ export function App() {
     session.tenant_role === "tenant_admin";
   const currentWorkspaceName =
     activeWorkspace?.name ?? session.default_workspace.name;
-  const userInitials = getInitials(session.user.name, session.user.email);
+  const userInitials = initials(session.user.email || session.user.name);
 
   const issuesTabMode: IssuesTabMode =
     activeNav === "regressed" ? "regressed" : "unresolved";
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-text)]">
+    <div className="h-[100dvh] flex flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-text)]">
       {/* 56px MaxiBoard Topbar */}
-      <header className="h-14 px-3 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex items-center gap-3 shrink-0">
+      <header className="relative h-14 px-2 md:px-3 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex items-center gap-1 md:gap-3 shrink-0 z-30">
+        {/* Mobile: hamburger opens the sidebar drawer. Desktop: app grid mark. */}
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open navigation"
+          aria-expanded={drawerOpen}
+          className="md:hidden w-11 h-11 rounded-md inline-flex items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+        >
+          <Menu size={22} />
+        </button>
         <span
-          className="w-8 h-8 rounded inline-flex items-center justify-center text-[var(--color-text-muted)]"
+          className="max-md:hidden w-8 h-8 rounded-md inline-flex items-center justify-center text-[var(--color-text-muted)]"
           title="MaxiLoop Observability"
         >
           <Grid size={18} />
@@ -330,40 +418,54 @@ export function App() {
         <button
           type="button"
           onClick={() => {
-            setActiveNav("issues");
+            goTo("issues");
             setSelectedProjectSlug("");
           }}
-          className="flex items-center gap-2 font-bold text-base text-[var(--color-text)] cursor-pointer"
+          className="flex items-center gap-2 px-1 min-w-0 cursor-pointer"
         >
-          <span className="w-7 h-7 rounded-[6px] bg-[var(--color-primary)] text-white text-sm font-bold inline-flex items-center justify-center">
-            M
+          <span className="w-8 h-8 rounded-md bg-[var(--color-primary)] text-white inline-flex items-center justify-center shrink-0">
+            <Radar size={17} />
           </span>
-          <span>MaxiLoop</span>
+          <span className="text-[15px] font-bold tracking-tight truncate">MaxiLoop</span>
         </button>
 
-        {/* Global Search Box */}
-        <div className="flex-1 max-w-[540px] ml-2 relative">
-          <Search
-            size={15}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none"
-          />
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={globalSearch}
-            onChange={(e) => {
-              setGlobalSearch(e.target.value);
-              if (activeNav !== "issues" && activeNav !== "regressed") {
-                setActiveNav("issues");
-              }
-            }}
-            placeholder="Search issues, exception types, projects..."
-            aria-label="Global search"
-            className="w-full h-9 pl-9 pr-8 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-          />
-          <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[10px] pm-mono text-[var(--color-text-dim)] pointer-events-none">
-            /
-          </kbd>
+        {/* Global Search Box: inline on desktop, drop-down row on mobile */}
+        <div
+          className={`md:flex-1 md:max-w-xl md:ml-6 md:relative ${
+            mobileSearchOpen
+              ? "max-md:absolute max-md:inset-x-0 max-md:top-full max-md:px-3 max-md:py-2 max-md:bg-[var(--color-bg)] max-md:border-b max-md:border-[var(--color-border)] max-md:shadow-[var(--pm-shadow-raised)]"
+              : "max-md:hidden"
+          }`}
+        >
+          <div className="relative">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none"
+            />
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={globalSearch}
+              onChange={(e) => {
+                setGlobalSearch(e.target.value);
+                if (activeNav !== "issues" && activeNav !== "regressed") {
+                  setActiveNav("issues");
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setMobileSearchOpen(false);
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Search issues, exception types, projects..."
+              aria-label="Global search"
+              className="w-full h-11 md:h-9 pl-9 pr-9 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-base md:text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-primary)] focus:shadow-[0_0_0_1px_var(--color-primary)]"
+            />
+            <kbd className="max-md:hidden absolute right-2.5 top-1/2 -translate-y-1/2 min-w-6 text-center rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[11px] leading-5 pm-mono text-[var(--color-text-dim)] pointer-events-none">
+              /
+            </kbd>
+          </div>
         </div>
 
         <button
@@ -372,32 +474,60 @@ export function App() {
             if (canManageProjects) {
               setCreateProjectOpen(true);
             } else {
-              setActiveNav("projects");
+              goTo("projects");
             }
           }}
-          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+          className="max-md:hidden h-9 px-3 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-[var(--color-primary-text)] text-sm font-medium inline-flex items-center gap-1.5 shrink-0 cursor-pointer transition"
         >
-          <Plus size={14} />
+          <Plus size={16} />
           <span>New project</span>
         </button>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1 md:gap-2 shrink-0">
           <span
-            className={`hidden md:inline-flex pm-lozenge ${
+            className={`max-lg:hidden pm-lozenge ${
               dbHealthy ? "pm-lozenge-success" : "pm-lozenge-warning"
             }`}
           >
             {dbHealthy ? "POSTGRES 16 OK" : "DB DEGRADED"}
           </span>
 
-          <span className="hidden sm:inline-flex pm-lozenge">
+          <span className="max-xl:hidden pm-lozenge">
             {session.single_tenant_mode
               ? "SINGLE-TENANT"
               : session.tenant.slug.toUpperCase()}
           </span>
 
+          <button
+            type="button"
+            onClick={() => {
+              setMobileSearchOpen((o) => !o);
+              setTimeout(() => searchInputRef.current?.focus(), 0);
+            }}
+            aria-label="Search"
+            aria-expanded={mobileSearchOpen}
+            className="md:hidden w-11 h-11 rounded-md inline-flex items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+          >
+            {mobileSearchOpen ? <X size={20} /> : <Search size={20} />}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (canManageProjects) {
+                setCreateProjectOpen(true);
+              } else {
+                goTo("projects");
+              }
+            }}
+            aria-label="New project"
+            className="md:hidden w-11 h-11 rounded-md inline-flex items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+          >
+            <Plus size={22} />
+          </button>
+
           <span
-            className="w-7 h-7 rounded-full bg-[#1d7afc] text-white text-xs font-bold inline-flex items-center justify-center select-none"
+            className="max-md:hidden ml-1 w-8 h-8 rounded-full text-white text-[13px] font-semibold inline-flex items-center justify-center shrink-0 select-none"
+            style={{ background: colorFor(session.user.email || "?") }}
             title={`${session.user.name} (${session.user.email})`}
           >
             {userInitials}
@@ -407,9 +537,34 @@ export function App() {
 
       {/* Main Content Shell: 240px Sidebar + Active View */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* 240px MaxiBoard Sunken Sidebar */}
-        <aside className="w-60 shrink-0 bg-[var(--color-bg-sidebar)] border-r border-[var(--color-border)] p-2.5 flex flex-col justify-between overflow-y-auto">
+        {/* Mobile drawer backdrop */}
+        {drawerOpen && (
+          <div
+            className="md:hidden fixed inset-0 z-40 bg-[rgba(9,30,66,0.54)] pm-fade-in"
+            onClick={() => setDrawerOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* 240px MaxiBoard Sidebar — static on desktop, off-canvas drawer on mobile */}
+        <aside
+          className={`w-60 shrink-0 bg-[var(--color-bg-sidebar)] border-r border-[var(--color-border)] p-2 pt-3 flex flex-col justify-between overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-[min(18rem,85vw)] max-md:shadow-[var(--pm-shadow-raised)] max-md:transition-transform max-md:duration-200 ${
+            drawerOpen ? "" : "max-md:-translate-x-full max-md:invisible"
+          }`}
+          aria-label="Sidebar"
+        >
           <div>
+            <div className="md:hidden flex items-center justify-between px-1 pb-2">
+              <span className="text-[15px] font-bold tracking-tight">MaxiLoop</span>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Close navigation"
+                className="w-11 h-11 rounded-md inline-flex items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
             {/* Top-Left MaxiBoard Workspace Switcher & Dropdown */}
             <WorkspaceSwitcher
               session={session}
@@ -430,132 +585,23 @@ export function App() {
               onOpenWorkspaceMembers={() => openTeamTab("members")}
             />
 
-            {/* Primary Nav Items */}
+            {/* Primary Nav Items (MaxiBoard NavLink spec: 14px, 18px icons) */}
             <nav className="space-y-0.5" aria-label="Main navigation">
-              <button
-                type="button"
-                onClick={() => setActiveNav("issues")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "issues"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Inbox size={16} />
-                <span>Issues</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("regressed")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "regressed"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <AlertTriangle size={16} />
-                <span>Regressions</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("performance")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "performance"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Gauge size={16} />
-                <span>Performance</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("releases")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "releases"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Tag size={16} />
-                <span>Releases</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("alerts")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "alerts"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Bell size={16} />
-                <span>Alerts &amp; PII</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("mcp")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "mcp"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Bot size={16} />
-                <span>MCP &amp; AI</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("projects")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "projects"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <FolderKanban size={16} />
-                <span>Projects &amp; DSN</span>
-                <span className="ml-auto px-1.5 py-0.5 rounded-full bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] text-[11px] font-bold">
-                  {projects.length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("team")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "team"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Users size={16} />
-                <span>Team &amp; settings</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveNav("health")}
-                className={`w-full h-9 px-2.5 rounded flex items-center gap-2.5 text-xs font-medium cursor-pointer transition ${
-                  activeNav === "health"
-                    ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
-                }`}
-              >
-                <Activity size={16} />
-                <span>Retention &amp; health</span>
-              </button>
+              {NAV_ITEMS.map((item) => (
+                <NavItem
+                  key={item.id}
+                  icon={item.icon}
+                  label={item.label}
+                  active={activeNav === item.id}
+                  count={item.id === "projects" ? projects.length : undefined}
+                  onClick={() => goTo(item.id)}
+                />
+              ))}
             </nav>
 
             {/* Projects Tree Section with MaxiBoard Doodle SVG Icons */}
-            <div className="mt-4 pt-3 border-t border-[var(--color-border)]">
-              <div className="px-2.5 pb-1.5 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
+            <div className="mt-3">
+              <div className="px-2 pt-2 pb-1.5 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
                 <span>Projects</span>
                 {canManageProjects && (
                   <button
@@ -571,7 +617,7 @@ export function App() {
               </div>
 
               {projects.length === 0 ? (
-                <div className="px-2.5 py-2 text-xs text-[var(--color-text-dim)]">
+                <div className="px-2.5 py-2 text-sm text-[var(--color-text-dim)]">
                   No projects yet
                 </div>
               ) : (
@@ -592,6 +638,7 @@ export function App() {
                     ) {
                       setActiveNav("issues");
                     }
+                    setDrawerOpen(false);
                   }}
                 />
               )}
@@ -599,7 +646,7 @@ export function App() {
           </div>
 
           {/* Sidebar Runtime & User Session Footer */}
-          <div className="pt-3 border-t border-[var(--color-border)] px-2 space-y-1 text-[11px] text-[var(--color-text-dim)]">
+          <div className="mt-4 pt-3 border-t border-[var(--color-border)] px-2 pb-1 space-y-1 text-xs text-[var(--color-text-dim)]">
             <div>Ingest worker: 100ms batch</div>
             <div>
               Retention:{" "}
@@ -612,15 +659,18 @@ export function App() {
               ).toLocaleString()}
               /m
             </div>
-            <div className="pt-1.5 font-semibold text-[var(--color-text-muted)] truncate">
+            <div
+              className="pt-1.5 font-semibold text-[var(--color-text-muted)] truncate"
+              title={`${session.user.email} (${activeWorkspaceRole})`}
+            >
               {session.user.email} ({activeWorkspaceRole})
             </div>
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-link)] hover:underline cursor-pointer pt-0.5"
+              className="inline-flex items-center gap-1.5 min-h-9 text-sm font-medium text-[var(--color-link)] hover:underline cursor-pointer"
             >
-              <LogOut size={12} />
+              <LogOut size={14} />
               <span>Sign out</span>
             </button>
           </div>
@@ -747,6 +797,53 @@ export function App() {
         {activeNav === "health" && <HealthCard />}
       </div>
 
+      {/* Mobile bottom tab bar (MaxiBoard TabBar): in-flow so it tracks 100dvh exactly */}
+      <nav
+        className="md:hidden shrink-0 grid grid-cols-5 bg-[var(--color-bg)] border-t border-[var(--color-border)]"
+        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        aria-label="Primary"
+      >
+        {TAB_ITEMS.map((tab) => {
+          const Icon = tab.icon;
+          const active =
+            activeNav === tab.id ||
+            (tab.id === "issues" && activeNav === "regressed");
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => goTo(tab.id)}
+              aria-current={active ? "page" : undefined}
+              className={`flex flex-col items-center justify-center gap-0.5 h-[60px] text-[11px] font-medium cursor-pointer transition ${
+                active
+                  ? "text-[var(--color-primary)]"
+                  : "text-[var(--color-text-muted)]"
+              }`}
+            >
+              <Icon size={22} strokeWidth={active ? 2.1 : 1.8} />
+              <span className="truncate max-w-full px-1">{tab.label}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          aria-current={
+            !TAB_ITEMS.some((t) => t.id === activeNav) && activeNav !== "regressed"
+              ? "page"
+              : undefined
+          }
+          className={`flex flex-col items-center justify-center gap-0.5 h-[60px] text-[11px] font-medium cursor-pointer transition ${
+            !TAB_ITEMS.some((t) => t.id === activeNav) && activeNav !== "regressed"
+              ? "text-[var(--color-primary)]"
+              : "text-[var(--color-text-muted)]"
+          }`}
+        >
+          <MoreHorizontal size={22} strokeWidth={1.8} />
+          <span>More</span>
+        </button>
+      </nav>
+
       {/* Create Workspace Modal (MaxiBoard style) */}
       {createWsInitialName !== null && (
         <CreateWorkspaceDialog
@@ -797,13 +894,13 @@ export function App() {
         />
       )}
 
-      {/* MaxiBoard Bottom Toast (#172B4D) */}
+      {/* Toast: MaxiBoard uses sonner (light theme, bottom-center, above the mobile tab bar) */}
       {toast && (
         <div
           role="status"
-          className="fixed left-64 bottom-5 z-50 bg-[#172b4d] text-white rounded-md px-3.5 py-2.5 shadow-[var(--pm-shadow-raised)] flex items-center gap-3 text-xs font-medium"
+          className="fixed z-50 left-1/2 -translate-x-1/2 bottom-[calc(72px+env(safe-area-inset-bottom,0px))] md:bottom-4 w-[356px] max-w-[calc(100vw-2rem)] bg-[var(--color-bg-card)] text-[var(--color-text)] border border-[var(--color-border)] rounded-lg p-4 shadow-[0_4px_12px_rgba(0,0,0,0.1)] flex items-center gap-3 text-[13px] font-medium pm-fade-in"
         >
-          <span>{toast.message}</span>
+          <span className="flex-1 min-w-0">{toast.message}</span>
           {toast.undoAction && (
             <button
               type="button"
@@ -811,7 +908,7 @@ export function App() {
                 toast.undoAction?.();
                 setToast(null);
               }}
-              className="text-[#85b8ff] hover:underline font-bold inline-flex items-center gap-1 cursor-pointer"
+              className="shrink-0 h-6 px-2 rounded bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium inline-flex items-center gap-1 cursor-pointer hover:opacity-90"
             >
               <RotateCcw size={12} />
               <span>Undo</span>

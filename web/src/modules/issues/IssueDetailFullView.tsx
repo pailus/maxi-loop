@@ -185,7 +185,7 @@ export function IssueDetailFullView({
   }
 
   return (
-    <div className="flex-1 min-w-0 bg-[var(--color-bg)] px-6 py-4 overflow-y-auto">
+    <div className="flex-1 min-w-0 bg-[var(--color-bg)] px-4 md:px-6 py-4 overflow-y-auto">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-[var(--color-text-dim)]">
         <button
@@ -253,7 +253,7 @@ export function IssueDetailFullView({
               type="button"
               disabled={triageBusy || issue.status === "resolved"}
               onClick={() => onUpdateStatus(issue.id, "resolved")}
-              className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
             >
               <Check size={14} />
               <span>Resolve</span>
@@ -262,7 +262,7 @@ export function IssueDetailFullView({
               type="button"
               disabled={triageBusy || issue.status === "ignored"}
               onClick={() => onUpdateStatus(issue.id, "ignored")}
-              className="h-8 px-3 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-3 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
             >
               <EyeOff size={14} />
               <span>Ignore</span>
@@ -271,7 +271,7 @@ export function IssueDetailFullView({
               type="button"
               disabled={triageBusy || issue.status === "unresolved"}
               onClick={() => onUpdateStatus(issue.id, "unresolved")}
-              className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 text-[var(--color-text-muted)] text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw size={13} />
               <span>Unresolve</span>
@@ -712,7 +712,7 @@ export function IssueDetailFullView({
                 <button
                   type="submit"
                   disabled={savingNote}
-                  className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                  className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
                 >
                   {savingNote ? "Saving..." : "Add note"}
                 </button>

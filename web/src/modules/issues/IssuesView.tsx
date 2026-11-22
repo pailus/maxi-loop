@@ -138,7 +138,11 @@ export function IssuesView({
           if (prev !== null && resp.items.some((i) => i.id === prev)) {
             return prev;
           }
-          return resp.items[0].id;
+          // Auto-open the first issue only where the inspector docks beside
+          // the list (lg+); on phones/tablets it is a full-screen overlay.
+          return window.matchMedia("(min-width: 1024px)").matches
+            ? resp.items[0].id
+            : null;
         });
       } else {
         setSelectedIssueId(null);
@@ -322,7 +326,7 @@ export function IssuesView({
   return (
     <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden bg-[var(--color-bg)]">
       {/* Center Issues Stream Pane */}
-      <section className="flex-1 min-w-0 flex flex-col px-6 pt-4 pb-4 overflow-y-auto">
+      <section className="flex-1 min-w-0 flex flex-col px-4 md:px-6 pt-4 pb-4 overflow-y-auto">
         {/* Breadcrumb */}
         <div className="text-xs text-[var(--color-text-dim)] flex items-center gap-1.5">
           <span>{workspaceName}</span>
@@ -334,7 +338,7 @@ export function IssuesView({
 
         {/* Title Row & Inline MaxiBoard Status Summary Pill */}
         <div className="mt-1.5 flex items-center gap-3 flex-wrap">
-          <h1 className="text-2xl font-semibold text-[var(--color-text)] tracking-tight">
+          <h1 className="text-xl md:text-2xl font-semibold text-[var(--color-text)] tracking-tight">
             Issues
           </h1>
 
@@ -353,7 +357,7 @@ export function IssuesView({
           <button
             type="button"
             onClick={() => void loadIssuesList()}
-            className="ml-auto h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
+            className="ml-auto h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
             title="Refresh issues stream"
           >
             <RefreshCw size={13} className={loadingList ? "animate-spin" : ""} />
@@ -401,10 +405,10 @@ export function IssuesView({
         </nav>
 
         {/* Compact 32px Filter Toolbar */}
-        <div className="mt-3.5 flex items-center gap-2 flex-wrap">
-          <div className="relative w-52">
+        <div className="mt-3.5 grid grid-cols-2 gap-2 sm:flex sm:items-center sm:flex-wrap">
+          <div className="relative col-span-2 sm:w-52">
             <Search
-              size={13}
+              size={14}
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--pm-text-faint)] pointer-events-none"
             />
             <input
@@ -416,7 +420,7 @@ export function IssuesView({
               }}
               placeholder="Filter exception, culprit..."
               aria-label="Filter issues by text"
-              className="w-full h-8 pl-7 pr-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+              className="w-full h-10 sm:h-8 pl-8 pr-2.5 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg)] text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
             />
           </div>
 
@@ -427,7 +431,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Filter by project"
-            className="h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
           >
             <option value="">Project: All ({projects.length})</option>
             {projects.map((p) => (
@@ -444,7 +448,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Filter by environment"
-            className="h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
+            className="min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer"
           >
             <option value="">Env: All</option>
             {knownEnvs.map((envName) => (
@@ -463,7 +467,7 @@ export function IssuesView({
             }}
             placeholder="Release SHA..."
             aria-label="Filter by release"
-            className="w-28 h-8 px-2.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs pm-mono text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+            className="min-w-0 sm:w-32 h-10 sm:h-8 px-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-sm pm-mono text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
           />
 
           <select
@@ -473,7 +477,7 @@ export function IssuesView({
               setPage(1);
             }}
             aria-label="Sort issues"
-            className="h-8 px-2.5 rounded bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] border-0 cursor-pointer ml-auto"
+            className="col-span-2 min-w-0 h-10 sm:h-8 px-2.5 rounded-md bg-[var(--pm-col)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] border-0 cursor-pointer sm:ml-auto"
           >
             <option value="last_seen">Sort: Last seen</option>
             <option value="events">Sort: Most events</option>
@@ -543,8 +547,8 @@ export function IssuesView({
         )}
 
         {/* Issues Table Card */}
-        <div className="mt-3.5 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-[var(--pm-shadow-card)] flex flex-col overflow-hidden">
-          <div className="px-4 py-2.5 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] grid grid-cols-[1fr_92px_72px_76px] gap-3 text-xs font-semibold text-[var(--color-text-dim)]">
+        <div className="mt-3.5 flex-1 max-md:flex-none rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-[var(--pm-shadow-card)] flex flex-col overflow-hidden max-md:overflow-visible">
+          <div className="px-4 py-2.5 bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] grid grid-cols-[1fr_44px_64px] sm:grid-cols-[1fr_92px_72px_76px] gap-3 text-xs font-semibold text-[var(--color-text-dim)]">
             <span>Issue &amp; culprit</span>
             <span className="hidden sm:block">24h trend</span>
             <span className="text-right">Events</span>
@@ -561,7 +565,7 @@ export function IssuesView({
               ))}
             </div>
           ) : items.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12">
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-4 md:px-6 py-12">
               <div className="w-12 h-12 rounded-full bg-[var(--color-primary-light)] text-[var(--color-primary)] flex items-center justify-center mb-3">
                 <Inbox size={22} />
               </div>
@@ -577,14 +581,14 @@ export function IssuesView({
                 <button
                   type="button"
                   onClick={onNavigateToProjects}
-                  className="mt-4 h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold cursor-pointer"
+                  className="mt-4 h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold cursor-pointer"
                 >
                   + Create project &amp; get DSN
                 </button>
               )}
             </div>
           ) : (
-            <div className="divide-y divide-[var(--color-border-light)] overflow-y-auto">
+            <div className="divide-y divide-[var(--color-border-light)] overflow-y-auto max-md:overflow-visible">
               {items.map((item) => {
                 const isSelected = item.id === selectedIssueId;
                 const issueKey = `${item.project_slug.slice(0, 3).toUpperCase()}-${item.id}`;
@@ -606,7 +610,7 @@ export function IssuesView({
                         setSelectedIssueId(item.id);
                       }
                     }}
-                    className={`px-4 py-3 grid grid-cols-[1fr_92px_72px_76px] gap-3 items-center text-left transition cursor-pointer relative ${
+                    className={`px-4 py-3 grid grid-cols-[1fr_44px_64px] sm:grid-cols-[1fr_92px_72px_76px] gap-3 items-center text-left transition cursor-pointer relative ${
                       isSelected
                         ? "bg-[var(--color-primary-light)]"
                         : "hover:bg-[var(--pm-card-hover)]"
@@ -729,7 +733,7 @@ export function IssuesView({
                           className={`w-[5px] rounded-t-[1px] ${
                             item.is_regressed
                               ? "bg-[var(--color-danger)]"
-                              : "bg-[#1d7afc]"
+                              : "bg-[var(--color-primary)]"
                           }`}
                           style={{ height: bh }}
                         />

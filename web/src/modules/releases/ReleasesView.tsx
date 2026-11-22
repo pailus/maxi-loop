@@ -183,17 +183,17 @@ export function ReleasesView({
   }
 
   return (
-    <div className="flex-1 min-w-0 flex overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex-1 min-w-0 flex overflow-hidden max-lg:flex-col max-lg:overflow-y-auto bg-[var(--color-bg)]">
       {/* Main Releases & Source Maps Area */}
-      <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
+      <section className="flex-1 min-w-0 flex flex-col overflow-hidden max-lg:flex-none max-lg:overflow-visible">
+        <div className="px-4 md:px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
               <div className="text-[11px] font-medium text-[var(--color-text-dim)]">
                 {workspaceName} / Releases &amp; Source Maps
               </div>
-              <h1 className="text-lg font-bold text-[var(--color-text)] flex items-center gap-2">
-                <Tag size={18} className="text-[var(--color-primary)]" />
+              <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-[var(--color-text)] flex items-center gap-2">
+                <Tag size={18} className="shrink-0 text-[var(--color-primary)]" />
                 <span>Release Tracking &amp; React Source Maps</span>
               </h1>
             </div>
@@ -203,7 +203,7 @@ export function ReleasesView({
                 value={filterProject}
                 onChange={(e) => setFilterProject(e.target.value)}
                 aria-label="Filter by project"
-                className="pm-input h-8 text-xs w-44"
+                className="pm-input h-8 text-sm w-44"
               >
                 <option value="">All projects</option>
                 {projects.map((p) => (
@@ -215,7 +215,7 @@ export function ReleasesView({
               <button
                 type="button"
                 onClick={() => void loadData()}
-                className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+                className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw size={13} />
                 <span>Refresh</span>
@@ -227,7 +227,7 @@ export function ReleasesView({
             <button
               type="button"
               onClick={() => setActiveTab("releases")}
-              className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+              className={`pm-tab cursor-pointer ${
                 activeTab === "releases"
                   ? "pm-tab-active text-[var(--color-primary)]"
                   : "text-[var(--color-text-muted)]"
@@ -238,7 +238,7 @@ export function ReleasesView({
             <button
               type="button"
               onClick={() => setActiveTab("sourcemaps")}
-              className={`pm-tab pb-2 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 ${
+              className={`pm-tab cursor-pointer inline-flex items-center gap-1.5 ${
                 activeTab === "sourcemaps"
                   ? "pm-tab-active text-[var(--color-primary)]"
                   : "text-[var(--color-text-muted)]"
@@ -272,8 +272,8 @@ export function ReleasesView({
                 </p>
               </div>
             ) : (
-              <div className="border border-[var(--color-border)] rounded-lg overflow-hidden bg-[var(--color-bg)]">
-                <table className="w-full text-left border-collapse">
+              <div className="border border-[var(--color-border)] rounded-lg overflow-x-auto bg-[var(--color-bg)]">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse">
                   <thead>
                     <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
                       <th className="py-2.5 px-3">Release</th>
@@ -293,7 +293,7 @@ export function ReleasesView({
                         className="hover:bg-[var(--color-bg-hover)] cursor-pointer transition"
                       >
                         <td className="py-2.5 px-3 font-semibold text-[var(--color-text)] pm-mono">
-                          <div>{rel.version}</div>
+                          <div className="whitespace-nowrap">{rel.version}</div>
                           {rel.notes && (
                             <div className="font-sans font-normal text-[11px] text-[var(--color-text-dim)] truncate max-w-[260px]">
                               {rel.notes}
@@ -353,8 +353,8 @@ export function ReleasesView({
               </p>
             </div>
           ) : (
-            <div className="border border-[var(--color-border)] rounded-lg overflow-hidden bg-[var(--color-bg)]">
-              <table className="w-full text-left border-collapse">
+            <div className="border border-[var(--color-border)] rounded-lg overflow-x-auto bg-[var(--color-bg)]">
+              <table className="w-full max-md:min-w-[640px] text-left border-collapse">
                 <thead>
                   <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">
                     <th className="py-2.5 px-3">Bundle Filename</th>
@@ -414,7 +414,7 @@ export function ReleasesView({
 
       {/* Right Drawer: Register Release OR Upload Source Map */}
       {canTriage && (
-        <aside className="w-[360px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
+        <aside className="w-full lg:w-[360px] shrink-0 max-lg:border-t lg:border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
           {activeTab === "releases" ? (
             <>
               <h2 className="text-sm font-bold text-[var(--color-text)] flex items-center gap-1.5 mb-1">
@@ -435,7 +435,7 @@ export function ReleasesView({
                     value={projectSlug}
                     onChange={(e) => setProjectSlug(e.target.value)}
                     required
-                    className="pm-input h-9 text-xs"
+                    className="pm-input h-9 text-sm"
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.slug}>
@@ -455,7 +455,7 @@ export function ReleasesView({
                     onChange={(e) => setVersion(e.target.value)}
                     placeholder="e.g. web@2.4.0 or a1b2c3d"
                     required
-                    className="pm-input h-9 text-xs pm-mono"
+                    className="pm-input h-9 text-sm pm-mono"
                   />
                 </div>
 
@@ -468,7 +468,7 @@ export function ReleasesView({
                     value={commitSha}
                     onChange={(e) => setCommitSha(e.target.value)}
                     placeholder="7-40 hex chars (auto-inferred if hex)"
-                    className="pm-input h-9 text-xs pm-mono"
+                    className="pm-input h-9 text-sm pm-mono"
                   />
                 </div>
 
@@ -481,7 +481,7 @@ export function ReleasesView({
                     value={environment}
                     onChange={(e) => setEnvironment(e.target.value)}
                     placeholder="production"
-                    className="pm-input h-9 text-xs"
+                    className="pm-input h-9 text-sm"
                   />
                 </div>
 
@@ -501,7 +501,7 @@ export function ReleasesView({
                 <button
                   type="submit"
                   disabled={submitting || projects.length === 0}
-                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
                 >
                   {submitting ? "Saving..." : "Save release"}
                 </button>
@@ -527,7 +527,7 @@ export function ReleasesView({
                     value={smProjectSlug}
                     onChange={(e) => setSmProjectSlug(e.target.value)}
                     required
-                    className="pm-input h-9 text-xs"
+                    className="pm-input h-9 text-sm"
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.slug}>
@@ -547,7 +547,7 @@ export function ReleasesView({
                     onChange={(e) => setSmRelease(e.target.value)}
                     placeholder="e.g. web@2.4.0"
                     required
-                    className="pm-input h-9 text-xs pm-mono"
+                    className="pm-input h-9 text-sm pm-mono"
                   />
                 </div>
 
@@ -578,7 +578,7 @@ export function ReleasesView({
                     onChange={(e) => setSmFilename(e.target.value)}
                     placeholder="~/assets/index-abc123.js"
                     required
-                    className="pm-input h-9 text-xs pm-mono"
+                    className="pm-input h-9 text-sm pm-mono"
                   />
                 </div>
 
@@ -591,14 +591,14 @@ export function ReleasesView({
                     value={smDebugId}
                     onChange={(e) => setSmDebugId(e.target.value)}
                     placeholder="UUID from Sentry bundler plugin"
-                    className="pm-input h-9 text-xs pm-mono"
+                    className="pm-input h-9 text-sm pm-mono"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={smSubmitting || !smContent || projects.length === 0}
-                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
                 >
                   {smSubmitting ? "Uploading..." : "Upload source map"}
                 </button>

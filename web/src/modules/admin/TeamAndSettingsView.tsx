@@ -363,7 +363,7 @@ export function TeamAndSettingsView({
   return (
     <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[var(--color-bg)]">
       {/* Header & Sub-tabs */}
-      <div className="px-6 pt-4 border-b border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
+      <div className="px-4 md:px-6 pt-4 border-b border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
         <div className="text-xs text-[var(--color-text-dim)] flex items-center gap-1.5">
           <span>{session.tenant.name}</span>
           <span>›</span>
@@ -372,7 +372,7 @@ export function TeamAndSettingsView({
           </span>
         </div>
 
-        <h1 className="mt-1.5 text-2xl font-semibold text-[var(--color-text)] tracking-tight">
+        <h1 className="mt-1.5 text-xl md:text-2xl font-semibold text-[var(--color-text)] tracking-tight">
           Access Control, Inherited Settings &amp; Project Tokens
         </h1>
 
@@ -380,7 +380,7 @@ export function TeamAndSettingsView({
           <button
             type="button"
             onClick={() => setTab("members")}
-            className={`pm-tab pb-2.5 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+            className={`pm-tab inline-flex items-center gap-1.5 cursor-pointer ${
               tab === "members" ? "pm-tab-active" : ""
             }`}
           >
@@ -391,7 +391,7 @@ export function TeamAndSettingsView({
           <button
             type="button"
             onClick={() => setTab("settings")}
-            className={`pm-tab pb-2.5 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+            className={`pm-tab inline-flex items-center gap-1.5 cursor-pointer ${
               tab === "settings" ? "pm-tab-active" : ""
             }`}
           >
@@ -402,7 +402,7 @@ export function TeamAndSettingsView({
           <button
             type="button"
             onClick={() => setTab("api_tokens")}
-            className={`pm-tab pb-2.5 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+            className={`pm-tab inline-flex items-center gap-1.5 cursor-pointer ${
               tab === "api_tokens" ? "pm-tab-active" : ""
             }`}
           >
@@ -431,8 +431,8 @@ export function TeamAndSettingsView({
                 </div>
               )}
 
-              <div className="mt-4 rounded-lg border border-[var(--color-border)] overflow-hidden">
-                <table className="w-full text-left border-collapse text-xs">
+              <div className="mt-4 rounded-lg border border-[var(--color-border)] overflow-x-auto">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                   <thead>
                     <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[var(--color-text-dim)] uppercase text-[11px]">
                       <th className="py-2.5 px-3 font-semibold">User</th>
@@ -648,7 +648,7 @@ export function TeamAndSettingsView({
                 <button
                   type="submit"
                   disabled={creatingMember || !canManageAnyWorkspace}
-                  className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Plus size={14} />
                   <span>{creatingMember ? "Adding..." : "Grant membership"}</span>
@@ -739,7 +739,7 @@ export function TeamAndSettingsView({
                   <button
                     type="submit"
                     disabled={savingTenant || !canManageTenant}
-                    className="h-8 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                    className="h-8 px-4 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
                   >
                     {savingTenant ? "Saving..." : "Save tenant defaults"}
                   </button>
@@ -762,7 +762,7 @@ export function TeamAndSettingsView({
                   <button
                     type="button"
                     onClick={onOpenCreateWorkspace}
-                    className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    className="h-8 px-3 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
                   >
                     <Plus size={14} />
                     <span>Create workspace</span>
@@ -878,7 +878,7 @@ export function TeamAndSettingsView({
                                 [ws.slug]: { ...edit, name: e.target.value },
                               }))
                             }
-                            className="pm-input h-8 text-xs"
+                            className="pm-input h-8 text-sm"
                           />
                         </div>
 
@@ -899,7 +899,7 @@ export function TeamAndSettingsView({
                                 [ws.slug]: { ...edit, retention: e.target.value },
                               }))
                             }
-                            className="pm-input pm-mono h-8 text-xs"
+                            className="pm-input pm-mono h-8 text-sm"
                           />
                         </div>
 
@@ -920,7 +920,7 @@ export function TeamAndSettingsView({
                                 [ws.slug]: { ...edit, rpm: e.target.value },
                               }))
                             }
-                            className="pm-input pm-mono h-8 text-xs"
+                            className="pm-input pm-mono h-8 text-sm"
                           />
                         </div>
 
@@ -930,7 +930,7 @@ export function TeamAndSettingsView({
                           onClick={() =>
                             void handleSaveWorkspaceSettings(ws.slug)
                           }
-                          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
                         >
                           Apply
                         </button>
@@ -982,7 +982,7 @@ export function TeamAndSettingsView({
                         setCopiedRaw(true);
                         setTimeout(() => setCopiedRaw(false), 1800);
                       }}
-                      className="h-8 px-3 rounded bg-[var(--color-primary)] text-white text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      className="h-8 px-3 rounded bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center gap-1 cursor-pointer"
                     >
                       {copiedRaw ? <Check size={13} /> : <Copy size={13} />}
                       <span>{copiedRaw ? "Copied" : "Copy"}</span>
@@ -997,8 +997,8 @@ curl -X POST -H "Authorization: Bearer ${newlyCreatedToken.raw}" \\
                 </div>
               )}
 
-              <div className="mt-4 rounded-lg border border-[var(--color-border)] overflow-hidden">
-                <table className="w-full text-left border-collapse text-xs">
+              <div className="mt-4 rounded-lg border border-[var(--color-border)] overflow-x-auto">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                   <thead>
                     <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[var(--color-text-dim)] uppercase text-[11px]">
                       <th className="py-2.5 px-3 font-semibold">Name / Prefix</th>
@@ -1166,7 +1166,7 @@ curl -X POST -H "Authorization: Bearer ${newlyCreatedToken.raw}" \\
                     !canManageAnyWorkspace ||
                     projects.length === 0
                   }
-                  className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full h-9 rounded-[6px] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <KeyRound size={14} />
                   <span>

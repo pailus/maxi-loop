@@ -6,7 +6,7 @@ html[data-app="maxiboard"] {
   --color-bg: #ffffff;
   --color-bg-muted: #f7f8f9;
   --color-bg-card: #ffffff;
-  --color-bg-sidebar: #f7f8f9;
+  --color-bg-sidebar: #ffffff;
   --color-bg-hover: #ebecf0;
   --color-border: #dcdfe4;
   --color-border-light: #f1f2f4;
@@ -34,6 +34,8 @@ html[data-app="maxiboard"] {
   --pm-col: #f1f2f4;
   --pm-card-hover: #f7f8f9;
   --pm-text-faint: #8590a2;
+  --pm-skeleton: #ebecf0;
+  --pm-skeleton-hi: #f7f8f9;
   --pm-shadow-card: 0 1px 1px rgba(9, 30, 66, 0.25), 0 0 1px rgba(9, 30, 66, 0.31);
   --pm-shadow-raised: 0 8px 12px rgba(9, 30, 66, 0.15), 0 0 1px rgba(9, 30, 66, 0.31);
   --focus-ring: #0c66e4;
@@ -55,7 +57,8 @@ html[data-app="maxiboard"] {
 
   body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", sans-serif;
+    /* Same stack as MaxiCode / MaxiBoard (static/src/index.css). */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
     color: var(--color-text);
     background: var(--color-bg);
     font-size: 14px;
@@ -102,8 +105,9 @@ html[data-app="maxiboard"] {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 10px;
-    font-size: 13px;
+    min-height: 40px;
+    padding: 0 10px;
+    font-size: 14px;
     font-weight: 500;
     color: var(--color-text-muted);
     white-space: nowrap;
@@ -127,7 +131,7 @@ html[data-app="maxiboard"] {
     position: absolute;
     left: 4px;
     right: 4px;
-    bottom: 0;
+    bottom: -1px;
     height: 2px;
     border-radius: 2px 2px 0 0;
     background: var(--color-primary);
@@ -146,21 +150,21 @@ html[data-app="maxiboard"] {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-size: 11px;
+    border-radius: 4px;
+    padding: 0 6px;
+    font-size: 12px;
     font-weight: 700;
-    line-height: 16px;
+    line-height: 18px;
     text-transform: uppercase;
     letter-spacing: 0.02em;
     white-space: nowrap;
-    background: var(--pm-col);
+    background: var(--color-bg-hover);
     color: var(--color-text-muted);
   }
 
   .pm-lozenge-primary,
   .pm-lozenge-info {
-    background: #cce0ff;
+    background: #e9f2ff;
     color: #0055cc;
   }
 
@@ -193,7 +197,7 @@ html[data-app="maxiboard"] {
     border: 1px solid var(--color-border-strong);
     background: var(--color-bg);
     color: var(--color-text);
-    font-size: 13px;
+    font-size: 14px;
     outline: none;
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
@@ -210,7 +214,7 @@ html[data-app="maxiboard"] {
   }
 
   .pm-mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   /* MaxiBoard project doodle icon wrapper */
@@ -239,6 +243,24 @@ html[data-app="maxiboard"] {
   /* MaxiBoard popover & dialog fade-in */
   .pm-fade-in {
     animation: pm-fade-in 140ms ease-out;
+  }
+}
+
+/* iOS zooms the page when a focused field is under 16px; only touch devices
+ * need the guard, so desktop keeps each field's declared size (MaxiBoard rule). */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Phones: touch-sized tabs (MaxiBoard mobile spec). */
+@media (max-width: 767px) {
+  .pm-tab {
+    min-height: 44px;
+    padding: 0 8px;
   }
 }
 

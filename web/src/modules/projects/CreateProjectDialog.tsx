@@ -419,7 +419,7 @@ export function CreateProjectDialog({
         <button
           type="button"
           onClick={onClose}
-          className="h-8 px-3 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
+          className="h-8 px-3 rounded-md text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
         >
           Cancel
         </button>
@@ -427,7 +427,7 @@ export function CreateProjectDialog({
           type="button"
           disabled={!platform}
           onClick={() => setStep(2)}
-          className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
         >
           <span>Next</span>
           <ArrowRight size={13} />
@@ -641,7 +641,7 @@ export function CreateProjectDialog({
           type="button"
           onClick={() => setStep(1)}
           disabled={busy}
-          className="h-8 px-3 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] inline-flex items-center gap-1 cursor-pointer mr-auto"
+          className="h-8 px-3 rounded-md text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] inline-flex items-center gap-1 cursor-pointer mr-auto"
         >
           <ArrowLeft size={13} />
           <span>Back</span>
@@ -650,7 +650,7 @@ export function CreateProjectDialog({
           type="submit"
           form="ml-create-project-dialog-form"
           disabled={busy || !name.trim() || !slug.trim()}
-          className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
         >
           {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
           <span>{busy ? "Creating..." : "Create project"}</span>
@@ -699,7 +699,7 @@ export function CreateProjectDialog({
                 setDsnCopied(true);
                 window.setTimeout(() => setDsnCopied(false), 1500);
               }}
-              className="h-8 px-2.5 rounded-md border border-[var(--color-border)] text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] inline-flex items-center gap-1 cursor-pointer shrink-0"
+              className="h-8 px-2.5 rounded-md border border-[var(--color-border)] text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] inline-flex items-center gap-1 cursor-pointer shrink-0"
             >
               {dsnCopied ? <Check size={12} /> : <Copy size={12} />}
               <span>{dsnCopied ? "Copied" : "Copy"}</span>
@@ -741,7 +741,7 @@ export function CreateProjectDialog({
           <button
             type="button"
             onClick={onClose}
-            className="h-8 px-3 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer shrink-0"
+            className="h-8 px-3 rounded-md text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer shrink-0"
           >
             Skip for now
           </button>
@@ -749,7 +749,7 @@ export function CreateProjectDialog({
           <button
             type="button"
             onClick={onClose}
-            className="h-8 px-3 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer shrink-0"
+            className="h-8 px-3 rounded-md text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer shrink-0"
           >
             Close
           </button>
@@ -758,7 +758,7 @@ export function CreateProjectDialog({
           type="button"
           onClick={() => created && onViewIssues(created)}
           disabled={!created}
-          className={`h-8 px-3.5 rounded-md text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0 ${
+          className={`h-8 px-3.5 rounded-md text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0 ${
             firstEvent.kind === "received"
               ? "bg-[var(--color-success)] hover:opacity-90 text-white"
               : "border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"

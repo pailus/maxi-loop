@@ -372,7 +372,7 @@ export function WorkspaceSwitcher({
                     autoFocus
                     placeholder="Search workspaces..."
                     aria-label="Search workspaces"
-                    className="flex-1 min-w-0 bg-transparent text-xs text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
+                    className="flex-1 min-w-0 bg-transparent text-base md:text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
                   />
                 </label>
               </div>
@@ -430,7 +430,7 @@ export function WorkspaceSwitcher({
                           />
                           <span className="flex-1 min-w-0">
                             <span className="flex items-center gap-1.5">
-                              <span className="text-xs font-semibold text-[var(--color-text)] truncate">
+                              <span className="text-sm font-semibold text-[var(--color-text)] truncate">
                                 <HighlightMatch text={w.name} query={query} />
                               </span>
                               {w.is_default && (
@@ -439,7 +439,7 @@ export function WorkspaceSwitcher({
                                 </span>
                               )}
                             </span>
-                            <span className="block text-[11px] text-[var(--color-text-dim)] truncate">
+                            <span className="block text-xs text-[var(--color-text-dim)] truncate">
                               <span className="pm-mono">{w.slug}</span> ·{" "}
                               {w.effective_retention_days}d ·{" "}
                               {w.effective_rate_limit_per_minute.toLocaleString()}
@@ -483,7 +483,7 @@ export function WorkspaceSwitcher({
               ))}
 
               {query.trim() && flatItems.length === 0 && (
-                <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">
+                <div className="px-3 py-3 text-sm text-[var(--color-text-muted)]">
                   No workspace matches &ldquo;{query.trim()}&rdquo;
                 </div>
               )}
@@ -532,7 +532,7 @@ export function WorkspaceSwitcher({
                   close();
                   onOpenWorkspaceSettings();
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
+                className="w-full flex items-center gap-2.5 px-3 min-h-11 md:min-h-9 text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
               >
                 <span className="w-7 h-7 rounded-md flex items-center justify-center">
                   <Settings2 size={15} />
@@ -548,7 +548,7 @@ export function WorkspaceSwitcher({
                 close();
                 onOpenWorkspaceMembers();
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
+              className="w-full flex items-center gap-2.5 px-3 min-h-11 md:min-h-9 text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
             >
               <span className="w-7 h-7 rounded-md flex items-center justify-center">
                 <Users size={15} />
@@ -566,7 +566,7 @@ export function WorkspaceSwitcher({
                   close();
                   onOpenCreateWorkspace(initial);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
+                className="w-full flex items-center gap-2.5 px-3 min-h-11 md:min-h-9 text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
               >
                 <span className="w-7 h-7 rounded-md border border-dashed border-[var(--color-border-strong)] flex items-center justify-center">
                   <Plus size={14} />

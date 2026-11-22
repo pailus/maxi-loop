@@ -116,11 +116,11 @@ export function OccurrenceChart({
         </div>
 
         {onIntervalChange && (
-          <div className="inline-flex items-center gap-1">
+          <div className="inline-flex items-center gap-1 shrink-0">
             <button
               type="button"
               onClick={() => onIntervalChange("1h")}
-              className={`h-6 px-2.5 rounded text-[11px] font-semibold cursor-pointer transition ${
+              className={`h-6 px-2.5 rounded text-[11px] font-semibold whitespace-nowrap cursor-pointer transition ${
                 interval === "1h"
                   ? "bg-[var(--color-primary)] text-white"
                   : "bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
@@ -131,7 +131,7 @@ export function OccurrenceChart({
             <button
               type="button"
               onClick={() => onIntervalChange("1d")}
-              className={`h-6 px-2.5 rounded text-[11px] font-semibold cursor-pointer transition ${
+              className={`h-6 px-2.5 rounded text-[11px] font-semibold whitespace-nowrap cursor-pointer transition ${
                 interval === "1d"
                   ? "bg-[var(--color-primary)] text-white"
                   : "bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
@@ -164,7 +164,7 @@ export function OccurrenceChart({
                 ? "bg-[var(--color-border)]"
                 : isRegressed && bar.isSpike
                   ? "bg-[var(--color-danger)]"
-                  : "bg-[#1d7afc]";
+                  : "bg-[var(--color-primary)]";
             return (
               <div
                 key={`${bar.label}-${idx}`}

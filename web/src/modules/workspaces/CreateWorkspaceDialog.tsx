@@ -305,7 +305,7 @@ export function CreateWorkspaceDialog({
           <button
             type="button"
             onClick={onClose}
-            className="h-8 px-3 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
+            className="h-8 px-3 rounded-md text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] cursor-pointer"
           >
             Cancel
           </button>
@@ -313,7 +313,7 @@ export function CreateWorkspaceDialog({
             type="submit"
             form="ml-create-workspace-form"
             disabled={busy || !name.trim() || !slug.trim()}
-            className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+            className="h-8 px-3.5 rounded-md bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
           >
             {busy && <Loader2 size={13} className="animate-spin" />}
             <span>{busy ? "Creating..." : "Create workspace"}</span>

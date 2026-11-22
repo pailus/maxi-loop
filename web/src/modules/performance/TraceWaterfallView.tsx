@@ -25,8 +25,8 @@ const SERVICE_COLORS = [
   "#0C66E4",
   "#22A06B",
   "#8270DB",
-  "#D97706",
-  "#0E7490",
+  "#D97008",
+  "#206A83",
   "#C9372C",
 ];
 
@@ -109,7 +109,7 @@ export function TraceWaterfallView({
         <button
           type="button"
           onClick={onBack}
-          className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
         >
           <ArrowLeft size={14} />
           <span>Back to Performance</span>
@@ -220,7 +220,7 @@ export function TraceWaterfallView({
 
               {trace.slowest_spans.length > 0 && (
                 <div className="ml-auto flex items-center gap-2 flex-wrap">
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#974f0c]">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#a54800]">
                     <Flame size={12} />
                     <span>Slowest:</span>
                   </span>
@@ -234,7 +234,7 @@ export function TraceWaterfallView({
                         );
                         if (match) setSelectedSpan(match);
                       }}
-                      className="px-2 py-0.5 rounded bg-[#fff7d6] border border-[#f5cd47] text-[11px] text-[#533f04] hover:brightness-95 cursor-pointer truncate max-w-[220px]"
+                      className="px-2 py-0.5 rounded bg-[#fff7d6] border border-[#f5cd47] text-[11px] text-[#7f5f01] hover:brightness-95 cursor-pointer truncate max-w-[220px]"
                       title={`${s.op}: ${s.description} (${formatDuration(s.duration_ms)})`}
                     >
                       <span className="font-semibold">{s.op}</span>{" "}
@@ -275,7 +275,7 @@ export function TraceWaterfallView({
                 const barColor = span.is_error
                   ? "#C9372C"
                   : span.is_slow
-                    ? "#D97706"
+                    ? "#D97008"
                     : (serviceColorMap.get(span.project_slug) ?? "#0C66E4");
 
                 return (
@@ -313,7 +313,7 @@ export function TraceWaterfallView({
                       </span>
                       {span.is_slow && (
                         <span
-                          className="shrink-0 text-[#974f0c]"
+                          className="shrink-0 text-[#a54800]"
                           title="Slowest span bottleneck"
                         >
                           <Flame size={12} />
@@ -374,7 +374,7 @@ export function TraceWaterfallView({
 
           {/* Right Span Inspector Drawer */}
           {selectedSpan && (
-            <aside className="w-[340px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-sidebar)] flex flex-col overflow-hidden">
+            <aside className="w-[340px] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-14 max-lg:z-40 max-lg:w-full shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-sidebar)] flex flex-col overflow-hidden">
               <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-bg)]">
                 <div className="min-w-0">
                   <div className="text-xs font-bold text-[var(--color-text)] truncate">

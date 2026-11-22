@@ -161,7 +161,7 @@ export function CompareReleasesView({
           e.preventDefault();
           void runCompare();
         }}
-        className="px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] flex flex-wrap items-center gap-2 shrink-0"
+        className="px-4 md:px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] flex flex-wrap items-center gap-2 shrink-0"
       >
         <select
           value={effectiveProject}
@@ -172,7 +172,7 @@ export function CompareReleasesView({
             setComparison(null);
           }}
           aria-label="Project for release comparison"
-          className="pm-input h-8 text-xs w-44"
+          className="pm-input h-8 text-sm w-44"
         >
           {projects.length === 0 && <option value="">No projects</option>}
           {projects.map((p) => (
@@ -189,7 +189,7 @@ export function CompareReleasesView({
             value={baseRelease}
             onChange={(e) => setBaseRelease(e.target.value)}
             placeholder="Base release (older)"
-            className="pm-input h-8 text-xs w-44 pm-mono"
+            className="pm-input h-8 text-sm w-44 pm-mono"
           />
           <ArrowRight size={14} className="text-[var(--color-text-dim)]" />
           <input
@@ -198,7 +198,7 @@ export function CompareReleasesView({
             value={targetRelease}
             onChange={(e) => setTargetRelease(e.target.value)}
             placeholder="Target release (newer)"
-            className="pm-input h-8 text-xs w-44 pm-mono"
+            className="pm-input h-8 text-sm w-44 pm-mono"
           />
           <datalist id="compare-release-options">
             {releases.map((r) => (
@@ -211,7 +211,7 @@ export function CompareReleasesView({
           value={hours}
           onChange={(e) => setHours(Number(e.target.value))}
           aria-label="Comparison window"
-          className="pm-input h-8 text-xs w-32"
+          className="pm-input h-8 text-sm w-32"
         >
           <option value={24}>Last 24 hours</option>
           <option value={168}>Last 7 days</option>
@@ -227,7 +227,7 @@ export function CompareReleasesView({
             !baseRelease.trim() ||
             !targetRelease.trim()
           }
-          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-40 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-8 px-3 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-40 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer"
         >
           <GitCompare size={13} />
           <span>{loading ? "Comparing..." : "Compare"}</span>
@@ -440,7 +440,7 @@ export function CompareReleasesView({
                   window.
                 </div>
               ) : (
-                <table className="w-full text-left border-collapse text-xs">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                   <thead className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)]">
                     <tr>
                       <th className="py-2 pl-4 pr-3 font-semibold">

@@ -202,24 +202,24 @@ export function AlertsView({
   }
 
   return (
-    <div className="flex-1 min-w-0 flex overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex-1 min-w-0 flex overflow-hidden max-lg:flex-col max-lg:overflow-y-auto bg-[var(--color-bg)]">
       {/* Main Content Area */}
-      <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="px-6 pt-4 pb-0 border-b border-[var(--color-border)]">
-          <div className="flex items-center justify-between mb-3">
-            <div>
+      <section className="flex-1 min-w-0 flex flex-col overflow-hidden max-lg:flex-none max-lg:overflow-visible">
+        <div className="px-4 md:px-6 pt-4 pb-0 border-b border-[var(--color-border)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="min-w-0">
               <div className="text-[11px] font-medium text-[var(--color-text-dim)]">
                 {workspaceName} / Operations
               </div>
-              <h1 className="text-lg font-bold text-[var(--color-text)] flex items-center gap-2">
-                <Bell size={18} className="text-[var(--color-primary)]" />
+              <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-[var(--color-text)] flex items-center gap-2">
+                <Bell size={18} className="shrink-0 text-[var(--color-primary)]" />
                 <span>Alerts &amp; PII Scrubbing</span>
               </h1>
             </div>
             <button
               type="button"
               onClick={() => void loadAll()}
-              className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-2.5 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
             >
               <RefreshCw size={13} />
               <span>Refresh</span>
@@ -230,7 +230,7 @@ export function AlertsView({
             <button
               type="button"
               onClick={() => setTab("rules")}
-              className={`pm-tab pb-2.5 text-xs font-semibold cursor-pointer ${
+              className={`pm-tab cursor-pointer ${
                 tab === "rules" ? "pm-tab-active" : ""
               }`}
             >
@@ -239,7 +239,7 @@ export function AlertsView({
             <button
               type="button"
               onClick={() => setTab("channels")}
-              className={`pm-tab pb-2.5 text-xs font-semibold cursor-pointer ${
+              className={`pm-tab cursor-pointer ${
                 tab === "channels" ? "pm-tab-active" : ""
               }`}
             >
@@ -248,7 +248,7 @@ export function AlertsView({
             <button
               type="button"
               onClick={() => setTab("pii")}
-              className={`pm-tab pb-2.5 text-xs font-semibold cursor-pointer ${
+              className={`pm-tab cursor-pointer ${
                 tab === "pii" ? "pm-tab-active" : ""
               }`}
             >
@@ -399,8 +399,8 @@ export function AlertsView({
                     No alerts have fired yet.
                   </div>
                 ) : (
-                  <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-                    <table className="w-full text-left border-collapse text-xs">
+                  <div className="border border-[var(--color-border)] rounded-lg overflow-x-auto">
+                    <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                       <thead>
                         <tr className="bg-[var(--color-bg-muted)] border-b border-[var(--color-border)] text-[11px] uppercase text-[var(--color-text-dim)]">
                           <th className="py-2 px-3">Status</th>
@@ -545,7 +545,7 @@ export function AlertsView({
 
       {/* Right Action Panel */}
       {canManage && (
-        <aside className="w-[340px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
+        <aside className="w-full lg:w-[340px] shrink-0 max-lg:border-t lg:border-l border-[var(--color-border)] bg-[var(--color-bg-muted)] p-5 overflow-y-auto">
           {tab === "rules" && (
             <form onSubmit={(e) => void handleCreateRule(e)} className="space-y-3">
               <h2 className="text-sm font-bold text-[var(--color-text)] flex items-center gap-1.5">
@@ -561,7 +561,7 @@ export function AlertsView({
                   onChange={(e) => setRuleName(e.target.value)}
                   placeholder="Production regressions"
                   required
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 />
               </div>
 
@@ -570,7 +570,7 @@ export function AlertsView({
                 <select
                   value={ruleTrigger}
                   onChange={(e) => setRuleTrigger(e.target.value as AlertTriggerType)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="new_issue">New issue</option>
                   <option value="regression">Regression (resolved issue reopened)</option>
@@ -584,7 +584,7 @@ export function AlertsView({
                   value={ruleChannelId}
                   onChange={(e) => setRuleChannelId(e.target.value)}
                   required
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   {channels.length === 0 ? (
                     <option value="">Create a channel first</option>
@@ -603,7 +603,7 @@ export function AlertsView({
                 <select
                   value={ruleProject}
                   onChange={(e) => setRuleProject(e.target.value)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="">All projects (tenant-wide)</option>
                   {projects.map((p) => (
@@ -623,7 +623,7 @@ export function AlertsView({
                   value={ruleEnv}
                   onChange={(e) => setRuleEnv(e.target.value)}
                   placeholder="e.g. production"
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 />
               </div>
 
@@ -637,7 +637,7 @@ export function AlertsView({
                       value={spikeThreshold}
                       onChange={(e) => setSpikeThreshold(e.target.value)}
                       required
-                      className="pm-input h-9 text-xs"
+                      className="pm-input h-9 text-sm"
                     />
                   </div>
                   <div>
@@ -649,7 +649,7 @@ export function AlertsView({
                       value={spikeWindow}
                       onChange={(e) => setSpikeWindow(e.target.value)}
                       required
-                      className="pm-input h-9 text-xs"
+                      className="pm-input h-9 text-sm"
                     />
                   </div>
                 </div>
@@ -663,14 +663,14 @@ export function AlertsView({
                   max={1440}
                   value={cooldownMinutes}
                   onChange={(e) => setCooldownMinutes(e.target.value)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={submitting || channels.length === 0}
-                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
               >
                 {submitting ? "Creating..." : "Create rule"}
               </button>
@@ -692,7 +692,7 @@ export function AlertsView({
                   onChange={(e) => setChanName(e.target.value)}
                   placeholder="Ops Webhook"
                   required
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 />
               </div>
 
@@ -701,7 +701,7 @@ export function AlertsView({
                 <select
                   value={chanType}
                   onChange={(e) => setChanType(e.target.value as AlertChannelType)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="webhook">Webhook (HTTPS JSON + HMAC-SHA256)</option>
                   <option value="telegram">Telegram Bot</option>
@@ -714,7 +714,7 @@ export function AlertsView({
                 <select
                   value={chanProject}
                   onChange={(e) => setChanProject(e.target.value)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="">Tenant-wide</option>
                   {projects.map((p) => (
@@ -735,7 +735,7 @@ export function AlertsView({
                       onChange={(e) => setWebhookUrl(e.target.value)}
                       placeholder="https://hooks.example.com/maxi-loop"
                       required
-                      className="pm-input h-9 text-xs pm-mono"
+                      className="pm-input h-9 text-sm pm-mono"
                     />
                   </div>
                   <div>
@@ -747,7 +747,7 @@ export function AlertsView({
                       value={webhookSecret}
                       onChange={(e) => setWebhookSecret(e.target.value)}
                       placeholder="HMAC-SHA256 secret"
-                      className="pm-input h-9 text-xs"
+                      className="pm-input h-9 text-sm"
                     />
                   </div>
                 </>
@@ -763,7 +763,7 @@ export function AlertsView({
                       onChange={(e) => setTgBotToken(e.target.value)}
                       placeholder="123456:ABC..."
                       required
-                      className="pm-input h-9 text-xs pm-mono"
+                      className="pm-input h-9 text-sm pm-mono"
                     />
                   </div>
                   <div>
@@ -774,7 +774,7 @@ export function AlertsView({
                       onChange={(e) => setTgChatId(e.target.value)}
                       placeholder="-1001234567890"
                       required
-                      className="pm-input h-9 text-xs pm-mono"
+                      className="pm-input h-9 text-sm pm-mono"
                     />
                   </div>
                 </>
@@ -792,7 +792,7 @@ export function AlertsView({
                       onChange={(e) => setEmailTo(e.target.value)}
                       placeholder="oncall@example.com, dev@example.com"
                       required
-                      className="pm-input h-9 text-xs"
+                      className="pm-input h-9 text-sm"
                     />
                   </div>
                   <div>
@@ -801,7 +801,7 @@ export function AlertsView({
                       type="text"
                       value={emailPrefix}
                       onChange={(e) => setEmailPrefix(e.target.value)}
-                      className="pm-input h-9 text-xs"
+                      className="pm-input h-9 text-sm"
                     />
                   </div>
                 </>
@@ -810,7 +810,7 @@ export function AlertsView({
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
               >
                 {submitting ? "Saving..." : "Add channel"}
               </button>
@@ -832,7 +832,7 @@ export function AlertsView({
                   onChange={(e) => setPiiName(e.target.value)}
                   placeholder="Mask National ID"
                   required
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 />
               </div>
 
@@ -841,7 +841,7 @@ export function AlertsView({
                 <select
                   value={piiType}
                   onChange={(e) => setPiiType(e.target.value as PiiScrubRuleType)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="field_name">Field / query param name</option>
                   <option value="header_name">HTTP header name</option>
@@ -857,7 +857,7 @@ export function AlertsView({
                   onChange={(e) => setPiiPattern(e.target.value)}
                   placeholder="e.g. national_id or X-Employee-Id"
                   required
-                  className="pm-input h-9 text-xs pm-mono"
+                  className="pm-input h-9 text-sm pm-mono"
                 />
               </div>
 
@@ -867,7 +867,7 @@ export function AlertsView({
                   type="text"
                   value={piiReplacement}
                   onChange={(e) => setPiiReplacement(e.target.value)}
-                  className="pm-input h-9 text-xs pm-mono"
+                  className="pm-input h-9 text-sm pm-mono"
                 />
               </div>
 
@@ -876,7 +876,7 @@ export function AlertsView({
                 <select
                   value={piiProject}
                   onChange={(e) => setPiiProject(e.target.value)}
-                  className="pm-input h-9 text-xs"
+                  className="pm-input h-9 text-sm"
                 >
                   <option value="">Tenant-wide (inherited by all projects)</option>
                   {projects.map((p) => (
@@ -890,7 +890,7 @@ export function AlertsView({
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold cursor-pointer"
               >
                 {submitting ? "Saving..." : "Add PII rule"}
               </button>

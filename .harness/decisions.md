@@ -8,6 +8,18 @@
 
 ---
 
+### D009 — 2026-11-22 — Colours & fonts identical to MaxiBoard (supersedes parts of D007)
+**Decision:** Use MaxiBoard's exact tokens and type: white sidebar (`--color-bg-sidebar: #ffffff`, was `#F7F8F9`), font stack `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif` (no Noto Sans), mono `ui-monospace, SFMono-Regular, Menlo, monospace`, lozenges 12px / radius 4 / `#E9F2FF` primary, sonner-style light toast bottom-center (was `#172B4D` navy toast), avatar initials+colour from MaxiBoard `initials.js` (`web/src/lib/avatar.ts`), touch-device 16px input guard. Off-palette hex values mapped to the MaxiBoard/Atlassian set.
+**Why:** User asked for one design pattern across MaxiBoard and MaxiLoop — same colours and same font.
+**Rejected:** Keeping MaxiLoop-specific sunken sidebar and navy toast from D007.
+**Decided by:** user
+
+### D008 — 2026-11-22 — Mobile shell follows MaxiBoard: drawer + bottom tab bar, 14px nav
+**Decision:** Below `md` the sidebar is an off-canvas drawer (hamburger) and a 5-slot bottom tab bar (Issues / Performance / Releases / Alerts / More) is shown; sidebar nav uses MaxiBoard NavLink sizing (14px text, 18px icons). Below `lg`, item inspectors (issue, transaction, span) open as full-screen overlays and form panels stack under content. Text inputs are 16px on phones.
+**Why:** Matches MaxiBoard (`maxi-code` BoardShell/TabBar) so the suite feels consistent; previous shell had no mobile layout and 12px menus.
+**Rejected:** Hiding the sidebar without replacement; shrinking the desktop layout to fit phones.
+**Decided by:** assistant (user asked to align UI with MaxiBoard menu fonts + responsiveness)
+
 ### D007 — 2026-11-21 — MaxiBoard design system, Lucide icons, and Maxiflow Doodle SVG project icons
 **Decision:** Style the embedded React UI (`web/`) after the **MaxiBoard** light, Jira-inspired design system (`#FFFFFF` surfaces, `#F7F8F9` sunken sidebar/panels, `#172B4D` primary navy text, `#0C66E4` primary blue accent, semantic lozenges, 56px topbar + 240px sidebar + master-detail right inspector drawer + `#172B4D` bottom undo toast), using `lucide-react` for UI icons and the 12 Maxiflow Doodle SVG icons (`ProjectIcon.tsx`) for projects.
 **Why:** Avoids generic dark-neon AI slop, keeps visual consistency across the user's `maxi-*` product suite (`MaxiBoard` in `maxi-code`), and prioritizes high-density glanceability for issue triage.

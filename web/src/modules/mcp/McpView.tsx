@@ -175,13 +175,13 @@ export function McpView({
   return (
     <div className="flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="px-6 pt-5 pb-3 border-b border-[var(--color-border)] flex items-center justify-between gap-4 shrink-0">
-        <div>
+      <div className="px-4 md:px-6 pt-5 pb-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-4 shrink-0">
+        <div className="min-w-0">
           <div className="text-xs text-[var(--color-text-dim)]">
             {workspaceName} › AI &amp; Automation
           </div>
-          <h1 className="mt-0.5 text-xl font-semibold text-[var(--color-text)] flex items-center gap-2">
-            <Bot size={20} className="text-[var(--color-primary)]" />
+          <h1 className="mt-0.5 text-xl md:text-2xl font-semibold tracking-tight text-[var(--color-text)] flex flex-wrap items-center gap-2">
+            <Bot size={20} className="shrink-0 text-[var(--color-primary)]" />
             <span>Embedded MCP Server</span>
             <span className="pm-lozenge pm-lozenge-primary pm-mono">
               POST /mcp
@@ -197,7 +197,7 @@ export function McpView({
         <button
           type="button"
           onClick={() => void loadData()}
-          className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-8 px-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text-muted)] inline-flex items-center gap-1.5 cursor-pointer"
         >
           <RefreshCw size={13} />
           <span>Refresh</span>
@@ -205,7 +205,7 @@ export function McpView({
       </div>
 
       {/* Tabs */}
-      <div className="px-6 flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] shrink-0">
+      <div className="px-4 md:px-6 flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] shrink-0">
         <button
           type="button"
           role="tab"
@@ -228,7 +228,7 @@ export function McpView({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-5">
         {error && (
           <div className="rounded-md border border-[#f87168] bg-[#ffeceb] px-3.5 py-2.5 text-xs text-[#ae2e24]">
             {error}
@@ -263,7 +263,7 @@ export function McpView({
               <button
                 type="button"
                 onClick={() => void copyText(createdToken.raw_token, "token")}
-                className="h-9 px-3 rounded bg-[var(--color-primary)] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                className="h-9 px-3 rounded bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
               >
                 {copiedKey === "token" ? <Check size={14} /> : <Copy size={14} />}
                 <span>{copiedKey === "token" ? "Copied" : "Copy token"}</span>
@@ -542,7 +542,7 @@ export function McpView({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full h-9 rounded bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Plus size={14} />
                   <span>{submitting ? "Creating..." : "Create MCP Token"}</span>
@@ -569,7 +569,7 @@ export function McpView({
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                   <thead>
                     <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[11px] text-[var(--color-text-dim)] uppercase">
                       <th className="py-2 px-3">Time</th>

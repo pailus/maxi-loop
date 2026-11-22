@@ -206,7 +206,7 @@ export function LoginView({ health, onAuthenticated }: LoginViewProps) {
                     value={tenantSlug}
                     onChange={(e) => setTenantSlug(e.target.value)}
                     placeholder="default"
-                    className="pm-input pm-mono pl-10 h-9 text-xs"
+                    className="pm-input pm-mono pl-10 h-9 text-sm"
                   />
                 </div>
               )}

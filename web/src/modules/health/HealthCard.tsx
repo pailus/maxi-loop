@@ -27,11 +27,11 @@ export function HealthCard() {
   const isHealthy = health?.status === "ok" && health?.database === "ok";
 
   return (
-    <div className="flex-1 min-w-0 bg-[var(--color-bg)] px-6 py-4 overflow-y-auto">
+    <div className="flex-1 min-w-0 bg-[var(--color-bg)] px-4 md:px-6 py-4 overflow-y-auto">
       <div className="text-xs text-[var(--color-text-dim)]">
         Default Workspace › System &amp; retention
       </div>
-      <h1 className="mt-1.5 text-2xl font-semibold text-[var(--color-text)] tracking-tight">
+      <h1 className="mt-1.5 text-xl md:text-2xl font-semibold text-[var(--color-text)] tracking-tight">
         System &amp; Retention Health
       </h1>
       <p className="mt-1 text-xs text-[var(--color-text-muted)]">

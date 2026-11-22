@@ -201,16 +201,16 @@ export function PerformanceView({
   const maxP95 = items.reduce((acc, it) => Math.max(acc, it.p95_ms), 0);
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex-1 min-w-0 flex flex-col overflow-hidden max-lg:overflow-y-auto bg-[var(--color-bg)]">
       {/* Page Header */}
-      <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div>
+      <div className="px-4 md:px-6 pt-4 pb-3 border-b border-[var(--color-border)] bg-[var(--color-bg)] shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
             <div className="text-[11px] font-medium text-[var(--color-text-dim)]">
               {workspaceName} / Performance Monitoring
             </div>
-            <h1 className="text-lg font-bold text-[var(--color-text)] flex items-center gap-2 mt-0.5">
-              <Gauge size={18} className="text-[var(--color-primary)]" />
+            <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-[var(--color-text)] flex items-center gap-2 mt-0.5">
+              <Gauge size={18} className="shrink-0 text-[var(--color-primary)]" />
               <span>Transactions &amp; Distributed Traces</span>
             </h1>
           </div>
@@ -221,7 +221,7 @@ export function PerformanceView({
               void loadData();
               setRefreshSignal((s) => s + 1);
             }}
-            className="h-8 px-3 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-xs font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
+            className="h-8 px-3 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] text-sm font-medium text-[var(--color-text)] inline-flex items-center gap-1.5 cursor-pointer"
           >
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             <span>Refresh</span>
@@ -233,7 +233,7 @@ export function PerformanceView({
           <button
             type="button"
             onClick={() => setActiveTab("transactions")}
-            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+            className={`pm-tab cursor-pointer ${
               activeTab === "transactions"
                 ? "pm-tab-active text-[var(--color-primary)]"
                 : "text-[var(--color-text-muted)]"
@@ -244,7 +244,7 @@ export function PerformanceView({
           <button
             type="button"
             onClick={() => setActiveTab("traces")}
-            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+            className={`pm-tab cursor-pointer ${
               activeTab === "traces"
                 ? "pm-tab-active text-[var(--color-primary)]"
                 : "text-[var(--color-text-muted)]"
@@ -255,7 +255,7 @@ export function PerformanceView({
           <button
             type="button"
             onClick={() => setActiveTab("slow-queries")}
-            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+            className={`pm-tab cursor-pointer ${
               activeTab === "slow-queries"
                 ? "pm-tab-active text-[var(--color-primary)]"
                 : "text-[var(--color-text-muted)]"
@@ -266,7 +266,7 @@ export function PerformanceView({
           <button
             type="button"
             onClick={() => setActiveTab("compare")}
-            className={`pm-tab pb-2 text-xs font-semibold cursor-pointer ${
+            className={`pm-tab cursor-pointer ${
               activeTab === "compare"
                 ? "pm-tab-active text-[var(--color-primary)]"
                 : "text-[var(--color-text-muted)]"
@@ -287,7 +287,7 @@ export function PerformanceView({
       ) : (
         <>
       {/* Filter Toolbar */}
-      <div className="px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] flex flex-wrap items-center gap-2 shrink-0">
+      <div className="px-4 md:px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)] flex flex-wrap items-center gap-2 shrink-0">
         <select
           value={selectedProjectSlug}
           onChange={(e) => {
@@ -295,7 +295,7 @@ export function PerformanceView({
             setPage(1);
           }}
           aria-label="Filter by project"
-          className="pm-input h-8 text-xs w-44"
+          className="pm-input h-8 text-sm w-44"
         >
           <option value="">All projects</option>
           {projects.map((p) => (
@@ -312,7 +312,7 @@ export function PerformanceView({
             setPage(1);
           }}
           aria-label="Time window"
-          className="pm-input h-8 text-xs w-32"
+          className="pm-input h-8 text-sm w-32"
         >
           <option value={1}>Last 1 hour</option>
           <option value={6}>Last 6 hours</option>
@@ -329,7 +329,7 @@ export function PerformanceView({
             setPage(1);
           }}
           placeholder="Environment (e.g. production)"
-          className="pm-input h-8 text-xs w-44"
+          className="pm-input h-8 text-sm w-44"
         />
 
         <input
@@ -340,7 +340,7 @@ export function PerformanceView({
             setPage(1);
           }}
           placeholder="Release version"
-          className="pm-input h-8 text-xs w-36"
+          className="pm-input h-8 text-sm w-36"
         />
 
         {activeTab === "transactions" ? (
@@ -358,7 +358,7 @@ export function PerformanceView({
                   setPage(1);
                 }}
                 placeholder="Filter transaction name..."
-                className="pm-input h-8 text-xs pl-8 w-full"
+                className="pm-input h-8 text-sm pl-8 w-full"
               />
             </div>
 
@@ -366,7 +366,7 @@ export function PerformanceView({
               value={sort}
               onChange={(e) => setSort(e.target.value as TransactionSort)}
               aria-label="Sort transactions"
-              className="pm-input h-8 text-xs w-36 ml-auto"
+              className="pm-input h-8 text-sm w-36 ml-auto"
             >
               <option value="p95">Sort: p95 latency</option>
               <option value="p99">Sort: p99 latency</option>
@@ -382,7 +382,7 @@ export function PerformanceView({
             value={sampleReasonFilter}
             onChange={(e) => setSampleReasonFilter(e.target.value)}
             aria-label="Filter by sample reason"
-            className="pm-input h-8 text-xs w-40 ml-auto"
+            className="pm-input h-8 text-sm w-40 ml-auto"
           >
             <option value="">All sample reasons</option>
             <option value="slow">Slow traces</option>
@@ -405,7 +405,7 @@ export function PerformanceView({
       ) : (
         <>
       {/* Compact Metrics Strip */}
-      <div className="px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] grid grid-cols-2 md:grid-cols-4 gap-3 text-xs shrink-0">
+      <div className="px-4 md:px-6 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] grid grid-cols-2 md:grid-cols-4 gap-3 text-xs shrink-0">
         <div className="px-3 py-2 rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)]">
           <div className="text-[11px] text-[var(--color-text-dim)]">
             Observed Transactions
@@ -453,8 +453,8 @@ export function PerformanceView({
       )}
 
       {/* Main Master-Detail Split */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        <div className="flex-1 min-w-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 flex overflow-hidden max-lg:flex-none max-lg:overflow-visible">
+        <div className="flex-1 min-w-0 overflow-y-auto max-lg:overflow-visible max-lg:overflow-x-auto">
           {loading && items.length === 0 && traces.length === 0 ? (
             <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">
               Loading performance metrics...
@@ -480,11 +480,11 @@ export function PerformanceView({
                 </p>
               </div>
             ) : (
-              <div>
-                <table className="w-full text-left border-collapse text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
                   <thead className="sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)]">
                     <tr>
-                      <th className="py-2.5 pl-6 pr-3 font-semibold">
+                      <th className="py-2.5 pl-4 md:pl-6 pr-3 font-semibold">
                         Transaction
                       </th>
                       <th className="py-2.5 px-3 font-semibold">Project</th>
@@ -521,7 +521,7 @@ export function PerformanceView({
                               : "hover:bg-[var(--color-bg-hover)]"
                           }`}
                         >
-                          <td className="py-2.5 pl-6 pr-3 max-w-[340px]">
+                          <td className="py-2.5 pl-4 md:pl-6 pr-3 max-w-[340px]">
                             <div className="font-semibold text-[var(--color-text)] truncate">
                               {tx.transaction_name}
                             </div>
@@ -546,7 +546,7 @@ export function PerformanceView({
                             <span
                               className={
                                 tx.p95_ms >= 500
-                                  ? "text-[#974f0c]"
+                                  ? "text-[#a54800]"
                                   : "text-[var(--color-text)]"
                               }
                             >
@@ -576,7 +576,7 @@ export function PerformanceView({
                 </table>
 
                 {txPage && txPage.total_pages > 1 && (
-                  <div className="px-6 py-3 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-dim)]">
+                  <div className="px-4 md:px-6 py-3 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-dim)]">
                     <span>
                       Page {txPage.page} of {txPage.total_pages} ({txPage.total}{" "}
                       transactions)
@@ -608,10 +608,10 @@ export function PerformanceView({
               No sampled traces found for this filter.
             </div>
           ) : (
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
               <thead className="sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)]">
                 <tr>
-                  <th className="py-2.5 pl-6 pr-3 font-semibold">
+                  <th className="py-2.5 pl-4 md:pl-6 pr-3 font-semibold">
                     Transaction / Trace ID
                   </th>
                   <th className="py-2.5 px-3 font-semibold">Project</th>
@@ -634,7 +634,7 @@ export function PerformanceView({
                     onClick={() => setActiveTraceId(tr.trace_id)}
                     className="hover:bg-[var(--color-bg-hover)] cursor-pointer"
                   >
-                    <td className="py-2.5 pl-6 pr-3 max-w-[340px]">
+                    <td className="py-2.5 pl-4 md:pl-6 pr-3 max-w-[340px]">
                       <div className="font-semibold text-[var(--color-text)] truncate">
                         {tr.transaction_name}
                       </div>
@@ -676,7 +676,7 @@ export function PerformanceView({
 
         {/* Right Transaction Detail & Recent Sampled Traces Inspector */}
         {activeTab === "transactions" && selectedTx && (
-          <aside className="w-[400px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-sidebar)] flex flex-col overflow-hidden">
+          <aside className="w-[400px] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-14 max-lg:z-40 max-lg:w-full shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-sidebar)] flex flex-col overflow-hidden">
             <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg)] flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[11px] pm-mono text-[var(--color-text-dim)]">
@@ -710,7 +710,7 @@ export function PerformanceView({
                   <div className="text-[10px] uppercase text-[var(--color-text-dim)]">
                     p95
                   </div>
-                  <div className="text-sm font-bold pm-mono text-[#974f0c]">
+                  <div className="text-sm font-bold pm-mono text-[#a54800]">
                     {formatMs(selectedTx.p95_ms)}
                   </div>
                 </div>

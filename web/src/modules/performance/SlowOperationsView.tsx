@@ -92,7 +92,7 @@ export function SlowOperationsView({
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       {/* Sub-toolbar specific to Slow Queries & Operations */}
-      <div className="px-6 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] flex flex-wrap items-center gap-2 shrink-0">
+      <div className="px-4 md:px-6 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] flex flex-wrap items-center gap-2 shrink-0">
         <label className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--color-text)] cursor-pointer select-none px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-muted)]">
           <input
             type="checkbox"
@@ -115,7 +115,7 @@ export function SlowOperationsView({
             setPage(1);
           }}
           placeholder="Op filter (e.g. db.sql.query, http.client)"
-          className="pm-input h-8 text-xs w-56"
+          className="pm-input h-8 text-sm w-56"
         />
 
         <div className="relative flex-1 min-w-[200px] max-w-[320px]">
@@ -131,7 +131,7 @@ export function SlowOperationsView({
               setPage(1);
             }}
             placeholder="Search normalized SQL / operation..."
-            className="pm-input h-8 text-xs pl-8 w-full"
+            className="pm-input h-8 text-sm pl-8 w-full"
           />
         </div>
 
@@ -142,7 +142,7 @@ export function SlowOperationsView({
             setPage(1);
           }}
           aria-label="Sort slow operations"
-          className="pm-input h-8 text-xs w-40 ml-auto"
+          className="pm-input h-8 text-sm w-40 ml-auto"
         >
           <option value="p95">Sort: p95 latency</option>
           <option value="total_ms">Sort: Total time spent</option>
@@ -183,11 +183,11 @@ export function SlowOperationsView({
             </p>
           </div>
         ) : (
-          <div>
-            <table className="w-full text-left border-collapse text-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full max-md:min-w-[640px] text-left border-collapse text-[13px]">
               <thead className="sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)]">
                 <tr>
-                  <th className="py-2.5 pl-6 pr-3 font-semibold">
+                  <th className="py-2.5 pl-4 md:pl-6 pr-3 font-semibold">
                     Normalized Query / Operation
                   </th>
                   <th className="py-2.5 px-3 font-semibold">Op</th>
@@ -215,7 +215,7 @@ export function SlowOperationsView({
                     key={`${row.project_id}:${row.op}:${row.description_hash}`}
                     className="hover:bg-[var(--color-bg-hover)] transition"
                   >
-                    <td className="py-2.5 pl-6 pr-3 max-w-[440px]">
+                    <td className="py-2.5 pl-4 md:pl-6 pr-3 max-w-[440px]">
                       <div
                         className="pm-mono text-[11px] text-[var(--color-text)] break-words line-clamp-2"
                         title={row.normalized_description}
@@ -239,7 +239,7 @@ export function SlowOperationsView({
                       <span
                         className={
                           row.p95_ms >= 200
-                            ? "text-[#974f0c]"
+                            ? "text-[#a54800]"
                             : "text-[var(--color-text)]"
                         }
                       >
@@ -289,7 +289,7 @@ export function SlowOperationsView({
             </table>
 
             {data && data.total_pages > 1 && (
-              <div className="px-6 py-3 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-dim)]">
+              <div className="px-4 md:px-6 py-3 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-dim)]">
                 <span>
                   Page {data.page} of {data.total_pages} ({data.total}{" "}
                   operations)
