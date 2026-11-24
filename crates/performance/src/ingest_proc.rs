@@ -17,9 +17,14 @@ use crate::model::{
 };
 use crate::normalize::normalize_span_operation;
 
-const MAX_SPANS_PER_TRANSACTION: usize = 500;
+/// Matches the Sentry SDK default `max_spans` (1000), so every span an SDK sends is analyzed.
+const MAX_SPANS_PER_TRANSACTION: usize = 1000;
 const MAX_TRANSACTION_NAME_LEN: usize = 512;
+/// Stored (displayed) span description length.
 const MAX_SPAN_DESC_LEN: usize = 512;
+/// Input bound for grouping. Larger than the stored length because ORM queries list every
+/// column first and only differ in the `WHERE` clause far past 512 characters.
+const MAX_SPAN_DESC_GROUPING_LEN: usize = 8192;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TraceSamplingPolicy {
@@ -198,12 +203,12 @@ pub fn process_queued_transaction_with_rules(
             .map(|s| truncate_chars(s, 128))
             .unwrap_or_else(|| "span".to_owned());
 
-        let span_desc = obj
+        let raw_desc = obj
             .get("description")
             .and_then(Value::as_str)
             .map(str::trim)
-            .map(|s| truncate_chars(s, MAX_SPAN_DESC_LEN))
             .unwrap_or_default();
+        let span_desc = truncate_chars(raw_desc, MAX_SPAN_DESC_LEN);
 
         let span_status = obj
             .get("status")
@@ -235,7 +240,10 @@ pub fn process_queued_transaction_with_rules(
         let span_http_code = extract_http_status_code(&span_tags, span_data.as_object());
         let span_is_err = is_error_status(&span_status, span_http_code);
 
-        let normalized = normalize_span_operation(&span_op, &span_desc);
+        let normalized = normalize_span_operation(
+            &span_op,
+            &truncate_chars(raw_desc, MAX_SPAN_DESC_GROUPING_LEN),
+        );
         if let Some((normalized_description, description_hash)) = &normalized {
             span_ops.push(ProcessedSpanOp {
                 op: span_op.clone(),
@@ -1055,6 +1063,72 @@ mod tests {
         assert!(!serialized.contains("secret_query_val"));
         assert!(!serialized.contains("db_password_raw"));
         assert!(serialized.contains("[Filtered]"));
+    }
+
+    #[test]
+    fn detects_n_plus_one_in_spans_beyond_the_first_five_hundred() {
+        // Sentry SDKs send up to 1000 spans per transaction; an N+1 at the end of a large
+        // request (e.g. serializing a long list) must still be detected.
+        let base = 1_760_000_000.0_f64;
+        let mut spans: Vec<Value> = (0..600)
+            .map(|i| {
+                json!({
+                    "span_id": format!("{:016x}", i + 1),
+                    "op": "template.render",
+                    "description": "render row",
+                    "start_timestamp": base + 0.0001 * f64::from(i),
+                    "timestamp": base + 0.0001 * f64::from(i) + 0.00005,
+                })
+            })
+            .collect();
+        for i in 0..6 {
+            let start = base + 0.1 + 0.02 * f64::from(i);
+            spans.push(json!({
+                "span_id": format!("{:016x}", 1000 + i),
+                "op": "db",
+                "description": format!("SELECT * FROM master_jabatan WHERE id = {}", i + 1),
+                "start_timestamp": start,
+                "timestamp": start + 0.015,
+            }));
+        }
+        let payload = json!({
+            "event_id": "tx333333333333333333333333333333",
+            "type": "transaction",
+            "transaction": "/karir/api/pegawai_mutasi/",
+            "start_timestamp": base,
+            "timestamp": base + 0.3,
+            "contexts": {"trace": {
+                "trace_id": "0123456789abcdef0123456789abcdee",
+                "span_id": "aaaaaaaaaaaaaaaa",
+                "op": "http.server"
+            }},
+            "spans": spans
+        });
+        let raw = QueuedTransaction {
+            tenant_id: 1,
+            workspace_id: 1,
+            project_id: 1,
+            event_id: "tx333333333333333333333333333333".to_owned(),
+            received_at: Utc::now(),
+            environment: "production".to_owned(),
+            release: None,
+            platform: "python".to_owned(),
+            raw_payload: serde_json::to_vec(&payload).unwrap(),
+        };
+
+        let processed =
+            process_queued_transaction_with_rules(raw, &[], TraceSamplingPolicy::default())
+                .expect("process ok");
+
+        assert_eq!(processed.span_count, 606);
+        assert!(
+            processed
+                .performance_problems
+                .iter()
+                .any(|p| p.problem_type == crate::model::PerformanceProblemType::NPlusOneDb),
+            "expected an N+1 DB problem, got {:?}",
+            processed.performance_problems
+        );
     }
 
     #[test]

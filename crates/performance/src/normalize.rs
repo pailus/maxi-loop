@@ -28,9 +28,27 @@ pub fn normalize_span_operation(op: &str, raw_description: &str) -> Option<(Stri
         return None;
     }
 
-    let bounded = truncate_chars(&cleaned, MAX_NORMALIZED_DESC_CHARS);
-    let digest = hex::encode(Sha256::digest(bounded.as_bytes()));
-    Some((bounded, digest))
+    // Hash the full normalized text: two long queries that share a column list but differ
+    // in their `WHERE` clause must not be grouped together.
+    let digest = hex::encode(Sha256::digest(cleaned.as_bytes()));
+    Some((elide_middle(&cleaned, MAX_NORMALIZED_DESC_CHARS), digest))
+}
+
+/// Bound a description for display while keeping both ends: SQL puts the distinguishing
+/// `FROM` / `WHERE` clause at the end, after the (often very long) column list.
+fn elide_middle(raw: &str, max_chars: usize) -> String {
+    const SEPARATOR: &str = " … ";
+    let total = raw.chars().count();
+    if total <= max_chars {
+        return raw.to_owned();
+    }
+    let keep = max_chars.saturating_sub(SEPARATOR.chars().count());
+    let head = keep / 2;
+    let tail = keep - head;
+    let mut out: String = raw.chars().take(head).collect();
+    out.push_str(SEPARATOR);
+    out.extend(raw.chars().skip(total - tail));
+    out
 }
 
 /// Returns true when a span `op` represents a database query or database operation.
@@ -377,14 +395,6 @@ fn collapse_whitespace(raw: &str) -> String {
     out
 }
 
-fn truncate_chars(raw: &str, max_chars: usize) -> String {
-    if raw.chars().count() <= max_chars {
-        raw.to_owned()
-    } else {
-        raw.chars().take(max_chars).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +413,34 @@ mod tests {
         assert_eq!(n1, n2);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64);
+    }
+
+    #[test]
+    fn long_sql_with_same_column_list_but_different_where_gets_distinct_groups() {
+        // Django selects every column, so the WHERE clause of a wide table starts far past
+        // 512 characters; grouping must still tell `WHERE id = ?` from `WHERE nip = ?`.
+        let columns: Vec<String> = (0..60)
+            .map(|i| format!("\"pegawai_pegawai\".\"column_{i:02}\""))
+            .collect();
+        let select = format!("SELECT {} FROM \"pegawai_pegawai\"", columns.join(", "));
+        assert!(select.len() > 1_000);
+        let by_id = format!("{select} WHERE \"pegawai_pegawai\".\"id\" = 42 LIMIT 21");
+        let by_nip = format!("{select} WHERE \"pegawai_pegawai\".\"nip\" = '123' LIMIT 21");
+
+        let (desc_id, hash_id) = normalize_span_operation("db", &by_id).unwrap();
+        let (_, hash_id_again) =
+            normalize_span_operation("db", &by_id.replace("= 42", "= 7")).unwrap();
+        let (desc_nip, hash_nip) = normalize_span_operation("db", &by_nip).unwrap();
+
+        assert_eq!(
+            hash_id, hash_id_again,
+            "same query shape must group together"
+        );
+        assert_ne!(hash_id, hash_nip, "different WHERE clauses must not merge");
+        assert!(desc_id.chars().count() <= MAX_NORMALIZED_DESC_CHARS);
+        assert!(desc_id.starts_with("SELECT \"pegawai_pegawai\".\"column_00\""));
+        assert!(desc_id.ends_with("WHERE \"pegawai_pegawai\".\"id\" = ? LIMIT ?"));
+        assert!(desc_nip.ends_with("WHERE \"pegawai_pegawai\".\"nip\" = ? LIMIT ?"));
     }
 
     #[test]

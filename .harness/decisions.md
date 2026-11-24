@@ -8,6 +8,12 @@
 
 ---
 
+### D020 — 2026-11-24 — Separate size cap for transaction items; analyze 1000 spans (F028)
+**Decision:** `MAX_TRANSACTION_PAYLOAD_BYTES` (default 2 MiB) caps `transaction` items separately from error events (`MAX_EVENT_PAYLOAD_BYTES` stays 512 KiB); `MAX_ENVELOPE_DECOMPRESSED_BYTES` default rises to 3 MiB and must be >= both item caps (checked at startup). 413s from authenticated DSNs are logged as WARN. `MAX_SPANS_PER_TRANSACTION` = 1000. Span grouping hashes the full normalized SQL (bounded 8192 chars input); display text elides the middle.
+**Why:** A real Django app showed N+1 requests produce 0.6–1.4 MB transactions (500–1000 SQL spans); they were rejected with a silent 413 (SDKs drop 413 without retrying), so the worst N+1 endpoints never appeared, while Sentry shows them. Truncating SQL to 512 chars before hashing merged queries that only differ in their WHERE clause.
+**Rejected:** Raising the error-event cap too (no need); accepting the envelope but dropping only the oversized item (keeps 413 semantics SDKs already handle); lower N+1 thresholds (kept Sentry defaults). Worst-case queue memory grows from capacity × 2 MiB to capacity × 3 MiB.
+**Decided by:** assistant (user asked to fix after the personalia test)
+
 ### D019 — 2026-11-23 — Production: Docker Compose behind host nginx, image built locally and shipped over SSH (F027)
 **Decision:** Run production as `docker-compose.prod.yml` (PostgreSQL 16 unpublished + app on `127.0.0.1:8110`) behind the host's nginx (certbot TLS, Cloudflare Full). The image is built on the dev machine and transferred with `docker save | ssh docker load` (`deploy/deploy.sh`); the server never builds Rust. The first admin is created once with `maxi-loop bootstrap`; `BOOTSTRAP_ADMIN_*` is never put in the production `.env`.
 **Why:** The VPS is shared with other services (4 vCPU / 8 GB) and already uses the nginx + loopback-container pattern; building there would compete for CPU/RAM. Startup bootstrap upserts the admin and would reset a changed password on every restart.

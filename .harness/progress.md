@@ -33,6 +33,28 @@
 
 ---
 
+### 2026-11-24 — Claude Code — F028: large span-heavy transactions + N+1 parity with Sentry
+
+**Status at end of session:** done
+
+**Done:**
+- Real-app test: personalia (Django) wired to local MaxiLoop (`personalia-maxiloop` :8011, untracked `tirta/settings_maxiloop.py`). Found: transactions > 512 KB got a silent 413 (5 of 6 N+1 endpoints lost), only the first 500 spans were analyzed, SQL was truncated to 512 chars before hashing.
+- `ItemSizeLimits` in `crates/ingest/src/envelope.rs`; `MAX_TRANSACTION_PAYLOAD_BYTES` (2 MiB) + startup cross-check in `config.rs`; WARN log for 413 in `ingest/src/http.rs`; `MAX_SPANS_PER_TRANSACTION` 1000 and grouping on full SQL (`ingest_proc.rs`, `normalize.rs`); `SELECT .. FROM` titles (`perf_issue.rs`).
+- `maxi-loop-dev` now runs on :8130 (8080 taken by jagaweb).
+
+**Verification run:**
+- New tests failed before the fix, pass after: `transaction_items_use_their_own_larger_cap`, `item_caps_must_fit_in_decompressed_envelope_cap`, `detects_n_plus_one_in_spans_beyond_the_first_five_hundred`, `long_sql_with_same_column_list_but_different_where_gets_distinct_groups`, `title_collapses_orm_column_list_so_table_and_where_stay_visible`
+- `cargo test --workspace --no-fail-fast` → 150 passed, 0 failed; fmt/clippy PASS; `npm --prefix web run build` PASS
+- Smoke (default config, project 1506): all 22 personalia requests ingested, 14 N+1 issues on 6 endpoints with readable titles; a 2.6 MB probe → 413 + WARN log line
+
+**Security notes:**
+- Limits still bounded and validated at startup; 413 log only after DSN auth, logs ids/sizes only (no payload). Queue worst case grows to capacity × 3 MiB.
+
+**Not finished / blockers:**
+- Production `.env` not checked (SSH denied): if it sets `MAX_ENVELOPE_DECOMPRESSED_BYTES` below 2 MiB, the new startup check refuses to boot — check before redeploy.
+
+---
+
 ### 2026-11-23 — Claude Code — F027 follow-up: production-clean login page
 
 **Status at end of session:** done

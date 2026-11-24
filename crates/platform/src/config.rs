@@ -51,6 +51,9 @@ pub struct Config {
     pub max_envelope_compressed_bytes: usize,
     pub max_envelope_decompressed_bytes: usize,
     pub max_event_payload_bytes: usize,
+    /// Cap for one `transaction` item. Larger than the event cap because N+1 requests carry
+    /// hundreds of SQL spans (Sentry SDKs send up to 1000 spans per transaction).
+    pub max_transaction_payload_bytes: usize,
     pub ingest_channel_capacity: usize,
     /// Optional on-disk write-ahead spool for accepted envelopes (`F020`); `None` = disabled.
     pub ingest_spool_dir: Option<PathBuf>,
@@ -100,6 +103,10 @@ impl fmt::Debug for Config {
                 &self.max_envelope_decompressed_bytes,
             )
             .field("max_event_payload_bytes", &self.max_event_payload_bytes)
+            .field(
+                "max_transaction_payload_bytes",
+                &self.max_transaction_payload_bytes,
+            )
             .field("ingest_channel_capacity", &self.ingest_channel_capacity)
             .field("ingest_spool_dir", &self.ingest_spool_dir)
             .field("log_format", &self.log_format)
@@ -226,7 +233,7 @@ impl Config {
 
         let max_envelope_decompressed_bytes = parse_u32_range(
             lookup("MAX_ENVELOPE_DECOMPRESSED_BYTES").as_deref(),
-            2_097_152,
+            3_145_728,
             1_024,
             67_108_864,
             "MAX_ENVELOPE_DECOMPRESSED_BYTES",
@@ -239,6 +246,26 @@ impl Config {
             16_777_216,
             "MAX_EVENT_PAYLOAD_BYTES",
         )? as usize;
+
+        let max_transaction_payload_bytes = parse_u32_range(
+            lookup("MAX_TRANSACTION_PAYLOAD_BYTES").as_deref(),
+            2_097_152,
+            1_024,
+            16_777_216,
+            "MAX_TRANSACTION_PAYLOAD_BYTES",
+        )? as usize;
+
+        // An item cap above the whole-envelope cap would never be reachable: every such item
+        // would be rejected by the envelope cap instead, which is exactly the silent-drop trap
+        // these limits exist to avoid.
+        if max_event_payload_bytes.max(max_transaction_payload_bytes)
+            > max_envelope_decompressed_bytes
+        {
+            return Err(ConfigError::InvalidValue(
+                "MAX_ENVELOPE_DECOMPRESSED_BYTES",
+                "must be at least MAX_EVENT_PAYLOAD_BYTES and MAX_TRANSACTION_PAYLOAD_BYTES",
+            ));
+        }
 
         let ingest_channel_capacity = parse_u32_range(
             lookup("INGEST_CHANNEL_CAPACITY").as_deref(),
@@ -367,6 +394,7 @@ impl Config {
             max_envelope_compressed_bytes,
             max_envelope_decompressed_bytes,
             max_event_payload_bytes,
+            max_transaction_payload_bytes,
             ingest_channel_capacity,
             ingest_spool_dir,
             log_format,
@@ -656,6 +684,31 @@ mod tests {
         assert_eq!(cfg.default_workspace_slug, "default");
         assert_eq!(cfg.bootstrap_admin_email, None);
         assert_eq!(cfg.bootstrap_admin_password, None);
+        assert_eq!(cfg.max_event_payload_bytes, 524_288);
+        assert_eq!(cfg.max_transaction_payload_bytes, 2_097_152);
+        assert_eq!(cfg.max_envelope_decompressed_bytes, 3_145_728);
+    }
+
+    #[test]
+    fn item_caps_must_fit_in_decompressed_envelope_cap() {
+        let db = ("DATABASE_URL", "postgres://user:pass@127.0.0.1/db");
+        let err = Config::from_lookup(map_lookup(&[
+            db,
+            ("MAX_TRANSACTION_PAYLOAD_BYTES", "4194304"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue("MAX_ENVELOPE_DECOMPRESSED_BYTES", _)
+        ));
+
+        let cfg = Config::from_lookup(map_lookup(&[
+            db,
+            ("MAX_TRANSACTION_PAYLOAD_BYTES", "4194304"),
+            ("MAX_ENVELOPE_DECOMPRESSED_BYTES", "5242880"),
+        ]))
+        .expect("raised envelope cap accepted");
+        assert_eq!(cfg.max_transaction_payload_bytes, 4_194_304);
     }
 
     #[test]

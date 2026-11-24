@@ -126,14 +126,39 @@ pub struct EnvelopeTarget {
     pub received_at: DateTime<Utc>,
 }
 
+/// Per-item payload size caps. Transactions get their own (larger) cap because a request with
+/// an N+1 pattern carries hundreds of SQL spans; Sentry SDKs send up to 1000 spans per
+/// transaction, which a single error-event cap would silently reject.
+#[derive(Clone, Copy, Debug)]
+pub struct ItemSizeLimits {
+    pub event_bytes: usize,
+    pub transaction_bytes: usize,
+}
+
+impl ItemSizeLimits {
+    fn check(self, is_transaction: bool, len: usize) -> Result<(), AppError> {
+        if is_transaction && len > self.transaction_bytes {
+            return Err(AppError::PayloadTooLarge(
+                "transaction payload exceeds maximum allowed size",
+            ));
+        }
+        if !is_transaction && len > self.event_bytes {
+            return Err(AppError::PayloadTooLarge(
+                "event payload exceeds maximum allowed size",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Parse an authenticated Sentry envelope body starting after the envelope header (`cursor`),
 /// dropping unsupported items (`session`, `replay`, `profile`, `attachment`, etc.) early without
-/// deserializing their payloads, and enforcing `max_event_payload_bytes` on `"event"` items.
+/// deserializing their payloads, and enforcing `limits` on `event` / `transaction` items.
 pub fn parse_envelope_items(
     header: EnvelopeHeader,
     data: &[u8],
     mut cursor: usize,
-    max_event_payload_bytes: usize,
+    limits: ItemSizeLimits,
     target: EnvelopeTarget,
 ) -> Result<ParsedEnvelope, AppError> {
     let envelope_id = header
@@ -178,15 +203,10 @@ pub fn parse_envelope_items(
         let is_transaction = item_type == "transaction";
         let is_supported = is_event || is_transaction;
 
-        // If `length` is declared on a supported item and exceeds `max_event_payload_bytes`,
-        // reject immediately with 413 before even reading or slicing the payload.
-        if is_supported
-            && let Some(declared_len) = item_header.length
-            && declared_len > max_event_payload_bytes
-        {
-            return Err(AppError::PayloadTooLarge(
-                "event payload exceeds maximum allowed size",
-            ));
+        // If `length` is declared on a supported item and exceeds its cap, reject immediately
+        // with 413 before even reading or slicing the payload.
+        if is_supported && let Some(declared_len) = item_header.length {
+            limits.check(is_transaction, declared_len)?;
         }
 
         let payload_slice: &[u8] = match item_header.length {
@@ -229,11 +249,7 @@ pub fn parse_envelope_items(
             continue;
         }
 
-        if payload_slice.len() > max_event_payload_bytes {
-            return Err(AppError::PayloadTooLarge(
-                "event payload exceeds maximum allowed size",
-            ));
-        }
+        limits.check(is_transaction, payload_slice.len())?;
         if payload_slice.is_empty() {
             return Err(AppError::Validation(
                 "event item payload must not be empty".to_owned(),
@@ -411,7 +427,10 @@ mod tests {
             header,
             raw.as_bytes(),
             cursor,
-            4096,
+            ItemSizeLimits {
+                event_bytes: 4096,
+                transaction_bytes: 4096,
+            },
             EnvelopeTarget {
                 tenant_id: 1,
                 workspace_id: 2,
@@ -449,7 +468,10 @@ mod tests {
             header,
             raw.as_bytes(),
             cursor,
-            8192,
+            ItemSizeLimits {
+                event_bytes: 8192,
+                transaction_bytes: 8192,
+            },
             EnvelopeTarget {
                 tenant_id: 1,
                 workspace_id: 1,
@@ -481,7 +503,10 @@ mod tests {
             header,
             raw.as_bytes(),
             cursor,
-            100,
+            ItemSizeLimits {
+                event_bytes: 100,
+                transaction_bytes: 100,
+            },
             EnvelopeTarget {
                 tenant_id: 1,
                 workspace_id: 2,
@@ -491,5 +516,59 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, AppError::PayloadTooLarge(_)));
+    }
+
+    fn parse_with_limits(raw: &str, limits: ItemSizeLimits) -> Result<ParsedEnvelope, AppError> {
+        let (header, cursor) = parse_envelope_header_line(raw.as_bytes()).expect("header ok");
+        parse_envelope_items(
+            header,
+            raw.as_bytes(),
+            cursor,
+            limits,
+            EnvelopeTarget {
+                tenant_id: 1,
+                workspace_id: 2,
+                project_id: 3,
+                received_at: Utc::now(),
+            },
+        )
+    }
+
+    fn envelope_with_item(item_type: &str, pad: usize) -> String {
+        let payload = format!(
+            "{{\"event_id\":\"ab01\",\"transaction\":\"GET /n1\",\"pad\":\"{}\"}}",
+            "x".repeat(pad)
+        );
+        format!(
+            "{{\"event_id\":\"ab01\"}}\n{{\"type\":\"{item_type}\",\"length\":{}}}\n{payload}\n",
+            payload.len()
+        )
+    }
+
+    #[test]
+    fn transaction_items_use_their_own_larger_cap() {
+        let limits = ItemSizeLimits {
+            event_bytes: 200,
+            transaction_bytes: 2_000,
+        };
+
+        // A span-heavy transaction above the event cap but within the transaction cap is accepted.
+        let parsed = parse_with_limits(&envelope_with_item("transaction", 1_000), limits)
+            .expect("transaction within its own cap");
+        assert_eq!(parsed.envelope.transactions.len(), 1);
+
+        // The same size as an error event is still rejected by the event cap.
+        let err = parse_with_limits(&envelope_with_item("event", 1_000), limits).unwrap_err();
+        assert!(matches!(
+            err,
+            AppError::PayloadTooLarge("event payload exceeds maximum allowed size")
+        ));
+
+        // A transaction above its cap is rejected with a transaction-specific reason.
+        let err = parse_with_limits(&envelope_with_item("transaction", 3_000), limits).unwrap_err();
+        assert!(matches!(
+            err,
+            AppError::PayloadTooLarge("transaction payload exceeds maximum allowed size")
+        ));
     }
 }

@@ -612,6 +612,28 @@
         "F026"
       ],
       "notes": "Done 2026-11-23 (D019). Secrets (.env, ADMIN_CREDENTIALS) exist only on the server in ~/maxi-loop (0700/0600)."
+    },
+    {
+      "id": "F028",
+      "title": "Ingest large span-heavy transactions so N+1 requests are detected like Sentry",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "`transaction` items have their own cap MAX_TRANSACTION_PAYLOAD_BYTES (default 2 MiB); error events keep MAX_EVENT_PAYLOAD_BYTES (512 KiB); MAX_ENVELOPE_DECOMPRESSED_BYTES default 3 MiB; startup fails if an item cap exceeds the envelope cap",
+        "Every 413 from an authenticated DSN is logged as WARN with tenant, project, size and reason",
+        "Up to 1000 spans per transaction are analyzed (Sentry SDK default max_spans)",
+        "Span grouping hashes the full normalized description (input bounded to 8192 chars); stored text keeps head and tail so WHERE stays visible",
+        "Performance issue titles collapse ORM column lists: `SELECT .. FROM table WHERE ...`",
+        "Real Django app (personalia): N+1 on 6 endpoints with up to 1000 spans / 1.4 MB per transaction all become issues with default config"
+      ],
+      "verification_commands": [
+        "cargo test --workspace",
+        "cargo clippy --workspace --all-targets -- -D warnings"
+      ],
+      "depends_on": [
+        "F017"
+      ],
+      "notes": "Done 2026-11-24 (D020). Long-SQL span groups get new hashes (short queries unchanged)."
     }
   ]
 }

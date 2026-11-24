@@ -19,7 +19,8 @@ use tracing::{error, warn};
 use crate::cache::DsnCache;
 use crate::decompress::decompress_envelope_body;
 use crate::envelope::{
-    EnvelopeTarget, extract_dsn_public_key, parse_envelope_header_line, parse_envelope_items,
+    EnvelopeTarget, ItemSizeLimits, extract_dsn_public_key, parse_envelope_header_line,
+    parse_envelope_items,
 };
 use crate::model::{EnvelopeIngestResponse, QueuedEnvelope};
 use crate::spool::{EnqueueError, Spool};
@@ -158,7 +159,13 @@ async fn ingest_envelope_handler(
         &body,
         state.config.max_envelope_compressed_bytes,
         state.config.max_envelope_decompressed_bytes,
-    )?;
+    )
+    .inspect_err(|err| {
+        // Only log once the DSN is known to be valid, so anonymous clients cannot flood logs.
+        if let Some(project) = &cached_project {
+            log_oversized_rejection(err, project.tenant_id, project_id, body.len());
+        }
+    })?;
 
     let (envelope_header, cursor) = parse_envelope_header_line(&decompressed)?;
 
@@ -180,14 +187,25 @@ async fn ingest_envelope_handler(
         envelope_header,
         &decompressed,
         cursor,
-        state.config.max_event_payload_bytes,
+        ItemSizeLimits {
+            event_bytes: state.config.max_event_payload_bytes,
+            transaction_bytes: state.config.max_transaction_payload_bytes,
+        },
         EnvelopeTarget {
             tenant_id: cached_project.tenant_id,
             workspace_id: cached_project.workspace_id,
             project_id: cached_project.project_id,
             received_at: Utc::now(),
         },
-    )?;
+    )
+    .inspect_err(|err| {
+        log_oversized_rejection(
+            err,
+            cached_project.tenant_id,
+            project_id,
+            decompressed.len(),
+        );
+    })?;
 
     let accepted_events = parsed.envelope.events.len();
     let accepted_txs = parsed.envelope.transactions.len();
@@ -259,6 +277,20 @@ async fn ingest_envelope_handler(
             );
             Ok(spool_unavailable_response())
         }
+    }
+}
+
+/// Sentry SDKs drop a 413 response without retrying or logging (outside debug mode), so the
+/// server log is the only place an operator can see that data was lost and which limit to raise.
+fn log_oversized_rejection(err: &AppError, tenant_id: i64, project_id: i64, size_bytes: usize) {
+    if let AppError::PayloadTooLarge(reason) = err {
+        warn!(
+            tenant_id,
+            project_id,
+            size_bytes,
+            reason,
+            "rejected oversized envelope with 413; the SDK drops it without retrying"
+        );
     }
 }
 

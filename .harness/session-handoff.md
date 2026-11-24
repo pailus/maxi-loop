@@ -6,6 +6,10 @@
 > recorded in progress.md).
 
 ## Last session
+- Date: 2026-11-24
+- Work: `F028` (D020) — real-app N+1 test with personalia (Django); transaction items get their own 2 MiB cap, 413s are logged, 1000 spans analyzed, grouping on full SQL, `SELECT .. FROM` titles. Dev server now on :8130 (8080 = jagaweb). Committed, not pushed, not deployed.
+
+## Previous session
 - Date: 2026-11-23
 - Assistant: Claude Code
 - Work: Team & settings full width; `F022` invite-by-link onboarding; `F023` self-service password change (D015); `F024` issue assignment UI + MCP (D016); `F025` workspace isolation hardening (D017); `F026` per-member project access (D018); phase2 spike-test fix; `F027` production deploy to loop.maxiflow.id (D019).
@@ -20,6 +24,9 @@
 - Files left "dirty" / half-done: none — everything is committed (not pushed).
 
 ## What the next session MUST watch out for
+- Before redeploying F028: check that production `~/maxi-loop/.env` does not set `MAX_ENVELOPE_DECOMPRESSED_BYTES` below `MAX_TRANSACTION_PAYLOAD_BYTES` (2 MiB default) — the new startup check refuses to boot otherwise (SSH was denied this session, unverified).
+- F028 changed span-group hashes only for normalized SQL longer than 512 chars: existing span metrics / perf issues for such queries start a new group once.
+- Real-app test harness: unit `personalia-maxiloop` (:8011) sends to local MaxiLoop project 1506; see memory note / progress entry.
 - Workspace isolation gaps found 2026-11-22 are fixed by F025/D017 (`b0_workspace_isolation.rs`). New project-data endpoints must use `AuthSession::project_access()` (lists, in SQL) and `enforce_project_read/write` or `&dyn AccessGuard` (single records) — never `session.role` alone.
 - `phase2_pii_releases_alerts.rs` spike flake fixed (user OK 2026-11-23): the test disables stale `p2-alpha-*` spike rules before evaluating; `evaluate_spike_rules` itself is unchanged (instance-wide by design).
 - Project limits (D018): keep using `project_access()` / `AccessGuard`; never treat "no membership_projects rows" as "all projects" — check `project_limited`.
