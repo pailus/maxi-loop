@@ -8,6 +8,11 @@
 
 ---
 
+### D022 — 2026-11-25 — "Regressions" is a tab of Issues, not a separate view (amends D014, F030)
+**Decision:** The sidebar Regressions item opens the Issues view with `?status=regressed` (own history entry); `view=regressed` no longer exists and old links are rewritten on load. The URL `status` alone decides the Issues tab; the sidebar highlight and page title follow the tab.
+**Why:** Two controls (menu + tab) for one state disagreed: the sidebar said Regressions while showing Unresolved, and a reload jumped back to the Regressed tab with an empty list (user report "click regression goes back to issues").
+**Decided by:** assistant (user asked to check navigation and fix)
+
 ### D021 — 2026-11-25 — Browser / client OS derived server-side from the User-Agent (F029)
 **Decision:** Like Sentry, ingest parses `request.headers["User-Agent"]` (after PII scrubbing) into `contexts.browser` and an OS context when the SDK did not send them: `os` for `platform = javascript`, otherwise `client_os` (for backend SDKs `os` means the server). Context tags (`browser`, `client_os`, `os`, `runtime` + `.name`, `device`, `server_name`, `url` without query) are added unless the SDK set the same tag. Performance issue events copy a bounded snapshot (request line + ≤48 headers, no body; contexts except `trace`/`profile`, each ≤2 KB; sdk name/version; server_name). The parser is a small hand-written token matcher in `platform/src/user_agent.rs`.
 **Why:** Backend SDKs (Django/FastAPI) only forward the raw header, so issues showed no browser/OS at all; performance issues showed no request/runtime either because only the trace context was copied.

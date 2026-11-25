@@ -33,6 +33,20 @@
 
 ---
 
+### 2026-11-25 — Claude Code — F030: Regressions menu and Issues tabs in sync
+
+**Status at end of session:** done
+
+**Done:**
+- Navigation audit of all 9 sidebar menus (URL, title, highlight, Back/Forward, reload): only Issues/Regressions were inconsistent.
+- `App.tsx`: Regressions = `openIssuesTab("regressed")`, highlight from the reported tab, legacy `view=regressed` rewrite; `IssuesView.tsx`: URL `status` is the only tab source (`tabRequest` + `onTabModeChange` replace `initialTabMode`), "Regressions" title and empty state (D022).
+
+**Verification run:**
+- `npm --prefix web run build` (tsc + vite) PASS
+- Playwright flow (14 steps: tab switches, menu clicks, reload with an open issue, Back ×3, Performance→Regressions→Back, legacy link) → menu/tab/title/URL consistent, no page errors. Before: reload after Regressions→Unresolved reopened the Regressed tab with 0 rows.
+
+---
+
 ### 2026-11-25 — Claude Code — F029: Sentry-style event context (browser, OS, runtime, request, SDK)
 
 **Status at end of session:** done

@@ -60,7 +60,6 @@ import {
 
 type ActiveNav =
   | "issues"
-  | "regressed"
   | "performance"
   | "releases"
   | "alerts"
@@ -71,7 +70,6 @@ type ActiveNav =
 
 const NAV_IDS: readonly ActiveNav[] = [
   "issues",
-  "regressed",
   "performance",
   "releases",
   "alerts",
@@ -84,8 +82,23 @@ const NAV_IDS: readonly ActiveNav[] = [
 /** Params owned by a single view; dropped when the menu changes (D014). */
 const VIEW_SCOPED_PARAMS = ["tab", "status", "issue", "full", "detail", "trace"] as const;
 
+/**
+ * "Regressions" is the Issues view on the Regressed tab, not a view of its own: the URL
+ * `status` decides the tab so menu, tab and reload always agree. Old links used
+ * `view=regressed`; they are rewritten once on load.
+ */
+function migrateLegacyRegressedView(): void {
+  if (getUrlParam("view") !== "regressed") return;
+  setUrlParams({ view: null, status: getUrlParam("status") ?? "regressed" });
+}
+
+function readIssuesTabFromUrl(): IssuesTabMode {
+  return getUrlParam("status") === "regressed" ? "regressed" : "unresolved";
+}
+
 function readNavFromUrl(): ActiveNav {
   const view = getUrlParam("view");
+  if (view === "regressed") return "issues";
   if (view && (NAV_IDS as readonly string[]).includes(view)) return view as ActiveNav;
   if (getUrlParam("trace")) return "performance";
   return "issues";
@@ -96,7 +109,9 @@ interface ToastState {
   undoAction?: () => void;
 }
 
-const NAV_ITEMS: { id: ActiveNav; label: string; icon: LucideIcon }[] = [
+type NavItemId = ActiveNav | "regressed";
+
+const NAV_ITEMS: { id: NavItemId; label: string; icon: LucideIcon }[] = [
   { id: "issues", label: "Issues", icon: Inbox },
   { id: "regressed", label: "Regressions", icon: AlertTriangle },
   { id: "performance", label: "Performance", icon: Gauge },
@@ -203,7 +218,16 @@ export function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("trace") ?? "";
   });
-  const [activeNav, setActiveNavState] = useState<ActiveNav>(readNavFromUrl);
+  const [activeNav, setActiveNavState] = useState<ActiveNav>(() => {
+    migrateLegacyRegressedView();
+    return readNavFromUrl();
+  });
+  // Mirrors the Issues tab so the sidebar can highlight Issues vs Regressions.
+  const [issuesTabMode, setIssuesTabMode] = useState<IssuesTabMode>(readIssuesTabFromUrl);
+  const [issuesTabRequest, setIssuesTabRequest] = useState<{
+    mode: IssuesTabMode;
+    nonce: number;
+  }>(() => ({ mode: readIssuesTabFromUrl(), nonce: 0 }));
 
   // Menu changes get their own history entry; the URL is updated before the next
   // render so the newly mounted view never reads the previous view's `tab`.
@@ -235,6 +259,37 @@ export function App() {
     },
     [setActiveNav],
   );
+
+  // Sidebar "Issues" / "Regressions": open the Issues view on that tab with its own
+  // history entry (Back returns to the previous tab or menu).
+  const openIssuesTab = useCallback((mode: IssuesTabMode) => {
+    const currentTab = getUrlParam("status") ?? "unresolved";
+    if (readNavFromUrl() !== "issues" || currentTab !== mode) {
+      const cleared = Object.fromEntries(VIEW_SCOPED_PARAMS.map((k) => [k, null]));
+      setUrlParams(
+        { ...cleared, view: null, status: mode === "unresolved" ? null : mode },
+        "push",
+      );
+    }
+    setActiveNavState("issues");
+    setIssuesTabRequest((req) => ({ mode, nonce: req.nonce + 1 }));
+    setDrawerOpen(false);
+  }, []);
+
+  const goToNavItem = useCallback(
+    (id: NavItemId) => {
+      if (id === "regressed") openIssuesTab("regressed");
+      else if (id === "issues") openIssuesTab("unresolved");
+      else goTo(id);
+    },
+    [goTo, openIssuesTab],
+  );
+
+  const isNavItemActive = (id: NavItemId): boolean => {
+    if (id === "regressed") return activeNav === "issues" && issuesTabMode === "regressed";
+    if (id === "issues") return activeNav === "issues" && issuesTabMode !== "regressed";
+    return activeNav === id;
+  };
 
   // Keep project / workspace selection in the URL so a refresh keeps them.
   useEffect(() => {
@@ -457,9 +512,6 @@ export function App() {
     activeWorkspace?.name ?? session.default_workspace.name;
   const userInitials = initials(session.user.email || session.user.name);
 
-  const issuesTabMode: IssuesTabMode =
-    activeNav === "regressed" ? "regressed" : "unresolved";
-
   return (
     <div className="h-[100dvh] flex flex-col overflow-hidden bg-[var(--color-bg)] text-[var(--color-text)]">
       {/* 56px MaxiBoard Topbar */}
@@ -484,7 +536,7 @@ export function App() {
         <button
           type="button"
           onClick={() => {
-            goTo("issues");
+            openIssuesTab("unresolved");
             setSelectedProjectSlug("");
           }}
           className="flex items-center gap-2 px-1 min-w-0 cursor-pointer"
@@ -514,7 +566,7 @@ export function App() {
               value={globalSearch}
               onChange={(e) => {
                 setGlobalSearch(e.target.value);
-                if (activeNav !== "issues" && activeNav !== "regressed") {
+                if (activeNav !== "issues") {
                   setActiveNav("issues");
                 }
               }}
@@ -654,9 +706,9 @@ export function App() {
                   key={item.id}
                   icon={item.icon}
                   label={item.label}
-                  active={activeNav === item.id}
+                  active={isNavItemActive(item.id)}
                   count={item.id === "projects" ? projects.length : undefined}
-                  onClick={() => goTo(item.id)}
+                  onClick={() => goToNavItem(item.id)}
                 />
               ))}
             </nav>
@@ -687,17 +739,11 @@ export function App() {
                   projects={projects}
                   selectedProjectSlug={selectedProjectSlug}
                   highlightSelection={
-                    activeNav === "issues" ||
-                    activeNav === "regressed" ||
-                    activeNav === "performance"
+                    activeNav === "issues" || activeNav === "performance"
                   }
                   onSelectProject={(slug) => {
                     setSelectedProjectSlug((cur) => (cur === slug ? "" : slug));
-                    if (
-                      activeNav !== "issues" &&
-                      activeNav !== "regressed" &&
-                      activeNav !== "performance"
-                    ) {
+                    if (activeNav !== "issues" && activeNav !== "performance") {
                       setActiveNav("issues");
                     }
                     setDrawerOpen(false);
@@ -747,7 +793,7 @@ export function App() {
         </aside>
 
         {/* Active View Area */}
-        {(activeNav === "issues" || activeNav === "regressed") && (
+        {activeNav === "issues" && (
           <IssuesView
             workspaceName={currentWorkspaceName}
             workspaceSlug={activeWorkspaceSlug || undefined}
@@ -755,7 +801,8 @@ export function App() {
             selectedProjectSlug={selectedProjectSlug}
             onSelectProjectSlug={setSelectedProjectSlug}
             globalSearchQuery={globalSearch}
-            initialTabMode={issuesTabMode}
+            tabRequest={issuesTabRequest}
+            onTabModeChange={setIssuesTabMode}
             initialReleaseFilter={selectedReleaseFilter}
             canTriage={canTriage}
             currentUserId={session.user.id}
@@ -879,14 +926,12 @@ export function App() {
       >
         {TAB_ITEMS.map((tab) => {
           const Icon = tab.icon;
-          const active =
-            activeNav === tab.id ||
-            (tab.id === "issues" && activeNav === "regressed");
+          const active = activeNav === tab.id;
           return (
             <button
               key={tab.id}
               type="button"
-              onClick={() => goTo(tab.id)}
+              onClick={() => goToNavItem(tab.id)}
               aria-current={active ? "page" : undefined}
               className={`flex flex-col items-center justify-center gap-0.5 h-[60px] text-[11px] font-medium cursor-pointer transition ${
                 active
@@ -903,12 +948,12 @@ export function App() {
           type="button"
           onClick={() => setDrawerOpen(true)}
           aria-current={
-            !TAB_ITEMS.some((t) => t.id === activeNav) && activeNav !== "regressed"
+            !TAB_ITEMS.some((t) => t.id === activeNav)
               ? "page"
               : undefined
           }
           className={`flex flex-col items-center justify-center gap-0.5 h-[60px] text-[11px] font-medium cursor-pointer transition ${
-            !TAB_ITEMS.some((t) => t.id === activeNav) && activeNav !== "regressed"
+            !TAB_ITEMS.some((t) => t.id === activeNav)
               ? "text-[var(--color-primary)]"
               : "text-[var(--color-text-muted)]"
           }`}

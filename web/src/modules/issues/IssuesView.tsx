@@ -61,7 +61,10 @@ interface IssuesViewProps {
   selectedProjectSlug: string;
   onSelectProjectSlug: (slug: string) => void;
   globalSearchQuery: string;
-  initialTabMode?: IssuesTabMode;
+  /** Sidebar "Regressions" / "Issues" ask for a tab; a new `nonce` re-applies the same tab. */
+  tabRequest?: { mode: IssuesTabMode; nonce: number };
+  /** Reports the active tab so the sidebar highlights Issues vs Regressions. */
+  onTabModeChange?: (mode: IssuesTabMode) => void;
   initialReleaseFilter?: string;
   canTriage: boolean;
   currentUserId: number;
@@ -88,7 +91,8 @@ export function IssuesView({
   selectedProjectSlug,
   onSelectProjectSlug,
   globalSearchQuery,
-  initialTabMode = "unresolved",
+  tabRequest,
+  onTabModeChange,
   initialReleaseFilter = "",
   canTriage,
   currentUserId,
@@ -96,11 +100,11 @@ export function IssuesView({
   onNavigateToProjects,
   onOpenTrace,
 }: IssuesViewProps) {
+  // The URL `status` is the single source of truth for the tab (also after a reload).
   const [tabMode, setTabMode] = useUrlEnum<IssuesTabMode>(
     "status",
     ISSUES_TABS,
     "unresolved",
-    initialTabMode,
   );
   const [localSearch, setLocalSearch] = useState("");
   const [environment, setEnvironment] = useState("");
@@ -137,13 +141,17 @@ export function IssuesView({
   const [mergeBusy, setMergeBusy] = useState(false);
 
   // Sidebar Issues / Regressions switch the tab; on mount the URL `status` wins.
-  const prevInitialTabMode = useRef(initialTabMode);
+  const lastTabRequestNonce = useRef(tabRequest?.nonce);
   useEffect(() => {
-    if (prevInitialTabMode.current === initialTabMode) return;
-    prevInitialTabMode.current = initialTabMode;
-    setTabMode(initialTabMode);
+    if (!tabRequest || lastTabRequestNonce.current === tabRequest.nonce) return;
+    lastTabRequestNonce.current = tabRequest.nonce;
+    setTabMode(tabRequest.mode);
     setPage(1);
-  }, [initialTabMode, setTabMode]);
+  }, [tabRequest, setTabMode]);
+
+  useEffect(() => {
+    onTabModeChange?.(tabMode);
+  }, [tabMode, onTabModeChange]);
 
   useEffect(() => {
     setUrlParams({ issue: selectedIssueId === null ? null : String(selectedIssueId) });
@@ -428,7 +436,7 @@ export function IssuesView({
         {/* Title Row & Inline MaxiBoard Status Summary Pill */}
         <div className="mt-1.5 flex items-center gap-3 flex-wrap">
           <h1 className="text-xl md:text-2xl font-semibold text-[var(--color-text)] tracking-tight">
-            Issues
+            {tabMode === "regressed" ? "Regressions" : "Issues"}
           </h1>
 
           <div className="px-2.5 py-1 rounded-md bg-[var(--color-bg-muted)] border border-[var(--color-border)] text-xs text-[var(--color-text-muted)] flex items-center gap-2">
@@ -693,12 +701,16 @@ export function IssuesView({
                 <Inbox size={22} />
               </div>
               <h3 className="text-sm font-semibold text-[var(--color-text)]">
-                No issues match the current filter
+                {tabMode === "regressed"
+                  ? "No regressions"
+                  : "No issues match the current filter"}
               </h3>
               <p className="mt-1 text-xs text-[var(--color-text-dim)] max-w-sm">
                 {projects.length === 0
                   ? "Create a project first to generate a Sentry DSN and start ingesting exceptions."
-                  : "Point your Sentry SDK to a project DSN or clear active filters to see grouped issues."}
+                  : tabMode === "regressed"
+                    ? "No resolved issue has come back. Issues that reappear after being resolved show up here."
+                    : "Point your Sentry SDK to a project DSN or clear active filters to see grouped issues."}
               </p>
               {projects.length === 0 && (
                 <button

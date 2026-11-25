@@ -647,6 +647,18 @@
         "Issue drawer and full view show a Context panel (Browser, OS, Runtime, Device, Request, SDK, Server) for both error and performance issues",
         "Unit tests for UA parsing, tag derivation and snapshot bounds; workspace tests, fmt, clippy and web build pass"
       ]
+    },
+    {
+      "id": "F030",
+      "title": "Regressions menu and Issues tabs stay in sync (menu, tab, title, reload, Back)",
+      "status": "done",
+      "priority": "medium",
+      "acceptance_criteria": [
+        "Sidebar Regressions = Issues view on the Regressed tab; the URL `status` is the only source of truth for the tab",
+        "Sidebar highlight follows the tab (Regressed tab -> Regressions, other tabs -> Issues); title shows Regressions on that tab",
+        "Reload keeps the chosen tab (no jump back to Regressed); Back/Forward between Issues and Regressions works; old `view=regressed` links still open Regressions",
+        "Regressions empty state explains what a regression is"
+      ]
     }
   ]
 }
