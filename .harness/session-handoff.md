@@ -7,7 +7,7 @@
 
 ## Last session
 - Date: 2026-11-25
-- Work: deployed F028 to production; `F029` (D021) Sentry-style event context: browser / client OS from User-Agent, context tags, request/runtime/SDK snapshot on performance issues, Context panel in the UI. Personalia now sends to production project 1.
+- Work: deployed F028 to production; `F029` (D021) Sentry-style event context: browser / client OS from User-Agent, context tags, request/runtime/SDK snapshot on performance issues, Context panel in the UI. Personalia now sends to production project 1. F028 + F029 pushed (`06c889e`) and deployed to production (healthy; 22 test transactions with browser UAs, 0 rejected).
 
 ## Previous session
 - Date: 2026-11-23
