@@ -18,6 +18,7 @@ import {
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
 import { BreadcrumbsView } from "./BreadcrumbsView";
+import { EventContextView } from "./EventContextView";
 import { AssigneePicker } from "./AssigneePicker";
 import { OccurrenceChart } from "./OccurrenceChart";
 import { PerformanceProblemView } from "./PerformanceProblemView";
@@ -356,6 +357,14 @@ export function IssueDetailDrawer({
           </div>
           <StackTraceView rawFrames={detail.stack_frames} compact />
         </div>
+        )}
+
+        {/* Browser / OS / runtime / request context (F029) */}
+        {sample_event && (
+          <div>
+            <div className="mb-1.5 text-xs font-bold text-[var(--color-text-muted)]">Context</div>
+            <EventContextView payload={sample_event.payload} compact />
+          </div>
         )}
 
         {/* Recent Breadcrumbs Preview */}

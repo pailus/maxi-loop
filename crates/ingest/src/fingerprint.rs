@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::model::QueuedEvent;
 use crate::scrub::scrub_event_payload_with_rules;
 use crate::user_identity::{UserDigest, user_digest_from_payload};
+use maxi_loop_platform::event_context::{enrich_event_context, merge_context_tags};
 
 const MAX_TITLE_CHARS: usize = 512;
 const MAX_CULPRIT_CHARS: usize = 256;
@@ -136,9 +137,12 @@ pub async fn process_queued_event_with_rules_and_sourcemaps(
 
 fn finalize_processed_event(
     queued: QueuedEvent,
-    payload: Value,
+    mut payload: Value,
     user_digest: Option<UserDigest>,
 ) -> Result<ProcessedEvent, AppError> {
+    // 1. Sentry-style browser / client OS from the (already scrubbed) request User-Agent.
+    enrich_event_context(&mut payload);
+
     // 2. Extract primary exception (type, value, raw frames) and fallback message.
     let (exc_type, exc_value, mut raw_frames) = extract_primary_exception(&payload);
     if raw_frames.is_empty() {
@@ -202,8 +206,9 @@ fn finalize_processed_event(
         .filter(|s| !s.is_empty());
     let culprit = build_culprit(&normalized_frames, transaction_name);
 
-    // 6. Normalize tags into a JSON object.
-    let tags = extract_normalized_tags(payload.get("tags"));
+    // 6. Normalize tags into a JSON object, plus Sentry's context tags (browser, runtime, url, ...).
+    let mut tags = extract_normalized_tags(payload.get("tags"));
+    merge_context_tags(&mut tags, &payload);
     let stack_frames =
         serde_json::to_value(&normalized_frames).unwrap_or_else(|_| Value::Array(Vec::new()));
 

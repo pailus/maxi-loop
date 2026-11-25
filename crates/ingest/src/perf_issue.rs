@@ -51,7 +51,7 @@ fn problem_to_event(
         )
     );
 
-    let payload = json!({
+    let mut payload = json!({
         "event_id": event_id,
         "type": "performance",
         "level": PERFORMANCE_ISSUE_LEVEL,
@@ -76,6 +76,7 @@ fn problem_to_event(
             "problem": problem,
         },
     });
+    attach_event_context(&mut payload, &tx.event_context);
 
     ProcessedEvent {
         tenant_id: tx.tenant_id,
@@ -97,6 +98,32 @@ fn problem_to_event(
         payload,
         issue_type: kind.issue_type().to_owned(),
         user_digest,
+    }
+}
+
+/// Copy the transaction's request / contexts / sdk / server_name snapshot (`F029`) so the
+/// issue shows the same browser, OS, runtime and request details as an error issue. The
+/// issue's own `trace` context is kept.
+fn attach_event_context(payload: &mut Value, snapshot: &Value) {
+    let (Some(target), Some(snapshot)) = (payload.as_object_mut(), snapshot.as_object()) else {
+        return;
+    };
+    for (key, value) in snapshot {
+        if key == "contexts" {
+            let (Some(ctx_target), Some(ctx_source)) = (
+                target.get_mut("contexts").and_then(Value::as_object_mut),
+                value.as_object(),
+            ) else {
+                continue;
+            };
+            for (ctx_key, ctx_value) in ctx_source {
+                ctx_target
+                    .entry(ctx_key.clone())
+                    .or_insert_with(|| ctx_value.clone());
+            }
+        } else {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
     }
 }
 
@@ -170,6 +197,7 @@ mod tests {
             duration_ms: 120.0,
             span_count: 21,
             tags: json!({}),
+            event_context: Value::Null,
             sample_reason: None,
             spans_zstd: None,
             span_ops: Vec::new(),
@@ -250,5 +278,32 @@ mod tests {
         let plain =
             &performance_problem_events(&tx_with("/keluarga/", "e2", vec![n_plus_one()]), None)[0];
         assert_ne!(with_columns.fingerprint, plain.fingerprint);
+    }
+
+    #[test]
+    fn carries_transaction_request_runtime_and_browser_context_but_keeps_its_trace() {
+        let mut tx = tx_with("/pegawai/", "e1", vec![n_plus_one()]);
+        tx.tags = json!({"browser": "Chrome 131.0.0.0", "runtime": "CPython 3.13.4"});
+        tx.event_context = json!({
+            "request": {"method": "GET", "url": "https://api.example.com/pegawai/"},
+            "contexts": {
+                "runtime": {"name": "CPython", "version": "3.13.4"},
+                "browser": {"name": "Chrome", "version": "131.0.0.0"},
+                "trace": {"trace_id": "must-not-win"},
+            },
+            "sdk": {"name": "sentry.python.django", "version": "2.29.1"},
+            "server_name": "api-1",
+        });
+        let ev = &performance_problem_events(&tx, None)[0];
+        assert_eq!(ev.payload["request"]["method"], "GET");
+        assert_eq!(ev.payload["contexts"]["runtime"]["name"], "CPython");
+        assert_eq!(ev.payload["contexts"]["browser"]["name"], "Chrome");
+        assert_eq!(
+            ev.payload["contexts"]["trace"]["trace_id"],
+            json!("a".repeat(32))
+        );
+        assert_eq!(ev.payload["sdk"]["name"], "sentry.python.django");
+        assert_eq!(ev.payload["server_name"], "api-1");
+        assert_eq!(ev.tags["browser"], "Chrome 131.0.0.0");
     }
 }

@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use maxi_loop_platform::error::AppError;
+use maxi_loop_platform::event_context::{
+    enrich_event_context, merge_context_tags, transaction_context_snapshot,
+};
 use maxi_loop_platform::scrub::scrub_event_payload_with_rules;
 use maxi_loop_platform::scrub_notify::PiiScrubRuleEntry;
 use serde_json::{Map, Value, json};
@@ -95,6 +98,8 @@ pub fn process_queued_transaction_with_rules(
 
     // Mandatory baseline + inherited custom PII scrubbing BEFORE any field extraction or storage.
     scrub_event_payload_with_rules(&mut payload, custom_rules);
+    enrich_event_context(&mut payload);
+    let event_context = transaction_context_snapshot(&payload);
 
     let trace_ctx = payload
         .get("contexts")
@@ -170,7 +175,8 @@ pub fn process_queued_transaction_with_rules(
         ((end_timestamp.timestamp_micros() - start_timestamp.timestamp_micros()) as f64 / 1000.0)
             .max(0.0);
 
-    let tags = normalize_tags(payload.get("tags"));
+    let mut tags = normalize_tags(payload.get("tags"));
+    merge_context_tags(&mut tags, &payload);
     let http_status_code = extract_http_status_code(&tags, trace_ctx);
     let is_error = is_error_status(&status, http_status_code);
 
@@ -344,6 +350,7 @@ pub fn process_queued_transaction_with_rules(
         duration_ms,
         span_count,
         tags,
+        event_context,
         sample_reason,
         spans_zstd,
         span_ops,

@@ -33,6 +33,32 @@
 
 ---
 
+### 2026-11-25 — Claude Code — F029: Sentry-style event context (browser, OS, runtime, request, SDK)
+
+**Status at end of session:** done
+
+**Done:**
+- F028 deployed to production (loop.maxiflow.id; prod `.env` has no `MAX_*` override). Re-test from personalia: 18 heavy transactions, 0 × 413 (before: 7 of 49).
+- `platform/src/user_agent.rs` (small UA parser) + `platform/src/event_context.rs` (UA → `contexts.browser` / `client_os`, context tags, bounded transaction snapshot); wired into `ingest/fingerprint.rs`, `performance/ingest_proc.rs`, `ingest/perf_issue.rs` (`ProcessedTransaction.event_context`).
+- UI: `issues/EventContextView.tsx` in the drawer, full-view overview and each expanded stored event.
+- Personalia (`personalia-maxiloop` :8011) now sends to PRODUCTION project 1 on the user's request (`settings_maxiloop.py` allow-list + `MAXILOOP_SDK_DEBUG=1`).
+
+**Verification run:**
+- `cargo test --workspace --no-fail-fast` → 164 passed, 0 failed; fmt/clippy PASS; `npm --prefix web run build` PASS
+- Smoke (local :8130, project 1506, real personalia): N+1 events carry browser `Chrome 131.0.0.0` / `Mobile Safari 17.1`, client_os `Windows 10` / `iOS 17.1.2`, runtime `CPython 3.13.4`, url, method, sdk, server_name; Context panel screenshot checked.
+
+**Security notes:**
+- Enrichment runs after PII scrubbing; snapshot never copies the request body; headers ≤48, strings ≤1024 chars, contexts ≤16 × 2 KB; UA inspected only up to 1024 chars (char-boundary safe, tested).
+
+**Key decisions & why:**
+- D021: UA parsed server-side without a new dependency; `client_os` for backend platforms.
+
+**Not finished / blockers:**
+- Issue sample event = first event, so issues created before F029 keep a context-less sample (new events show context in "Stored events"). Switching the sample to the latest event needs the user's OK.
+- Machine rebooted 2026-11-25 ~21:04: the transient units `maxi-loop-dev` and `personalia-maxiloop` were recreated by hand; the `maxi-loop-postgres` container was recreated (same volume) after podman got stuck in "stopping".
+
+---
+
 ### 2026-11-24 — Claude Code — F028: large span-heavy transactions + N+1 parity with Sentry
 
 **Status at end of session:** done

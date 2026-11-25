@@ -8,6 +8,12 @@
 
 ---
 
+### D021 — 2026-11-25 — Browser / client OS derived server-side from the User-Agent (F029)
+**Decision:** Like Sentry, ingest parses `request.headers["User-Agent"]` (after PII scrubbing) into `contexts.browser` and an OS context when the SDK did not send them: `os` for `platform = javascript`, otherwise `client_os` (for backend SDKs `os` means the server). Context tags (`browser`, `client_os`, `os`, `runtime` + `.name`, `device`, `server_name`, `url` without query) are added unless the SDK set the same tag. Performance issue events copy a bounded snapshot (request line + ≤48 headers, no body; contexts except `trace`/`profile`, each ≤2 KB; sdk name/version; server_name). The parser is a small hand-written token matcher in `platform/src/user_agent.rs`.
+**Why:** Backend SDKs (Django/FastAPI) only forward the raw header, so issues showed no browser/OS at all; performance issues showed no request/runtime either because only the trace context was copied.
+**Rejected:** `uaparser`/`woothee` crates (big regex tables or extra dependency for a display-only feature); storing the full transaction payload on perf issues (size — transactions can be 2 MiB).
+**Decided by:** assistant (user asked for Sentry-like browser/OS/info on issues)
+
 ### D020 — 2026-11-24 — Separate size cap for transaction items; analyze 1000 spans (F028)
 **Decision:** `MAX_TRANSACTION_PAYLOAD_BYTES` (default 2 MiB) caps `transaction` items separately from error events (`MAX_EVENT_PAYLOAD_BYTES` stays 512 KiB); `MAX_ENVELOPE_DECOMPRESSED_BYTES` default rises to 3 MiB and must be >= both item caps (checked at startup). 413s from authenticated DSNs are logged as WARN. `MAX_SPANS_PER_TRANSACTION` = 1000. Span grouping hashes the full normalized SQL (bounded 8192 chars input); display text elides the middle.
 **Why:** A real Django app showed N+1 requests produce 0.6–1.4 MB transactions (500–1000 SQL spans); they were rejected with a silent 413 (SDKs drop 413 without retrying), so the worst N+1 endpoints never appeared, while Sentry shows them. Truncating SQL to 512 chars before hashing merged queries that only differ in their WHERE clause.

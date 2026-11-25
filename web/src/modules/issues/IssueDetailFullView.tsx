@@ -28,6 +28,7 @@ import {
 } from "../../lib/api";
 import { ProjectIcon } from "../projects/ProjectIcon";
 import { BreadcrumbsView } from "./BreadcrumbsView";
+import { EventContextView } from "./EventContextView";
 import {
   formatRelativeAge,
   formatShortDate,
@@ -464,6 +465,14 @@ export function IssueDetailFullView({
             </section>
           </div>
 
+          {/* Browser / OS / runtime / request context (F029) */}
+          {sample_event && (
+            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+              <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Context</h3>
+              <EventContextView payload={sample_event.payload} />
+            </section>
+          )}
+
           {/* Breadcrumbs Timeline (F-ISS-10) */}
           <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
             <BreadcrumbsView breadcrumbs={breadcrumbs} />
@@ -634,6 +643,7 @@ export function IssueDetailFullView({
 
                     {isExpanded && (
                       <div className="px-4 pb-4 pt-1 bg-[var(--color-bg)] border-t border-[var(--color-border-light)] space-y-3">
+                        <EventContextView payload={ev.payload} />
                         <BreadcrumbsView breadcrumbs={evBreadcrumbs} />
                         <div>
                           <div className="text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">

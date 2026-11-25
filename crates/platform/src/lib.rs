@@ -5,6 +5,8 @@ pub mod config;
 pub mod db;
 pub mod dsn_notify;
 pub mod error;
+pub mod event_context;
 pub mod scrub;
 pub mod scrub_notify;
 pub mod tenant;
+pub mod user_agent;

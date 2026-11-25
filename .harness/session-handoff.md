@@ -6,8 +6,8 @@
 > recorded in progress.md).
 
 ## Last session
-- Date: 2026-11-24
-- Work: `F028` (D020) — real-app N+1 test with personalia (Django); transaction items get their own 2 MiB cap, 413s are logged, 1000 spans analyzed, grouping on full SQL, `SELECT .. FROM` titles. Dev server now on :8130 (8080 = jagaweb). Committed, not pushed, not deployed.
+- Date: 2026-11-25
+- Work: deployed F028 to production; `F029` (D021) Sentry-style event context: browser / client OS from User-Agent, context tags, request/runtime/SDK snapshot on performance issues, Context panel in the UI. Personalia now sends to production project 1.
 
 ## Previous session
 - Date: 2026-11-23
@@ -24,7 +24,8 @@
 - Files left "dirty" / half-done: none — everything is committed (not pushed).
 
 ## What the next session MUST watch out for
-- Before redeploying F028: check that production `~/maxi-loop/.env` does not set `MAX_ENVELOPE_DECOMPRESSED_BYTES` below `MAX_TRANSACTION_PAYLOAD_BYTES` (2 MiB default) — the new startup check refuses to boot otherwise (SSH was denied this session, unverified).
+- Issue sample = first event: issues older than F029 show no Context in the overview (only in "Stored events"). Switching to "latest event" needs the user's OK.
+- Transient units (`maxi-loop-dev` :8130, `personalia-maxiloop` :8011 → prod DSN) do not survive a reboot; containers `maxi-loop-postgres` and `citus-master` must be started too (`podman start`). If podman hangs in "stopping": `podman rm -f maxi-loop-postgres && docker compose up -d postgres` (data stays in the volume).
 - F028 changed span-group hashes only for normalized SQL longer than 512 chars: existing span metrics / perf issues for such queries start a new group once.
 - Real-app test harness: unit `personalia-maxiloop` (:8011) sends to local MaxiLoop project 1506; see memory note / progress entry.
 - Workspace isolation gaps found 2026-11-22 are fixed by F025/D017 (`b0_workspace_isolation.rs`). New project-data endpoints must use `AuthSession::project_access()` (lists, in SQL) and `enforce_project_read/write` or `&dyn AccessGuard` (single records) — never `session.role` alone.

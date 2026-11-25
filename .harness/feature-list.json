@@ -634,6 +634,19 @@
         "F017"
       ],
       "notes": "Done 2026-11-24 (D020). Long-SQL span groups get new hashes (short queries unchanged)."
+    },
+    {
+      "id": "F029",
+      "title": "Event context like Sentry: browser, OS, runtime, request, SDK on issues",
+      "status": "done",
+      "priority": "high",
+      "acceptance_criteria": [
+        "Browser and client OS are derived server-side from the request User-Agent when the SDK does not send them (contexts.browser / contexts.client_os), like Sentry",
+        "Error and performance issue events get Sentry-style tags: browser, browser.name, client_os, client_os.name, os, os.name, runtime, runtime.name, device, server_name, url (existing SDK tags win)",
+        "Performance issue events carry a bounded, already-scrubbed snapshot of the transaction's request (method, url, query string, headers; no body), contexts (no trace/profile), sdk and server_name",
+        "Issue drawer and full view show a Context panel (Browser, OS, Runtime, Device, Request, SDK, Server) for both error and performance issues",
+        "Unit tests for UA parsing, tag derivation and snapshot bounds; workspace tests, fmt, clippy and web build pass"
+      ]
     }
   ]
 }

@@ -161,6 +161,9 @@ pub struct ProcessedTransaction {
     pub duration_ms: f64,
     pub span_count: i32,
     pub tags: Value,
+    /// Bounded, scrubbed request / contexts / sdk snapshot copied onto performance issue
+    /// events (`F029`); `Value::Null` when the transaction carried none.
+    pub event_context: Value,
     pub sample_reason: Option<SampleReason>,
     pub spans_zstd: Option<Vec<u8>>,
     pub span_ops: Vec<ProcessedSpanOp>,
